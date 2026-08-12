@@ -20,6 +20,7 @@ from api.v1.auth.users import (
 )
 from models.sql.user import User
 from models.sql.key_value import KeyValueSqlModel
+from models.sql.enterprise.workspace import WorkspaceModel
 from services.database import get_async_session
 from services.provider_settings import get_provider_settings, save_provider_settings
 from utils.get_env import (
@@ -156,6 +157,14 @@ async def delete_user(
         raise HTTPException(
             status_code=403,
             detail="The primary administrator account cannot be deleted",
+        )
+    owned_workspace = await session.scalar(
+        select(WorkspaceModel.id).where(WorkspaceModel.owner_id == user.id).limit(1)
+    )
+    if owned_workspace is not None:
+        raise HTTPException(
+            status_code=409,
+            detail="Transfer or archive workspaces owned by this user before deleting the account",
         )
     await session.execute(
         delete(KeyValueSqlModel).where(

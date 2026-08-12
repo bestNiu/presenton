@@ -28,6 +28,14 @@ from models.sql.webhook_subscription import WebhookSubscription
 from models.sql.user import User
 from models.sql.access_token import AccessToken
 from models.sql.provider_settings import ProviderSettings
+from models.sql.enterprise import (
+    AuditEventModel,
+    PresentationEntryModel,
+    SceneDefinitionModel,
+    WorkspaceFolderModel,
+    WorkspaceMemberModel,
+    WorkspaceModel,
+)
 from api.v1.auth.context import get_current_owner_id
 from utils.get_env import get_migrate_database_on_startup_env
 from utils.db_utils import get_database_url_and_connect_args, get_pool_kwargs
@@ -144,6 +152,12 @@ async def create_db_and_tables():
                         User.__table__,
                         AccessToken.__table__,
                         ProviderSettings.__table__,
+                        WorkspaceModel.__table__,
+                        WorkspaceMemberModel.__table__,
+                        WorkspaceFolderModel.__table__,
+                        SceneDefinitionModel.__table__,
+                        PresentationEntryModel.__table__,
+                        AuditEventModel.__table__,
                     ],
                 )
             )

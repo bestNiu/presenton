@@ -1,0 +1,295 @@
+import uuid
+
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from api.v1.auth.principal import AuthPrincipal, principal_from_request
+from api.v1.enterprise.schemas import (
+    AuditEventResponse,
+    FolderCreateRequest,
+    FolderResponse,
+    PresentationEntryResponse,
+    PresentationRegisterRequest,
+    SceneDefinitionResponse,
+    WorkspaceCreateRequest,
+    WorkspaceMemberResponse,
+    WorkspaceMemberUpsertRequest,
+    WorkspaceResponse,
+)
+from domains.platform.enums import WorkspaceRole
+from models.sql.enterprise.audit_event import AuditEventModel
+from models.sql.user import User
+from services.database import get_async_session
+from services.enterprise.presentation_workspace_service import (
+    list_presentation_entries,
+    register_presentation,
+)
+from services.enterprise.scene_service import list_active_scenes
+from services.enterprise.workspace_service import (
+    add_or_update_member,
+    create_folder,
+    create_workspace,
+    ensure_personal_workspace,
+    list_folders,
+    list_members,
+    list_workspaces,
+    remove_member,
+    require_workspace_role,
+)
+
+
+API_V1_ENTERPRISE_ROUTER = APIRouter(
+    prefix="/api/v1/enterprise", tags=["Enterprise Platform"]
+)
+
+
+def _workspace_response(workspace, role: WorkspaceRole) -> WorkspaceResponse:
+    return WorkspaceResponse(
+        id=workspace.id,
+        owner_id=workspace.owner_id,
+        name=workspace.name,
+        workspace_type=workspace.workspace_type,
+        confidentiality=workspace.confidentiality,
+        is_archived=workspace.is_archived,
+        current_user_role=WorkspaceRole(role),
+        created_at=workspace.created_at,
+        updated_at=workspace.updated_at,
+    )
+
+
+@API_V1_ENTERPRISE_ROUTER.get(
+    "/workspaces", response_model=list[WorkspaceResponse]
+)
+async def get_workspaces(
+    principal: AuthPrincipal = Depends(principal_from_request),
+    session: AsyncSession = Depends(get_async_session),
+):
+    rows = await list_workspaces(session, principal)
+    return [_workspace_response(workspace, role) for workspace, role in rows]
+
+
+@API_V1_ENTERPRISE_ROUTER.post(
+    "/workspaces",
+    response_model=WorkspaceResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def post_workspace(
+    body: WorkspaceCreateRequest,
+    principal: AuthPrincipal = Depends(principal_from_request),
+    session: AsyncSession = Depends(get_async_session),
+):
+    workspace, membership = await create_workspace(
+        session,
+        principal=principal,
+        name=body.name,
+        workspace_type=body.workspace_type,
+        confidentiality=body.confidentiality,
+    )
+    return _workspace_response(workspace, membership.role)
+
+
+@API_V1_ENTERPRISE_ROUTER.post(
+    "/workspaces/personal", response_model=WorkspaceResponse
+)
+async def post_personal_workspace(
+    principal: AuthPrincipal = Depends(principal_from_request),
+    session: AsyncSession = Depends(get_async_session),
+):
+    workspace, membership, _ = await ensure_personal_workspace(session, principal)
+    return _workspace_response(workspace, membership.role)
+
+
+@API_V1_ENTERPRISE_ROUTER.get(
+    "/workspaces/{workspace_id}", response_model=WorkspaceResponse
+)
+async def get_workspace(
+    workspace_id: uuid.UUID,
+    principal: AuthPrincipal = Depends(principal_from_request),
+    session: AsyncSession = Depends(get_async_session),
+):
+    workspace, membership = await require_workspace_role(
+        session, workspace_id=workspace_id, principal=principal
+    )
+    return _workspace_response(workspace, membership.role)
+
+
+@API_V1_ENTERPRISE_ROUTER.get(
+    "/workspaces/{workspace_id}/members",
+    response_model=list[WorkspaceMemberResponse],
+)
+async def get_workspace_members(
+    workspace_id: uuid.UUID,
+    principal: AuthPrincipal = Depends(principal_from_request),
+    session: AsyncSession = Depends(get_async_session),
+):
+    rows = await list_members(
+        session, workspace_id=workspace_id, principal=principal
+    )
+    return [
+        WorkspaceMemberResponse(
+            id=member.id,
+            user_id=member.user_id,
+            username=user.username,
+            role=member.role,
+            created_at=member.created_at,
+        )
+        for member, user in rows
+    ]
+
+
+@API_V1_ENTERPRISE_ROUTER.put(
+    "/workspaces/{workspace_id}/members/{user_id}",
+    response_model=WorkspaceMemberResponse,
+)
+async def put_workspace_member(
+    workspace_id: uuid.UUID,
+    user_id: uuid.UUID,
+    body: WorkspaceMemberUpsertRequest,
+    principal: AuthPrincipal = Depends(principal_from_request),
+    session: AsyncSession = Depends(get_async_session),
+):
+    if body.user_id != user_id:
+        raise HTTPException(status_code=422, detail="User ID does not match path")
+    member = await add_or_update_member(
+        session,
+        workspace_id=workspace_id,
+        principal=principal,
+        user_id=user_id,
+        role=body.role,
+    )
+    user = await session.get(User, user_id)
+    return WorkspaceMemberResponse(
+        id=member.id,
+        user_id=member.user_id,
+        username=user.username,
+        role=member.role,
+        created_at=member.created_at,
+    )
+
+
+@API_V1_ENTERPRISE_ROUTER.delete(
+    "/workspaces/{workspace_id}/members/{user_id}", status_code=204
+)
+async def delete_workspace_member(
+    workspace_id: uuid.UUID,
+    user_id: uuid.UUID,
+    principal: AuthPrincipal = Depends(principal_from_request),
+    session: AsyncSession = Depends(get_async_session),
+):
+    await remove_member(
+        session,
+        workspace_id=workspace_id,
+        principal=principal,
+        user_id=user_id,
+    )
+    return Response(status_code=204)
+
+
+@API_V1_ENTERPRISE_ROUTER.get(
+    "/workspaces/{workspace_id}/folders", response_model=list[FolderResponse]
+)
+async def get_workspace_folders(
+    workspace_id: uuid.UUID,
+    principal: AuthPrincipal = Depends(principal_from_request),
+    session: AsyncSession = Depends(get_async_session),
+):
+    return await list_folders(
+        session, workspace_id=workspace_id, principal=principal
+    )
+
+
+@API_V1_ENTERPRISE_ROUTER.post(
+    "/workspaces/{workspace_id}/folders",
+    response_model=FolderResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def post_workspace_folder(
+    workspace_id: uuid.UUID,
+    body: FolderCreateRequest,
+    principal: AuthPrincipal = Depends(principal_from_request),
+    session: AsyncSession = Depends(get_async_session),
+):
+    return await create_folder(
+        session,
+        workspace_id=workspace_id,
+        principal=principal,
+        name=body.name,
+        parent_id=body.parent_id,
+    )
+
+
+@API_V1_ENTERPRISE_ROUTER.post(
+    "/presentations",
+    response_model=PresentationEntryResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def post_presentation_entry(
+    body: PresentationRegisterRequest,
+    principal: AuthPrincipal = Depends(principal_from_request),
+    session: AsyncSession = Depends(get_async_session),
+):
+    return await register_presentation(
+        session,
+        principal=principal,
+        workspace_id=body.workspace_id,
+        presentation_id=body.presentation_id,
+        folder_id=body.folder_id,
+        scene_type=body.scene_type,
+    )
+
+
+@API_V1_ENTERPRISE_ROUTER.get(
+    "/workspaces/{workspace_id}/presentations",
+    response_model=list[PresentationEntryResponse],
+)
+async def get_presentation_entries(
+    workspace_id: uuid.UUID,
+    folder_id: uuid.UUID | None = Query(default=None),
+    principal: AuthPrincipal = Depends(principal_from_request),
+    session: AsyncSession = Depends(get_async_session),
+):
+    return await list_presentation_entries(
+        session,
+        principal=principal,
+        workspace_id=workspace_id,
+        folder_id=folder_id,
+    )
+
+
+@API_V1_ENTERPRISE_ROUTER.get(
+    "/scenes", response_model=list[SceneDefinitionResponse]
+)
+async def get_scenes(
+    _: AuthPrincipal = Depends(principal_from_request),
+    session: AsyncSession = Depends(get_async_session),
+):
+    return await list_active_scenes(session)
+
+
+@API_V1_ENTERPRISE_ROUTER.get(
+    "/workspaces/{workspace_id}/audit-events",
+    response_model=list[AuditEventResponse],
+)
+async def get_workspace_audit_events(
+    workspace_id: uuid.UUID,
+    limit: int = Query(default=100, ge=1, le=500),
+    principal: AuthPrincipal = Depends(principal_from_request),
+    session: AsyncSession = Depends(get_async_session),
+):
+    await require_workspace_role(
+        session,
+        workspace_id=workspace_id,
+        principal=principal,
+        required_role=WorkspaceRole.ADMIN,
+    )
+    return list(
+        (
+            await session.scalars(
+                select(AuditEventModel)
+                .where(AuditEventModel.workspace_id == workspace_id)
+                .order_by(AuditEventModel.created_at.desc())
+                .limit(limit)
+            )
+        ).all()
+    )

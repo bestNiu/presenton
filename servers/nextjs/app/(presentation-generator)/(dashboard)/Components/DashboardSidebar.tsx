@@ -1,13 +1,14 @@
 "use client";
 
 import React from "react";
-import { LayoutDashboard, Star, Brain, Settings, HelpCircle, UsersRound } from "lucide-react";
+import { LayoutDashboard, Star, Brain, Settings, HelpCircle, UsersRound, Building2 } from "lucide-react";
 import { usePathname } from "next/navigation";
 import Link from "next/link";
 
 
 
 export const defaultNavItems = [
+    { key: "workspace" as const, label: "Workspace", icon: Building2 },
     { key: "dashboard" as const, label: "Dashboard", icon: LayoutDashboard },
     { key: "templates" as const, label: "Standard", icon: Star },
     { key: "designs" as const, label: "Smart", icon: Brain },
@@ -37,6 +38,17 @@ const DashboardSidebar = () => {
                 </Link>
                 <nav className="pt-6 font-syne" aria-label="Dashboard sections">
                     <div className="  space-y-6">
+
+                        <Link
+                            prefetch={false}
+                            href="/workspace"
+                            className="flex flex-col items-center gap-2 text-center transition-colors"
+                            aria-label="Enterprise workspace"
+                            title="Enterprise workspace"
+                        >
+                            <Building2 className={`h-4 w-4 ${pathname === "/workspace" ? "text-[#5146E5]" : "text-slate-600"}`} />
+                            <span className="text-[11px] text-slate-800">Workspace</span>
+                        </Link>
 
                         {/* Dashboard */}
                         <Link

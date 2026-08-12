@@ -29,6 +29,8 @@ REVISION_ASYNC_TASK_STATUS_NORMALIZED = "b8e2f4a7c9d1"
 REVISION_MULTI_USER_AUTH = "c9f1a2b3d4e5"
 REVISION_USERNAME_PROVIDER_SETTINGS = "d0a2b4c6e8f1"
 REVISION_PRIMARY_ADMIN_SLOT = "f3a7c1d9e5b2"
+REVISION_ENTERPRISE_PLATFORM = "a4e8c2d6f0b1"
+REVISION_HEAD = REVISION_ENTERPRISE_PLATFORM
 
 
 async def migrate_database_on_startup() -> None:
@@ -114,6 +116,16 @@ def _infer_revision_from_schema(
     _head_revision: str,
 ) -> str:
     """Best-effort: map existing SQLite/Postgres schema to our linear migration chain."""
+    enterprise_tables = {
+        "enterprise_workspaces",
+        "enterprise_workspace_members",
+        "enterprise_workspace_folders",
+        "enterprise_scene_definitions",
+        "enterprise_presentation_entries",
+        "enterprise_audit_events",
+    }
+    if enterprise_tables.issubset(tables):
+        return REVISION_ENTERPRISE_PLATFORM
     owned_tables = {
         "presentations",
         "slides",

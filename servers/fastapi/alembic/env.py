@@ -33,6 +33,14 @@ from models.sql.webhook_subscription import WebhookSubscription  # noqa: F401, E
 from models.sql.user import User  # noqa: F401, E402
 from models.sql.access_token import AccessToken  # noqa: F401, E402
 from models.sql.provider_settings import ProviderSettings  # noqa: F401, E402
+from models.sql.enterprise import (  # noqa: F401, E402
+    AuditEventModel,
+    PresentationEntryModel,
+    SceneDefinitionModel,
+    WorkspaceFolderModel,
+    WorkspaceMemberModel,
+    WorkspaceModel,
+)
 
 alembic_config = context.config
 

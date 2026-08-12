@@ -1,9 +1,14 @@
-from datetime import datetime
+from datetime import date, datetime
 import uuid
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from domains.platform.enums import (
+    BidContentStatus,
+    BidDocumentStatus,
+    BidProjectRole,
+    BidProjectStatus,
+    BidRequirementStatus,
     ConfidentialityLevel,
     PresentationCreationMode,
     PresentationEntryStatus,
@@ -13,6 +18,170 @@ from domains.platform.enums import (
     WorkspaceRole,
     WorkspaceType,
 )
+
+
+class BidProjectCreateRequest(BaseModel):
+    workspace_id: uuid.UUID
+    bid_code: str = Field(min_length=1, max_length=64)
+    name: str = Field(min_length=1, max_length=300)
+    sponsor_name: str | None = Field(default=None, max_length=300)
+    drug_name: str | None = Field(default=None, max_length=300)
+    indication: str | None = Field(default=None, max_length=300)
+    due_date: date | None = None
+    confidentiality: ConfidentialityLevel = ConfidentialityLevel.L3
+
+    @field_validator("bid_code", "name")
+    @classmethod
+    def normalize_bid_required_text(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("Value is required")
+        return value
+
+
+class BidProjectResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    workspace_id: uuid.UUID
+    created_by: uuid.UUID | None
+    bid_code: str
+    name: str
+    sponsor_name: str | None
+    drug_name: str | None
+    indication: str | None
+    due_date: date | None
+    confidentiality: ConfidentialityLevel
+    status: BidProjectStatus
+    current_user_role: BidProjectRole | None = None
+    row_version: int
+    created_at: datetime
+    updated_at: datetime
+
+
+class BidProjectMemberRequest(BaseModel):
+    user_id: uuid.UUID
+    role: BidProjectRole
+
+
+class BidProjectMemberResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    project_id: uuid.UUID
+    user_id: uuid.UUID
+    role: BidProjectRole
+    created_at: datetime
+
+
+class BidDocumentCreateRequest(BaseModel):
+    logical_name: str = Field(min_length=1, max_length=300)
+    category: str = Field(min_length=1, max_length=64)
+    version_no: int = Field(default=1, ge=1)
+    file_ref: str = Field(min_length=1, max_length=2000)
+    sha256: str | None = Field(default=None, min_length=64, max_length=64)
+
+
+class BidDocumentResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    project_id: uuid.UUID
+    logical_name: str
+    category: str
+    version_no: int
+    status: BidDocumentStatus
+    created_by: uuid.UUID | None
+    created_at: datetime
+
+
+class BidProfileUpdateRequest(BaseModel):
+    facts: dict = Field(default_factory=dict)
+    conflicts: list = Field(default_factory=list)
+    row_version: int = Field(ge=1)
+
+
+class BidProfileResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    project_id: uuid.UUID
+    schema_version: str
+    facts: dict
+    conflicts: list
+    status: BidContentStatus
+    row_version: int
+    updated_by: uuid.UUID | None
+    created_at: datetime
+    updated_at: datetime
+
+
+class BidRequirementCreateRequest(BaseModel):
+    category: str = Field(min_length=1, max_length=100)
+    original_text: str = Field(min_length=1, max_length=10000)
+    mandatory: bool = True
+    score: float | None = Field(default=None, ge=0)
+    source_ref: str | None = Field(default=None, max_length=1000)
+    owner_department: str | None = Field(default=None, max_length=200)
+    target_module: str | None = Field(default=None, max_length=100)
+
+
+class BidRequirementUpdateRequest(BaseModel):
+    response: str | None = Field(default=None, max_length=20000)
+    status: BidRequirementStatus
+    owner_department: str | None = Field(default=None, max_length=200)
+    target_module: str | None = Field(default=None, max_length=100)
+    row_version: int = Field(ge=1)
+
+
+class BidRequirementResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    project_id: uuid.UUID
+    category: str
+    original_text: str
+    mandatory: bool
+    score: float | None
+    source_ref: str | None
+    owner_department: str | None
+    target_module: str | None
+    response: str | None
+    status: BidRequirementStatus
+    row_version: int
+    created_at: datetime
+    updated_at: datetime
+
+
+class BidStrategyUpdateRequest(BaseModel):
+    elements: dict = Field(default_factory=dict)
+    row_version: int = Field(default=1, ge=1)
+
+
+class BidStrategyResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    project_id: uuid.UUID
+    version_no: int
+    elements: dict
+    status: BidContentStatus
+    row_version: int
+    created_by: uuid.UUID | None
+    confirmed_by: uuid.UUID | None
+    confirmed_at: datetime | None
+    created_at: datetime
+    updated_at: datetime
+
+
+class BidProjectDashboardResponse(BaseModel):
+    project: BidProjectResponse
+    profile: BidProfileResponse
+    documents: list[BidDocumentResponse]
+    requirements: list[BidRequirementResponse]
+    strategy: BidStrategyResponse
+    mandatory_requirement_coverage: float
+    strategy_blockers: list[str]
 
 
 class WorkspaceCreateRequest(BaseModel):
@@ -105,6 +274,7 @@ class PresentationEntryResponse(BaseModel):
     created_by: uuid.UUID | None
     title: str | None
     scene_type: str
+    scene_version: str
     creation_mode: PresentationCreationMode
     status: PresentationEntryStatus
     can_open: bool = True
@@ -123,6 +293,27 @@ class SceneDefinitionResponse(BaseModel):
     description: str | None
     config: dict
     status: SceneStatus
+
+
+class SceneNavigationItemResponse(BaseModel):
+    code: str
+    label: str
+    route: str
+
+
+class SceneRuntimeResponse(BaseModel):
+    scene_type: str
+    version: str
+    display_name: str
+    description: str | None
+    workspace_id: uuid.UUID
+    workspace_role: WorkspaceRole
+    entry_route: str
+    create_schema: str
+    navigation: list[SceneNavigationItemResponse]
+    permissions: list[str]
+    capabilities: dict[str, bool]
+    policies: dict[str, str]
 
 
 class AuditEventResponse(BaseModel):

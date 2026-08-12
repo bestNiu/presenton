@@ -1,0 +1,242 @@
+from datetime import date, datetime
+import uuid
+
+from sqlalchemy import (
+    Boolean,
+    Column,
+    Date,
+    DateTime,
+    Float,
+    ForeignKey,
+    Integer,
+    JSON,
+    String,
+    Text,
+    UniqueConstraint,
+)
+from sqlmodel import Field, SQLModel
+
+from domains.platform.enums import (
+    BidContentStatus,
+    BidDocumentStatus,
+    BidProjectRole,
+    BidProjectStatus,
+    BidRequirementStatus,
+    ConfidentialityLevel,
+)
+from utils.datetime_utils import get_current_utc_datetime
+
+
+class BidProjectModel(SQLModel, table=True):
+    __tablename__ = "enterprise_bid_projects"
+    __table_args__ = (
+        UniqueConstraint("workspace_id", "bid_code", name="uq_bid_project_code"),
+    )
+
+    id: uuid.UUID = Field(primary_key=True, default_factory=uuid.uuid4)
+    workspace_id: uuid.UUID = Field(
+        sa_column=Column(
+            ForeignKey("enterprise_workspaces.id", ondelete="CASCADE"),
+            nullable=False,
+            index=True,
+        )
+    )
+    created_by: uuid.UUID | None = Field(
+        default=None,
+        sa_column=Column(ForeignKey("user.id", ondelete="SET NULL"), index=True),
+    )
+    bid_code: str = Field(sa_column=Column(String(64), nullable=False, index=True))
+    name: str = Field(sa_column=Column(String(300), nullable=False))
+    sponsor_name: str | None = Field(default=None, sa_column=Column(String(300)))
+    drug_name: str | None = Field(default=None, sa_column=Column(String(300)))
+    indication: str | None = Field(default=None, sa_column=Column(String(300)))
+    due_date: date | None = Field(default=None, sa_column=Column(Date))
+    confidentiality: ConfidentialityLevel = Field(
+        default=ConfidentialityLevel.L3,
+        sa_column=Column(String(8), nullable=False),
+    )
+    status: BidProjectStatus = Field(
+        default=BidProjectStatus.UNDERSTANDING,
+        sa_column=Column(String(32), nullable=False, index=True),
+    )
+    row_version: int = Field(default=1, sa_column=Column(Integer, nullable=False))
+    created_at: datetime = Field(
+        sa_column=Column(DateTime(timezone=True), default=get_current_utc_datetime)
+    )
+    updated_at: datetime = Field(
+        sa_column=Column(
+            DateTime(timezone=True),
+            default=get_current_utc_datetime,
+            onupdate=get_current_utc_datetime,
+        )
+    )
+
+
+class BidProjectMemberModel(SQLModel, table=True):
+    __tablename__ = "enterprise_bid_project_members"
+    __table_args__ = (
+        UniqueConstraint("project_id", "user_id", name="uq_bid_project_member"),
+    )
+
+    id: uuid.UUID = Field(primary_key=True, default_factory=uuid.uuid4)
+    project_id: uuid.UUID = Field(
+        sa_column=Column(
+            ForeignKey("enterprise_bid_projects.id", ondelete="CASCADE"),
+            nullable=False,
+            index=True,
+        )
+    )
+    user_id: uuid.UUID = Field(
+        sa_column=Column(ForeignKey("user.id", ondelete="CASCADE"), index=True)
+    )
+    role: BidProjectRole = Field(
+        default=BidProjectRole.VIEWER,
+        sa_column=Column(String(32), nullable=False),
+    )
+    created_at: datetime = Field(
+        sa_column=Column(DateTime(timezone=True), default=get_current_utc_datetime)
+    )
+
+
+class BidProjectDocumentModel(SQLModel, table=True):
+    __tablename__ = "enterprise_bid_project_documents"
+    __table_args__ = (
+        UniqueConstraint(
+            "project_id", "logical_name", "version_no", name="uq_bid_document_version"
+        ),
+    )
+
+    id: uuid.UUID = Field(primary_key=True, default_factory=uuid.uuid4)
+    project_id: uuid.UUID = Field(
+        sa_column=Column(
+            ForeignKey("enterprise_bid_projects.id", ondelete="CASCADE"),
+            nullable=False,
+            index=True,
+        )
+    )
+    logical_name: str = Field(sa_column=Column(String(300), nullable=False))
+    category: str = Field(sa_column=Column(String(64), nullable=False, index=True))
+    version_no: int = Field(default=1, sa_column=Column(Integer, nullable=False))
+    file_ref: str = Field(sa_column=Column(String(2000), nullable=False))
+    sha256: str | None = Field(default=None, sa_column=Column(String(64), index=True))
+    status: BidDocumentStatus = Field(
+        default=BidDocumentStatus.ACTIVE,
+        sa_column=Column(String(32), nullable=False, index=True),
+    )
+    created_by: uuid.UUID | None = Field(
+        default=None, sa_column=Column(ForeignKey("user.id", ondelete="SET NULL"))
+    )
+    created_at: datetime = Field(
+        sa_column=Column(DateTime(timezone=True), default=get_current_utc_datetime)
+    )
+
+
+class BidProjectProfileModel(SQLModel, table=True):
+    __tablename__ = "enterprise_bid_project_profiles"
+    __table_args__ = (UniqueConstraint("project_id", name="uq_bid_project_profile"),)
+
+    id: uuid.UUID = Field(primary_key=True, default_factory=uuid.uuid4)
+    project_id: uuid.UUID = Field(
+        sa_column=Column(
+            ForeignKey("enterprise_bid_projects.id", ondelete="CASCADE"),
+            nullable=False,
+            index=True,
+        )
+    )
+    schema_version: str = Field(default="1.0", sa_column=Column(String(32)))
+    facts: dict = Field(default_factory=dict, sa_column=Column(JSON, nullable=False))
+    conflicts: list = Field(default_factory=list, sa_column=Column(JSON, nullable=False))
+    status: BidContentStatus = Field(
+        default=BidContentStatus.DRAFT,
+        sa_column=Column(String(32), nullable=False, index=True),
+    )
+    row_version: int = Field(default=1, sa_column=Column(Integer, nullable=False))
+    updated_by: uuid.UUID | None = Field(
+        default=None, sa_column=Column(ForeignKey("user.id", ondelete="SET NULL"))
+    )
+    created_at: datetime = Field(
+        sa_column=Column(DateTime(timezone=True), default=get_current_utc_datetime)
+    )
+    updated_at: datetime = Field(
+        sa_column=Column(
+            DateTime(timezone=True),
+            default=get_current_utc_datetime,
+            onupdate=get_current_utc_datetime,
+        )
+    )
+
+
+class BidRequirementModel(SQLModel, table=True):
+    __tablename__ = "enterprise_bid_requirements"
+
+    id: uuid.UUID = Field(primary_key=True, default_factory=uuid.uuid4)
+    project_id: uuid.UUID = Field(
+        sa_column=Column(
+            ForeignKey("enterprise_bid_projects.id", ondelete="CASCADE"),
+            nullable=False,
+            index=True,
+        )
+    )
+    category: str = Field(sa_column=Column(String(100), nullable=False, index=True))
+    original_text: str = Field(sa_column=Column(Text, nullable=False))
+    mandatory: bool = Field(default=True, sa_column=Column(Boolean, nullable=False))
+    score: float | None = Field(default=None, sa_column=Column(Float))
+    source_ref: str | None = Field(default=None, sa_column=Column(String(1000)))
+    owner_department: str | None = Field(default=None, sa_column=Column(String(200)))
+    target_module: str | None = Field(default=None, sa_column=Column(String(100)))
+    response: str | None = Field(default=None, sa_column=Column(Text))
+    status: BidRequirementStatus = Field(
+        default=BidRequirementStatus.OPEN,
+        sa_column=Column(String(32), nullable=False, index=True),
+    )
+    row_version: int = Field(default=1, sa_column=Column(Integer, nullable=False))
+    created_at: datetime = Field(
+        sa_column=Column(DateTime(timezone=True), default=get_current_utc_datetime)
+    )
+    updated_at: datetime = Field(
+        sa_column=Column(
+            DateTime(timezone=True),
+            default=get_current_utc_datetime,
+            onupdate=get_current_utc_datetime,
+        )
+    )
+
+
+class BidStrategyModel(SQLModel, table=True):
+    __tablename__ = "enterprise_bid_strategies"
+    __table_args__ = (
+        UniqueConstraint("project_id", "version_no", name="uq_bid_strategy_version"),
+    )
+
+    id: uuid.UUID = Field(primary_key=True, default_factory=uuid.uuid4)
+    project_id: uuid.UUID = Field(
+        sa_column=Column(
+            ForeignKey("enterprise_bid_projects.id", ondelete="CASCADE"),
+            nullable=False,
+            index=True,
+        )
+    )
+    version_no: int = Field(default=1, sa_column=Column(Integer, nullable=False))
+    elements: dict = Field(default_factory=dict, sa_column=Column(JSON, nullable=False))
+    status: BidContentStatus = Field(
+        default=BidContentStatus.DRAFT,
+        sa_column=Column(String(32), nullable=False, index=True),
+    )
+    row_version: int = Field(default=1, sa_column=Column(Integer, nullable=False))
+    created_by: uuid.UUID | None = Field(
+        default=None, sa_column=Column(ForeignKey("user.id", ondelete="SET NULL"))
+    )
+    confirmed_by: uuid.UUID | None = Field(
+        default=None, sa_column=Column(ForeignKey("user.id", ondelete="SET NULL"))
+    )
+    confirmed_at: datetime | None = Field(default=None, sa_column=Column(DateTime(timezone=True)))
+    created_at: datetime = Field(
+        sa_column=Column(DateTime(timezone=True), default=get_current_utc_datetime)
+    )
+    updated_at: datetime = Field(
+        sa_column=Column(
+            DateTime(timezone=True),
+            default=get_current_utc_datetime,
+            onupdate=get_current_utc_datetime,
+        )
+    )

@@ -12,6 +12,9 @@ from models.sql.enterprise.workspace import WorkspaceFolderModel
 from models.sql.presentation import PresentationModel
 from services.enterprise.audit_service import record_audit_event
 from services.enterprise.scene_service import get_active_scene
+from services.enterprise.scene_registry_service import (
+    require_direct_presentation_creation,
+)
 from services.enterprise.workspace_service import require_workspace_role
 
 
@@ -82,8 +85,10 @@ async def attach_presentation_to_workspace(
         folder = await session.get(WorkspaceFolderModel, folder_id)
         if folder is None or folder.workspace_id != workspace_id or folder.is_archived:
             raise HTTPException(status_code=404, detail="Folder not found")
-    if await get_active_scene(session, scene_type) is None:
+    scene = await get_active_scene(session, scene_type)
+    if scene is None:
         raise HTTPException(status_code=422, detail="Scene is not active")
+    require_direct_presentation_creation(scene)
     entry = PresentationEntryModel(
         workspace_id=workspace_id,
         folder_id=folder_id,
@@ -91,6 +96,7 @@ async def attach_presentation_to_workspace(
         created_by=principal.user_id,
         title=presentation.title,
         scene_type=scene_type,
+        scene_version=scene.version,
         creation_mode=creation_mode,
     )
     session.add(entry)
@@ -104,6 +110,7 @@ async def attach_presentation_to_workspace(
         metadata={
             "presentation_id": str(presentation.id),
             "scene_type": scene_type,
+            "scene_version": scene.version,
             "creation_mode": creation_mode.value,
         },
     )

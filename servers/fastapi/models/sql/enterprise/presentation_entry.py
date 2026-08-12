@@ -49,6 +49,9 @@ class PresentationEntryModel(SQLModel, table=True):
     scene_type: str = Field(
         default="general", sa_column=Column(String(64), nullable=False, index=True)
     )
+    scene_version: str = Field(
+        default="1.0", sa_column=Column(String(32), nullable=False)
+    )
     creation_mode: PresentationCreationMode = Field(
         default=PresentationCreationMode.TOPIC,
         sa_column=Column(String(32), nullable=False, index=True),

@@ -58,6 +58,37 @@ class SceneStatus(str, Enum):
     INACTIVE = "inactive"
 
 
+class BidProjectStatus(str, Enum):
+    UNDERSTANDING = "understanding"
+    STRATEGY_PENDING = "strategy_pending"
+    STRATEGY_CONFIRMED = "strategy_confirmed"
+    ARCHIVED = "archived"
+
+
+class BidProjectRole(str, Enum):
+    BID_MANAGER = "bid_manager"
+    CONTRIBUTOR = "contributor"
+    REVIEWER = "reviewer"
+    VIEWER = "viewer"
+
+
+class BidContentStatus(str, Enum):
+    DRAFT = "draft"
+    CONFIRMED = "confirmed"
+    STALE = "stale"
+
+
+class BidRequirementStatus(str, Enum):
+    OPEN = "open"
+    ANSWERED = "answered"
+    VERIFIED = "verified"
+
+
+class BidDocumentStatus(str, Enum):
+    ACTIVE = "active"
+    SUPERSEDED = "superseded"
+
+
 class AuditResult(str, Enum):
     SUCCESS = "success"
     DENIED = "denied"

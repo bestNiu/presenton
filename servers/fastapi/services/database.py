@@ -30,6 +30,12 @@ from models.sql.access_token import AccessToken
 from models.sql.provider_settings import ProviderSettings
 from models.sql.enterprise import (
     AuditEventModel,
+    BidProjectDocumentModel,
+    BidProjectMemberModel,
+    BidProjectModel,
+    BidProjectProfileModel,
+    BidRequirementModel,
+    BidStrategyModel,
     PresentationEntryModel,
     SceneDefinitionModel,
     TemplatePublicationModel,
@@ -160,6 +166,12 @@ async def create_db_and_tables():
                         PresentationEntryModel.__table__,
                         AuditEventModel.__table__,
                         TemplatePublicationModel.__table__,
+                        BidProjectModel.__table__,
+                        BidProjectMemberModel.__table__,
+                        BidProjectDocumentModel.__table__,
+                        BidProjectProfileModel.__table__,
+                        BidRequirementModel.__table__,
+                        BidStrategyModel.__table__,
                     ],
                 )
             )

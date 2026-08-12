@@ -7,11 +7,26 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from api.v1.auth.principal import AuthPrincipal, principal_from_request
 from api.v1.enterprise.schemas import (
     AuditEventResponse,
+    BidDocumentCreateRequest,
+    BidDocumentResponse,
+    BidProfileResponse,
+    BidProfileUpdateRequest,
+    BidProjectCreateRequest,
+    BidProjectDashboardResponse,
+    BidProjectMemberRequest,
+    BidProjectMemberResponse,
+    BidProjectResponse,
+    BidRequirementCreateRequest,
+    BidRequirementResponse,
+    BidRequirementUpdateRequest,
+    BidStrategyResponse,
+    BidStrategyUpdateRequest,
     FolderCreateRequest,
     FolderResponse,
     PresentationEntryResponse,
     PresentationRegisterRequest,
     SceneDefinitionResponse,
+    SceneRuntimeResponse,
     TemplatePublicationCreateRequest,
     TemplatePublicationResponse,
     WorkspaceCreateRequest,
@@ -27,7 +42,21 @@ from services.enterprise.presentation_workspace_service import (
     list_presentation_entries,
     register_presentation,
 )
+from services.enterprise.bid_project_service import (
+    add_project_document,
+    confirm_project_profile,
+    confirm_strategy,
+    create_bid_project,
+    create_requirement,
+    get_project_dashboard,
+    list_bid_projects,
+    update_project_profile,
+    update_requirement,
+    update_strategy,
+    upsert_project_member,
+)
 from services.enterprise.scene_service import list_active_scenes
+from services.enterprise.scene_registry_service import resolve_scene_runtime
 from services.enterprise.template_publication_service import (
     create_template_publication,
     list_visible_publications,
@@ -50,6 +79,199 @@ from services.enterprise.workspace_service import (
 API_V1_ENTERPRISE_ROUTER = APIRouter(
     prefix="/api/v1/enterprise", tags=["Enterprise Platform"]
 )
+
+
+@API_V1_ENTERPRISE_ROUTER.post(
+    "/bid/projects", response_model=BidProjectResponse, status_code=status.HTTP_201_CREATED
+)
+async def post_bid_project(
+    body: BidProjectCreateRequest,
+    principal: AuthPrincipal = Depends(principal_from_request),
+    session: AsyncSession = Depends(get_async_session),
+):
+    project, membership = await create_bid_project(
+        session,
+        principal=principal,
+        workspace_id=body.workspace_id,
+        bid_code=body.bid_code,
+        name=body.name,
+        sponsor_name=body.sponsor_name,
+        drug_name=body.drug_name,
+        indication=body.indication,
+        due_date=body.due_date,
+        confidentiality=body.confidentiality,
+    )
+    return BidProjectResponse.model_validate(project).model_copy(
+        update={"current_user_role": membership.role}
+    )
+
+
+@API_V1_ENTERPRISE_ROUTER.get(
+    "/bid/projects", response_model=list[BidProjectResponse]
+)
+async def get_bid_projects(
+    workspace_id: uuid.UUID = Query(),
+    principal: AuthPrincipal = Depends(principal_from_request),
+    session: AsyncSession = Depends(get_async_session),
+):
+    rows = await list_bid_projects(
+        session, principal=principal, workspace_id=workspace_id
+    )
+    return [
+        BidProjectResponse.model_validate(project).model_copy(
+            update={"current_user_role": role}
+        )
+        for project, role in rows
+    ]
+
+
+@API_V1_ENTERPRISE_ROUTER.get(
+    "/bid/projects/{project_id}", response_model=BidProjectDashboardResponse
+)
+async def get_bid_project_dashboard(
+    project_id: uuid.UUID,
+    principal: AuthPrincipal = Depends(principal_from_request),
+    session: AsyncSession = Depends(get_async_session),
+):
+    dashboard = await get_project_dashboard(
+        session, project_id=project_id, principal=principal
+    )
+    project = BidProjectResponse.model_validate(dashboard["project"]).model_copy(
+        update={"current_user_role": dashboard["current_user_role"]}
+    )
+    return {**dashboard, "project": project}
+
+
+@API_V1_ENTERPRISE_ROUTER.put(
+    "/bid/projects/{project_id}/members/{user_id}",
+    response_model=BidProjectMemberResponse,
+)
+async def put_bid_project_member(
+    project_id: uuid.UUID,
+    user_id: uuid.UUID,
+    body: BidProjectMemberRequest,
+    principal: AuthPrincipal = Depends(principal_from_request),
+    session: AsyncSession = Depends(get_async_session),
+):
+    if body.user_id != user_id:
+        raise HTTPException(status_code=422, detail="User ID does not match path")
+    return await upsert_project_member(
+        session,
+        project_id=project_id,
+        principal=principal,
+        user_id=user_id,
+        role=body.role,
+    )
+
+
+@API_V1_ENTERPRISE_ROUTER.post(
+    "/bid/projects/{project_id}/documents",
+    response_model=BidDocumentResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def post_bid_document(
+    project_id: uuid.UUID,
+    body: BidDocumentCreateRequest,
+    principal: AuthPrincipal = Depends(principal_from_request),
+    session: AsyncSession = Depends(get_async_session),
+):
+    return await add_project_document(
+        session, project_id=project_id, principal=principal, **body.model_dump()
+    )
+
+
+@API_V1_ENTERPRISE_ROUTER.put(
+    "/bid/projects/{project_id}/profile", response_model=BidProfileResponse
+)
+async def put_bid_profile(
+    project_id: uuid.UUID,
+    body: BidProfileUpdateRequest,
+    principal: AuthPrincipal = Depends(principal_from_request),
+    session: AsyncSession = Depends(get_async_session),
+):
+    return await update_project_profile(
+        session, project_id=project_id, principal=principal, **body.model_dump()
+    )
+
+
+@API_V1_ENTERPRISE_ROUTER.post(
+    "/bid/projects/{project_id}/profile/confirm", response_model=BidProfileResponse
+)
+async def post_bid_profile_confirm(
+    project_id: uuid.UUID,
+    principal: AuthPrincipal = Depends(principal_from_request),
+    session: AsyncSession = Depends(get_async_session),
+):
+    return await confirm_project_profile(
+        session, project_id=project_id, principal=principal
+    )
+
+
+@API_V1_ENTERPRISE_ROUTER.post(
+    "/bid/projects/{project_id}/requirements",
+    response_model=BidRequirementResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def post_bid_requirement(
+    project_id: uuid.UUID,
+    body: BidRequirementCreateRequest,
+    principal: AuthPrincipal = Depends(principal_from_request),
+    session: AsyncSession = Depends(get_async_session),
+):
+    return await create_requirement(
+        session,
+        project_id=project_id,
+        principal=principal,
+        values=body.model_dump(),
+    )
+
+
+@API_V1_ENTERPRISE_ROUTER.patch(
+    "/bid/projects/{project_id}/requirements/{requirement_id}",
+    response_model=BidRequirementResponse,
+)
+async def patch_bid_requirement(
+    project_id: uuid.UUID,
+    requirement_id: uuid.UUID,
+    body: BidRequirementUpdateRequest,
+    principal: AuthPrincipal = Depends(principal_from_request),
+    session: AsyncSession = Depends(get_async_session),
+):
+    return await update_requirement(
+        session,
+        project_id=project_id,
+        requirement_id=requirement_id,
+        principal=principal,
+        **body.model_dump(),
+    )
+
+
+@API_V1_ENTERPRISE_ROUTER.put(
+    "/bid/projects/{project_id}/strategy", response_model=BidStrategyResponse
+)
+async def put_bid_strategy(
+    project_id: uuid.UUID,
+    body: BidStrategyUpdateRequest,
+    principal: AuthPrincipal = Depends(principal_from_request),
+    session: AsyncSession = Depends(get_async_session),
+):
+    return await update_strategy(
+        session, project_id=project_id, principal=principal, **body.model_dump()
+    )
+
+
+@API_V1_ENTERPRISE_ROUTER.post(
+    "/bid/projects/{project_id}/strategy/confirm",
+    response_model=BidStrategyResponse,
+)
+async def post_bid_strategy_confirm(
+    project_id: uuid.UUID,
+    principal: AuthPrincipal = Depends(principal_from_request),
+    session: AsyncSession = Depends(get_async_session),
+):
+    return await confirm_strategy(
+        session, project_id=project_id, principal=principal
+    )
 
 
 @API_V1_ENTERPRISE_ROUTER.post(
@@ -351,6 +573,23 @@ async def get_scenes(
     session: AsyncSession = Depends(get_async_session),
 ):
     return await list_active_scenes(session)
+
+
+@API_V1_ENTERPRISE_ROUTER.get(
+    "/scenes/{scene_type}/runtime", response_model=SceneRuntimeResponse
+)
+async def get_scene_runtime(
+    scene_type: str,
+    workspace_id: uuid.UUID = Query(),
+    principal: AuthPrincipal = Depends(principal_from_request),
+    session: AsyncSession = Depends(get_async_session),
+):
+    return await resolve_scene_runtime(
+        session,
+        scene_type=scene_type,
+        workspace_id=workspace_id,
+        principal=principal,
+    )
 
 
 @API_V1_ENTERPRISE_ROUTER.get(

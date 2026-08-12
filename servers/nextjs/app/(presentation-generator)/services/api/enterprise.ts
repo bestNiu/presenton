@@ -27,6 +27,96 @@ export interface SceneDefinitionResponse {
   status: "active" | "inactive";
 }
 
+export interface SceneRuntimeResponse {
+  scene_type: string;
+  version: string;
+  display_name: string;
+  description: string | null;
+  workspace_id: string;
+  workspace_role: WorkspaceRole;
+  entry_route: string;
+  create_schema: string;
+  navigation: Array<{ code: string; label: string; route: string }>;
+  permissions: string[];
+  capabilities: {
+    direct_presentation_create: boolean;
+    requires_scene_resource: boolean;
+  };
+  policies: Record<string, string>;
+}
+
+export type BidProjectRole = "bid_manager" | "contributor" | "reviewer" | "viewer";
+export type BidProjectStatus =
+  | "understanding"
+  | "strategy_pending"
+  | "strategy_confirmed"
+  | "archived";
+
+export interface BidProjectResponse {
+  id: string;
+  workspace_id: string;
+  bid_code: string;
+  name: string;
+  sponsor_name: string | null;
+  drug_name: string | null;
+  indication: string | null;
+  due_date: string | null;
+  confidentiality: ConfidentialityLevel;
+  status: BidProjectStatus;
+  current_user_role: BidProjectRole | null;
+  row_version: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface BidDocumentResponse {
+  id: string;
+  logical_name: string;
+  category: string;
+  version_no: number;
+  status: "active" | "superseded";
+  created_at: string;
+}
+
+export interface BidProfileResponse {
+  id: string;
+  facts: Record<string, unknown>;
+  conflicts: unknown[];
+  status: "draft" | "confirmed" | "stale";
+  row_version: number;
+}
+
+export interface BidRequirementResponse {
+  id: string;
+  category: string;
+  original_text: string;
+  mandatory: boolean;
+  owner_department: string | null;
+  target_module: string | null;
+  response: string | null;
+  status: "open" | "answered" | "verified";
+  row_version: number;
+}
+
+export interface BidStrategyResponse {
+  id: string;
+  version_no: number;
+  elements: Record<string, unknown>;
+  status: "draft" | "confirmed" | "stale";
+  row_version: number;
+  confirmed_at: string | null;
+}
+
+export interface BidProjectDashboardResponse {
+  project: BidProjectResponse;
+  profile: BidProfileResponse;
+  documents: BidDocumentResponse[];
+  requirements: BidRequirementResponse[];
+  strategy: BidStrategyResponse;
+  mandatory_requirement_coverage: number;
+  strategy_blockers: string[];
+}
+
 export type PresentationCreationMode =
   | "topic"
   | "document"
@@ -130,6 +220,23 @@ export class EnterpriseApi {
     );
   }
 
+  static async getSceneRuntime(
+    sceneType: string,
+    workspaceId: string
+  ): Promise<SceneRuntimeResponse> {
+    const params = new URLSearchParams({ workspace_id: workspaceId });
+    const response = await fetch(
+      getApiUrl(
+        `/api/v1/enterprise/scenes/${encodeURIComponent(sceneType)}/runtime?${params.toString()}`
+      ),
+      { method: "GET", credentials: "include", cache: "no-store" }
+    );
+    return ApiResponseHandler.handleResponse(
+      response,
+      "Failed to load scene runtime"
+    );
+  }
+
   static async getPresentations(
     workspaceId: string
   ): Promise<PresentationEntryResponse[]> {
@@ -208,5 +315,41 @@ export class EnterpriseApi {
       response,
       "Failed to update template publication"
     );
+  }
+
+  static async getBidProjects(workspaceId: string): Promise<BidProjectResponse[]> {
+    const params = new URLSearchParams({ workspace_id: workspaceId });
+    const response = await fetch(
+      getApiUrl(`/api/v1/enterprise/bid/projects?${params.toString()}`),
+      { method: "GET", credentials: "include", cache: "no-store" }
+    );
+    return ApiResponseHandler.handleResponse(response, "Failed to load bid projects");
+  }
+
+  static async createBidProject(input: {
+    workspace_id: string;
+    bid_code: string;
+    name: string;
+    sponsor_name?: string;
+    drug_name?: string;
+    indication?: string;
+    due_date?: string;
+    confidentiality: ConfidentialityLevel;
+  }): Promise<BidProjectResponse> {
+    const response = await fetch(getApiUrl("/api/v1/enterprise/bid/projects"), {
+      method: "POST",
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(input),
+    });
+    return ApiResponseHandler.handleResponse(response, "Failed to create bid project");
+  }
+
+  static async getBidProject(projectId: string): Promise<BidProjectDashboardResponse> {
+    const response = await fetch(
+      getApiUrl(`/api/v1/enterprise/bid/projects/${encodeURIComponent(projectId)}`),
+      { method: "GET", credentials: "include", cache: "no-store" }
+    );
+    return ApiResponseHandler.handleResponse(response, "Failed to load bid project");
   }
 }

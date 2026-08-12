@@ -12,6 +12,12 @@ from api.v1.ppt.endpoints.template import TEMPLATE_ROUTER
 from domains.platform.enums import SceneStatus
 from models.sql.enterprise import (
     AuditEventModel,
+    BidProjectDocumentModel,
+    BidProjectMemberModel,
+    BidProjectModel,
+    BidProjectProfileModel,
+    BidRequirementModel,
+    BidStrategyModel,
     PresentationEntryModel,
     SceneDefinitionModel,
     TemplatePublicationModel,
@@ -75,6 +81,12 @@ def _build_client(tmp_path):
                 PresentationEntryModel.__table__,
                 AuditEventModel.__table__,
                 TemplatePublicationModel.__table__,
+                BidProjectModel.__table__,
+                BidProjectMemberModel.__table__,
+                BidProjectDocumentModel.__table__,
+                BidProjectProfileModel.__table__,
+                BidRequirementModel.__table__,
+                BidStrategyModel.__table__,
             ):
                 await connection.run_sync(table.create)
         async with session_maker() as session:
@@ -270,21 +282,53 @@ def test_presentation_registration_preserves_owner_and_allows_member_listing(tmp
 
 
 def test_scene_registry_and_audit_events_are_available(tmp_path):
-    client, engine, _, _ = _build_client(tmp_path)
+    client, engine, _, users = _build_client(tmp_path)
     try:
         scenes = client.get("/api/v1/enterprise/scenes")
         workspace = client.post(
             "/api/v1/enterprise/workspaces",
             json={"name": "审计空间", "workspace_type": "team"},
         ).json()
+        client.put(
+            f"/api/v1/enterprise/workspaces/{workspace['id']}/members/{users['member'].id}",
+            json={"user_id": str(users["member"].id), "role": "viewer"},
+        )
+        general_runtime = client.get(
+            "/api/v1/enterprise/scenes/general/runtime",
+            params={"workspace_id": workspace["id"]},
+            headers={"x-test-user": "member"},
+        )
+        bid_runtime = client.get(
+            "/api/v1/enterprise/scenes/bid/runtime",
+            params={"workspace_id": workspace["id"]},
+        )
+        outsider_runtime = client.get(
+            "/api/v1/enterprise/scenes/bid/runtime",
+            params={"workspace_id": workspace["id"]},
+            headers={"x-test-user": "outsider"},
+        )
+        blocked_bid_creation = client.post(
+            "/api/v1/ppt/presentation/create/blank",
+            json={"workspace_id": workspace["id"], "scene_type": "bid"},
+        )
         events = client.get(
             f"/api/v1/enterprise/workspaces/{workspace['id']}/audit-events"
         )
 
         assert scenes.status_code == 200
         assert {scene["scene_type"] for scene in scenes.json()} == {"general", "bid"}
+        assert general_runtime.status_code == 200
+        assert general_runtime.json()["workspace_role"] == "viewer"
+        assert general_runtime.json()["capabilities"]["direct_presentation_create"] is True
+        assert "presentation.view" in general_runtime.json()["permissions"]
+        assert "presentation.create" not in general_runtime.json()["permissions"]
+        assert bid_runtime.status_code == 200
+        assert bid_runtime.json()["create_schema"] == "bid-project-v1"
+        assert bid_runtime.json()["capabilities"]["requires_scene_resource"] is True
+        assert outsider_runtime.status_code == 404
+        assert blocked_bid_creation.status_code == 409
         assert events.status_code == 200
-        assert events.json()[0]["action"] == "workspace.created"
+        assert any(event["action"] == "workspace.created" for event in events.json())
     finally:
         asyncio.run(engine.dispose())
 
@@ -323,6 +367,7 @@ def test_blank_creation_is_atomically_registered_in_workspace(tmp_path):
         assert len(entries.json()) == 1
         assert entries.json()[0]["presentation_id"] == created.json()["id"]
         assert entries.json()[0]["creation_mode"] == "blank"
+        assert entries.json()[0]["scene_version"] == "1.0"
         assert any(
             event["action"] == "presentation.registered"
             and event["event_metadata"]["creation_mode"] == "blank"
@@ -430,5 +475,151 @@ def test_template_publication_lifecycle_default_and_immutability(tmp_path):
         assert member_template is not None
         assert member_template.id == template_id
         assert outsider_template is None
+    finally:
+        asyncio.run(engine.dispose())
+
+
+def test_bid_understanding_flow_enforces_project_access_and_strategy_gate(tmp_path):
+    client, engine, _, users = _build_client(tmp_path)
+    try:
+        workspace = client.post(
+            "/api/v1/enterprise/workspaces",
+            json={"name": "竞标项目空间", "workspace_type": "team"},
+        ).json()
+        client.put(
+            f"/api/v1/enterprise/workspaces/{workspace['id']}/members/{users['member'].id}",
+            json={"user_id": str(users["member"].id), "role": "editor"},
+        )
+        created = client.post(
+            "/api/v1/enterprise/bid/projects",
+            json={
+                "workspace_id": workspace["id"],
+                "bid_code": "BID-2026-001",
+                "name": "肿瘤临床研究竞标",
+                "sponsor_name": "示例申办方",
+                "drug_name": "ABC-101",
+                "indication": "肺癌",
+            },
+        )
+        project_id = created.json()["id"]
+        member = client.put(
+            f"/api/v1/enterprise/bid/projects/{project_id}/members/{users['member'].id}",
+            json={"user_id": str(users["member"].id), "role": "contributor"},
+        )
+        member_dashboard = client.get(
+            f"/api/v1/enterprise/bid/projects/{project_id}",
+            headers={"x-test-user": "member"},
+        )
+        outsider_dashboard = client.get(
+            f"/api/v1/enterprise/bid/projects/{project_id}",
+            headers={"x-test-user": "outsider"},
+        )
+        for category, name in (("rfp", "RFP"), ("protocol_summary", "方案摘要")):
+            registered = client.post(
+                f"/api/v1/enterprise/bid/projects/{project_id}/documents",
+                json={
+                    "logical_name": name,
+                    "category": category,
+                    "version_no": 1,
+                    "file_ref": f"temp/{category}.pdf",
+                },
+            )
+            assert registered.status_code == 201
+        profile = client.put(
+            f"/api/v1/enterprise/bid/projects/{project_id}/profile",
+            json={
+                "facts": {
+                    "drug": {"value": "ABC-101", "source": "protocol-summary:p2"},
+                    "indication": {"value": "肺癌", "source": "protocol-summary:p2"},
+                },
+                "conflicts": [],
+                "row_version": 1,
+            },
+        )
+        stale_profile = client.put(
+            f"/api/v1/enterprise/bid/projects/{project_id}/profile",
+            json={"facts": {}, "conflicts": [], "row_version": 1},
+        )
+        confirmed_profile = client.post(
+            f"/api/v1/enterprise/bid/projects/{project_id}/profile/confirm"
+        )
+        requirement = client.post(
+            f"/api/v1/enterprise/bid/projects/{project_id}/requirements",
+            json={
+                "category": "delivery",
+                "original_text": "必须说明中心启动周期",
+                "mandatory": True,
+                "source_ref": "rfp:p8",
+            },
+        ).json()
+        blocked = client.post(
+            f"/api/v1/enterprise/bid/projects/{project_id}/strategy/confirm"
+        )
+        answered = client.patch(
+            f"/api/v1/enterprise/bid/projects/{project_id}/requirements/{requirement['id']}",
+            json={
+                "response": "提供分层中心启动计划",
+                "status": "answered",
+                "owner_department": "运营",
+                "target_module": "operations",
+                "row_version": 1,
+            },
+        )
+        strategy = client.put(
+            f"/api/v1/enterprise/bid/projects/{project_id}/strategy",
+            json={
+                "row_version": 1,
+                "elements": {
+                    "project_assessment": ["入组周期是核心挑战"],
+                    "client_concerns": ["中心启动速度"],
+                    "solutions": ["分层启动与周度监控"],
+                    "differentiators": ["同适应症项目经验"],
+                    "commitments": ["启动周期需进一步审批"],
+                    "joint_decisions": ["共同确认首批中心名单"],
+                },
+            },
+        )
+        confirmed = client.post(
+            f"/api/v1/enterprise/bid/projects/{project_id}/strategy/confirm"
+        )
+        dashboard = client.get(f"/api/v1/enterprise/bid/projects/{project_id}")
+        reopened_profile = client.put(
+            f"/api/v1/enterprise/bid/projects/{project_id}/profile",
+            json={
+                "facts": {
+                    "drug": {"value": "ABC-101", "source": "protocol-summary:p2"},
+                    "indication": {"value": "肺癌", "source": "protocol-summary:p2"},
+                    "sites": {"value": 30, "source": "protocol-summary:p4"},
+                },
+                "conflicts": [],
+                "row_version": confirmed_profile.json()["row_version"],
+            },
+        )
+        reopened_dashboard = client.get(
+            f"/api/v1/enterprise/bid/projects/{project_id}"
+        )
+
+        assert created.status_code == 201
+        assert created.json()["current_user_role"] == "bid_manager"
+        assert member.status_code == 200
+        assert member_dashboard.status_code == 200
+        assert member_dashboard.json()["project"]["current_user_role"] == "contributor"
+        assert outsider_dashboard.status_code == 404
+        assert profile.status_code == 200
+        assert stale_profile.status_code == 409
+        assert confirmed_profile.json()["status"] == "confirmed"
+        assert blocked.status_code == 409
+        assert "策略六要素未完成" in " ".join(blocked.json()["detail"]["blockers"])
+        assert answered.json()["status"] == "answered"
+        assert strategy.status_code == 200
+        assert confirmed.status_code == 200
+        assert confirmed.json()["status"] == "confirmed"
+        assert dashboard.json()["project"]["status"] == "strategy_confirmed"
+        assert dashboard.json()["mandatory_requirement_coverage"] == 100.0
+        assert dashboard.json()["strategy_blockers"] == []
+        assert reopened_profile.status_code == 200
+        assert reopened_dashboard.json()["strategy"]["version_no"] == 2
+        assert reopened_dashboard.json()["strategy"]["status"] == "draft"
+        assert reopened_dashboard.json()["project"]["status"] == "understanding"
     finally:
         asyncio.run(engine.dispose())

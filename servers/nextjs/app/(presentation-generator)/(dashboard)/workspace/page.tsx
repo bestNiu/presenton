@@ -553,8 +553,9 @@ function WorkspacePage() {
           <h2 className="text-base font-semibold text-[#1D2939]">已注册专业场景</h2>
           <div className="mt-4 grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
             {professionalScenes.map((scene) => (
-              <article
+              <Link
                 key={`${scene.scene_type}-${scene.version}`}
+                href={`/workspace/scenes/${encodeURIComponent(scene.scene_type)}?workspace_id=${encodeURIComponent(activeWorkspaceId)}`}
                 className="rounded-2xl border border-[#E3E4EA] bg-white p-5"
               >
                 <div className="flex items-center justify-between gap-3">
@@ -567,7 +568,10 @@ function WorkspacePage() {
                   {scene.description || "专业场景能力"}
                 </p>
                 <p className="mt-3 text-xs text-[#98A2B3]">场景版本 {scene.version}</p>
-              </article>
+                <span className="mt-4 inline-flex items-center gap-1 text-sm font-medium text-[#635BFF]">
+                  进入场景 <ArrowRight className="h-4 w-4" />
+                </span>
+              </Link>
             ))}
           </div>
         </section>

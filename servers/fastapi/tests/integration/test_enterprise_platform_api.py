@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from api.v1.auth.principal import AuthPrincipal, principal_from_request
 from api.v1.enterprise.router import API_V1_ENTERPRISE_ROUTER
+from api.v1.ppt.endpoints.presentation import PRESENTATION_ROUTER
 from domains.platform.enums import SceneStatus
 from models.sql.enterprise import (
     AuditEventModel,
@@ -17,6 +18,7 @@ from models.sql.enterprise import (
     WorkspaceModel,
 )
 from models.sql.presentation import PresentationModel, PresentationVersion
+from models.sql.slide import SlideModel
 from models.sql.user import User
 from services.database import get_async_session
 
@@ -58,6 +60,7 @@ def _build_client(tmp_path):
             for table in (
                 User.__table__,
                 PresentationModel.__table__,
+                SlideModel.__table__,
                 WorkspaceModel.__table__,
                 WorkspaceMemberModel.__table__,
                 WorkspaceFolderModel.__table__,
@@ -106,6 +109,7 @@ def _build_client(tmp_path):
 
     app = FastAPI()
     app.include_router(API_V1_ENTERPRISE_ROUTER)
+    app.include_router(PRESENTATION_ROUTER, prefix="/api/v1/ppt")
     app.dependency_overrides[get_async_session] = override_session
     app.dependency_overrides[principal_from_request] = override_principal
     return TestClient(app), engine, session_maker, users
@@ -249,6 +253,8 @@ def test_presentation_registration_preserves_owner_and_allows_member_listing(tmp
         assert registered.json()["title"] == "企业架构汇报"
         assert member_entries.status_code == 200
         assert member_entries.json()[0]["presentation_id"] == str(presentation_id)
+        assert member_entries.json()[0]["can_open"] is False
+        assert registered.json()["can_open"] is True
         assert member_cannot_register_owner_presentation.status_code == 404
     finally:
         asyncio.run(engine.dispose())
@@ -270,5 +276,48 @@ def test_scene_registry_and_audit_events_are_available(tmp_path):
         assert {scene["scene_type"] for scene in scenes.json()} == {"general", "bid"}
         assert events.status_code == 200
         assert events.json()[0]["action"] == "workspace.created"
+    finally:
+        asyncio.run(engine.dispose())
+
+
+def test_blank_creation_is_atomically_registered_in_workspace(tmp_path):
+    client, engine, _, users = _build_client(tmp_path)
+    try:
+        workspace = client.post(
+            "/api/v1/enterprise/workspaces",
+            json={"name": "通用创作空间", "workspace_type": "team"},
+        ).json()
+
+        created = client.post(
+            "/api/v1/ppt/presentation/create/blank",
+            json={"workspace_id": workspace["id"], "scene_type": "general"},
+        )
+        client.put(
+            f"/api/v1/enterprise/workspaces/{workspace['id']}/members/{users['member'].id}",
+            json={"user_id": str(users["member"].id), "role": "viewer"},
+        )
+        denied = client.post(
+            "/api/v1/ppt/presentation/create/blank",
+            json={"workspace_id": workspace["id"], "scene_type": "general"},
+            headers={"x-test-user": "member"},
+        )
+        entries = client.get(
+            f"/api/v1/enterprise/workspaces/{workspace['id']}/presentations"
+        )
+        events = client.get(
+            f"/api/v1/enterprise/workspaces/{workspace['id']}/audit-events"
+        )
+
+        assert created.status_code == 201
+        assert denied.status_code == 404
+        assert entries.status_code == 200
+        assert len(entries.json()) == 1
+        assert entries.json()[0]["presentation_id"] == created.json()["id"]
+        assert entries.json()[0]["creation_mode"] == "blank"
+        assert any(
+            event["action"] == "presentation.registered"
+            and event["event_metadata"]["creation_mode"] == "blank"
+            for event in events.json()
+        )
     finally:
         asyncio.run(engine.dispose())

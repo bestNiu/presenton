@@ -2,14 +2,17 @@
 
 import Link from "next/link";
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
 import {
   ArrowRight,
-  BriefcaseBusiness,
   Building2,
   FilePlus2,
+  FileText,
   FolderKanban,
   LayoutTemplate,
   Loader2,
+  MonitorPlay,
+  PenLine,
   Plus,
   RefreshCw,
   ShieldCheck,
@@ -19,9 +22,11 @@ import {
 import {
   EnterpriseApi,
   type ConfidentialityLevel,
+  type PresentationEntryResponse,
   type SceneDefinitionResponse,
   type WorkspaceResponse,
 } from "@/app/(presentation-generator)/services/api/enterprise";
+import { PresentationGenerationApi } from "@/app/(presentation-generator)/services/api/presentation-generation";
 
 const workspaceTypeLabel: Record<WorkspaceResponse["workspace_type"], string> = {
   personal: "个人空间",
@@ -37,11 +42,24 @@ const workspaceRoleLabel: Record<WorkspaceResponse["current_user_role"], string>
   viewer: "查看者",
 };
 
+const creationModeLabel: Record<PresentationEntryResponse["creation_mode"], string> = {
+  topic: "主题生成",
+  document: "文档生成",
+  template: "模板创建",
+  blank: "空白创建",
+  import: "已有文稿",
+};
+
 function WorkspacePage() {
+  const router = useRouter();
   const [workspaces, setWorkspaces] = useState<WorkspaceResponse[]>([]);
   const [scenes, setScenes] = useState<SceneDefinitionResponse[]>([]);
+  const [presentations, setPresentations] =
+    useState<PresentationEntryResponse[]>([]);
+  const [activeWorkspaceId, setActiveWorkspaceId] = useState("");
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
+  const [creatingBlank, setCreatingBlank] = useState(false);
   const [showCreate, setShowCreate] = useState(false);
   const [name, setName] = useState("");
   const [confidentiality, setConfidentiality] =
@@ -59,6 +77,7 @@ function WorkspacePage() {
       ]);
       setWorkspaces(workspaceRows);
       setScenes(sceneRows);
+      setActiveWorkspaceId((current) => current || workspaceRows[0]?.id || "");
     } catch (loadError) {
       setError(
         loadError instanceof Error ? loadError.message : "工作台加载失败"
@@ -69,6 +88,28 @@ function WorkspacePage() {
   }, []);
 
   useEffect(() => {
+    if (!activeWorkspaceId) {
+      setPresentations([]);
+      return;
+    }
+    let active = true;
+    EnterpriseApi.getPresentations(activeWorkspaceId)
+      .then((rows) => {
+        if (active) setPresentations(rows);
+      })
+      .catch((loadError) => {
+        if (active) {
+          setError(
+            loadError instanceof Error ? loadError.message : "文稿列表加载失败"
+          );
+        }
+      });
+    return () => {
+      active = false;
+    };
+  }, [activeWorkspaceId]);
+
+  useEffect(() => {
     void load();
   }, [load]);
 
@@ -76,6 +117,45 @@ function WorkspacePage() {
     () => scenes.filter((scene) => scene.scene_type !== "general"),
     [scenes]
   );
+
+  const activeWorkspace = useMemo(
+    () => workspaces.find((workspace) => workspace.id === activeWorkspaceId),
+    [activeWorkspaceId, workspaces]
+  );
+  const canCreate =
+    activeWorkspace?.current_user_role === "owner" ||
+    activeWorkspace?.current_user_role === "admin" ||
+    activeWorkspace?.current_user_role === "editor";
+
+  const buildCreateHref = (entry: "topic" | "document" | "template") => {
+    const params = new URLSearchParams({ entry });
+    if (activeWorkspaceId) params.set("workspace_id", activeWorkspaceId);
+    if (entry === "template") params.set("template", "executive");
+    return `/upload?${params.toString()}`;
+  };
+
+  const handleCreateBlank = async () => {
+    if (!activeWorkspaceId || !canCreate || creatingBlank) return;
+    setCreatingBlank(true);
+    setError(null);
+    try {
+      const presentation = await PresentationGenerationApi.createBlankPresentation({
+        workspace_id: activeWorkspaceId,
+        scene_type: "general",
+      });
+      router.push(
+        `/presentation?id=${encodeURIComponent(presentation.id)}&type=standard`
+      );
+    } catch (creationError) {
+      setError(
+        creationError instanceof Error
+          ? creationError.message
+          : "空白演示文稿创建失败"
+      );
+    } finally {
+      setCreatingBlank(false);
+    }
+  };
 
   const handleCreate = async (event: FormEvent) => {
     event.preventDefault();
@@ -90,6 +170,7 @@ function WorkspacePage() {
         confidentiality,
       });
       setWorkspaces((current) => [...current, workspace]);
+      setActiveWorkspaceId(workspace.id);
       setName("");
       setConfidentiality("L2");
       setShowCreate(false);
@@ -188,25 +269,72 @@ function WorkspacePage() {
         )}
 
         <section className="mt-8">
-          <h2 className="text-base font-semibold text-[#1D2939]">快速开始</h2>
-          <div className="mt-3 grid gap-4 md:grid-cols-3">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+            <div>
+              <h2 className="text-base font-semibold text-[#1D2939]">通用 PPT 创建</h2>
+              <p className="mt-1 text-sm text-[#667085]">
+                选择归属空间后，从四种入口开始；创建记录和审计自动写入空间。
+              </p>
+            </div>
+            <label className="grid gap-1 text-xs font-medium text-[#475467]">
+              归属空间
+              <select
+                value={activeWorkspaceId}
+                onChange={(event) => setActiveWorkspaceId(event.target.value)}
+                className="h-10 min-w-56 rounded-lg border border-[#D9DCE3] bg-white px-3 text-sm text-[#101828]"
+              >
+                {workspaces.map((workspace) => (
+                  <option key={workspace.id} value={workspace.id}>
+                    {workspace.name} · {workspace.confidentiality}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+          {!canCreate && activeWorkspace && (
+            <p className="mt-3 rounded-lg bg-[#FFF4E5] px-3 py-2 text-sm text-[#B54708]">
+              当前空间角色为{workspaceRoleLabel[activeWorkspace.current_user_role]}，仅可查看文稿。
+            </p>
+          )}
+          <div className="mt-3 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
             <Link
-              href="/upload"
-              className="group rounded-2xl border border-[#E3E4EA] bg-white p-5 transition hover:-translate-y-0.5 hover:border-[#B9B2FF] hover:shadow-md"
+              href={buildCreateHref("topic")}
+              onClick={(event) => !canCreate && event.preventDefault()}
+              aria-disabled={!canCreate}
+              className="group rounded-2xl border border-[#E3E4EA] bg-white p-5 transition hover:-translate-y-0.5 hover:border-[#B9B2FF] hover:shadow-md aria-disabled:cursor-not-allowed aria-disabled:opacity-50"
             >
               <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-[#EEEAFE] text-[#635BFF]">
-                <FilePlus2 className="h-5 w-5" />
+                <PenLine className="h-5 w-5" />
               </div>
-              <h3 className="mt-4 font-semibold text-[#101828]">快速生成 PPT</h3>
+              <h3 className="mt-4 font-semibold text-[#101828]">从主题生成</h3>
               <p className="mt-1 text-sm leading-6 text-[#667085]">
-                从主题或已有资料生成可编辑的大纲和页面。
+                输入主题、受众和目标，生成可调整的大纲与页面。
               </p>
               <span className="mt-4 flex items-center gap-1 text-sm font-medium text-[#635BFF]">
                 开始创建 <ArrowRight className="h-4 w-4 transition group-hover:translate-x-1" />
               </span>
             </Link>
             <Link
-              href="/templates"
+              href={buildCreateHref("document")}
+              onClick={(event) => !canCreate && event.preventDefault()}
+              aria-disabled={!canCreate}
+              className="group rounded-2xl border border-[#E3E4EA] bg-white p-5 transition hover:-translate-y-0.5 hover:border-[#B8DEFA] hover:shadow-md aria-disabled:cursor-not-allowed aria-disabled:opacity-50"
+            >
+              <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-[#EAF6FF] text-[#087BCB]">
+                <FileText className="h-5 w-5" />
+              </div>
+              <h3 className="mt-4 font-semibold text-[#101828]">从文档生成</h3>
+              <p className="mt-1 text-sm leading-6 text-[#667085]">
+                上传 Word、PDF、表格或已有 PPT，提炼后生成。
+              </p>
+              <span className="mt-4 flex items-center gap-1 text-sm font-medium text-[#087BCB]">
+                上传资料 <ArrowRight className="h-4 w-4 transition group-hover:translate-x-1" />
+              </span>
+            </Link>
+            <Link
+              href={buildCreateHref("template")}
+              onClick={(event) => !canCreate && event.preventDefault()}
+              aria-disabled={!canCreate}
               className="group rounded-2xl border border-[#E3E4EA] bg-white p-5 transition hover:-translate-y-0.5 hover:border-[#A8DADC] hover:shadow-md"
             >
               <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-[#EAF8F6] text-[#087E8B]">
@@ -217,21 +345,30 @@ function WorkspacePage() {
                 复用已发布模板，保持字体、色板和版式一致。
               </p>
               <span className="mt-4 flex items-center gap-1 text-sm font-medium text-[#087E8B]">
-                查看模板 <ArrowRight className="h-4 w-4 transition group-hover:translate-x-1" />
+                选择模板 <ArrowRight className="h-4 w-4 transition group-hover:translate-x-1" />
               </span>
             </Link>
-            <div className="rounded-2xl border border-[#E3E4EA] bg-white p-5">
-              <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-[#FFF3E8] text-[#B54708]">
-                <BriefcaseBusiness className="h-5 w-5" />
+            <button
+              type="button"
+              onClick={() => void handleCreateBlank()}
+              disabled={!canCreate || creatingBlank}
+              className="group rounded-2xl border border-[#E3E4EA] bg-white p-5 text-left transition hover:-translate-y-0.5 hover:border-[#F5C9A8] hover:shadow-md disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-[#FFF1E7] text-[#D86D1C]">
+                {creatingBlank ? (
+                  <Loader2 className="h-5 w-5 animate-spin" />
+                ) : (
+                  <FilePlus2 className="h-5 w-5" />
+                )}
               </div>
-              <h3 className="mt-4 font-semibold text-[#101828]">专业工作台</h3>
+              <h3 className="mt-4 font-semibold text-[#101828]">空白演示文稿</h3>
               <p className="mt-1 text-sm leading-6 text-[#667085]">
-                竞标等场景使用专属资料、规则、流程和审核门。
+                创建一页空白稿，直接进入可视化编辑器自由制作。
               </p>
-              <span className="mt-4 inline-flex rounded-full bg-[#FFF4E5] px-2.5 py-1 text-xs font-medium text-[#B54708]">
-                场景框架已启用
+              <span className="mt-4 flex items-center gap-1 text-sm font-medium text-[#D86D1C]">
+                立即编辑 <ArrowRight className="h-4 w-4 transition group-hover:translate-x-1" />
               </span>
-            </div>
+            </button>
           </div>
         </section>
 
@@ -252,9 +389,15 @@ function WorkspacePage() {
           ) : (
             <div className="mt-4 grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
               {workspaces.map((workspace) => (
-                <article
+                <button
+                  type="button"
                   key={workspace.id}
-                  className="rounded-2xl border border-[#E3E4EA] bg-white p-5 shadow-[0_1px_2px_rgba(16,24,40,0.04)]"
+                  onClick={() => setActiveWorkspaceId(workspace.id)}
+                  className={`rounded-2xl border bg-white p-5 text-left shadow-[0_1px_2px_rgba(16,24,40,0.04)] transition hover:border-[#B9B2FF] ${
+                    activeWorkspaceId === workspace.id
+                      ? "border-[#8278FF] ring-2 ring-[#EEEAFE]"
+                      : "border-[#E3E4EA]"
+                  }`}
                 >
                   <div className="flex items-start justify-between gap-4">
                     <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-[#F2F1FF] text-[#635BFF]">
@@ -280,7 +423,56 @@ function WorkspacePage() {
                     <ShieldCheck className="h-4 w-4 text-[#12B76A]" />
                     服务端空间权限已启用
                   </div>
-                </article>
+                </button>
+              ))}
+            </div>
+          )}
+        </section>
+
+        <section className="mt-9">
+          <div className="flex items-center justify-between">
+            <div>
+              <h2 className="text-base font-semibold text-[#1D2939]">空间文稿</h2>
+              <p className="mt-1 text-sm text-[#667085]">
+                {activeWorkspace?.name || "当前空间"}中的通用 PPT 创建记录。
+              </p>
+            </div>
+            <span className="text-sm text-[#667085]">{presentations.length} 份文稿</span>
+          </div>
+          {presentations.length === 0 ? (
+            <div className="mt-4 flex h-28 items-center justify-center rounded-2xl border border-dashed border-[#D9DCE3] bg-white text-sm text-[#667085]">
+              当前空间暂无文稿，可从上方四种入口创建
+            </div>
+          ) : (
+            <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+              {presentations.slice(0, 9).map((presentation) => (
+                <Link
+                  key={presentation.id}
+                  href={`/presentation?id=${encodeURIComponent(presentation.presentation_id)}&type=standard`}
+                  onClick={(event) =>
+                    !presentation.can_open && event.preventDefault()
+                  }
+                  aria-disabled={!presentation.can_open}
+                  title={
+                    presentation.can_open
+                      ? "打开演示文稿"
+                      : "当前仅可查看空间元数据，协作编辑授权将在后续切片开放"
+                  }
+                  className="flex items-center gap-3 rounded-xl border border-[#E3E4EA] bg-white p-4 transition hover:border-[#B9B2FF] hover:shadow-sm aria-disabled:cursor-not-allowed aria-disabled:opacity-60"
+                >
+                  <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-[#F2F1FF] text-[#635BFF]">
+                    <MonitorPlay className="h-5 w-5" />
+                  </div>
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-semibold text-[#101828]">
+                      {presentation.title || "未命名演示文稿"}
+                    </p>
+                    <p className="mt-1 text-xs text-[#667085]">
+                      {creationModeLabel[presentation.creation_mode]} ·{" "}
+                      {presentation.can_open ? presentation.status : "仅元数据可见"}
+                    </p>
+                  </div>
+                </Link>
               ))}
             </div>
           )}

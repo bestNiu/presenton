@@ -46,6 +46,11 @@ import {
 } from "lucide-react";
 
 type GenerationMode = "smart" | "standard";
+type EnterpriseCreationContext = {
+  workspaceId?: string;
+  folderId?: string;
+  creationMode: "topic" | "document" | "template";
+};
 
 const STANDARD_PROMPT_STARTERS = [
   {
@@ -189,6 +194,8 @@ const UploadPage = () => {
   const [files, setFiles] = useState<File[]>([]);
   const [generationMode, setGenerationMode] = useState<GenerationMode>("standard");
   const [suggestedTemplate, setSuggestedTemplate] = useState<string | null>(null);
+  const [enterpriseContext, setEnterpriseContext] =
+    useState<EnterpriseCreationContext>({ creationMode: "topic" });
   const [communityReference, setCommunityReference] =
     useState<CommunityPresentation | null>(null);
   const [config, setConfig] = useState<PresentationConfig>({
@@ -206,6 +213,7 @@ const UploadPage = () => {
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const requestedPrompt = params.get("prompt")?.trim();
+    const requestedTemplate = params.get("template")?.trim();
     const requestedCommunityId = Number(params.get("communityId"));
     let active = true;
 
@@ -215,6 +223,15 @@ const UploadPage = () => {
     if (requestedPrompt) {
       setConfig((current) => ({ ...current, prompt: requestedPrompt }));
     }
+    if (requestedTemplate) {
+      setSuggestedTemplate(requestedTemplate);
+    }
+    setEnterpriseContext({
+      workspaceId: params.get("workspace_id")?.trim() || undefined,
+      folderId: params.get("folder_id")?.trim() || undefined,
+      creationMode:
+        params.get("entry") === "template" ? "template" : "topic",
+    });
     if (Number.isSafeInteger(requestedCommunityId) && requestedCommunityId > 0) {
       CommunityPresentationApi.getById(requestedCommunityId)
         .then((presentation) => {
@@ -514,6 +531,15 @@ const UploadPage = () => {
         generationMode === "smart" && communityReference
           ? [communityReference.id]
           : undefined,
+      workspace_id: enterpriseContext.workspaceId,
+      folder_id: enterpriseContext.folderId,
+      scene_type: "general",
+      creation_mode:
+        enterpriseContext.creationMode === "template"
+          ? "template"
+          : documentPaths.length > 0
+            ? "document"
+            : "topic",
     });
 
     dispatch(setPptGenUploadState({
@@ -577,6 +603,11 @@ const UploadPage = () => {
         generationMode === "smart" && communityReference
           ? [communityReference.id]
           : undefined,
+      workspace_id: enterpriseContext.workspaceId,
+      folder_id: enterpriseContext.folderId,
+      scene_type: "general",
+      creation_mode:
+        enterpriseContext.creationMode === "template" ? "template" : "topic",
     });
 
     dispatch(setPptGenUploadState({

@@ -5,6 +5,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from domains.platform.enums import (
     ConfidentialityLevel,
+    PresentationCreationMode,
     PresentationEntryStatus,
     SceneStatus,
     WorkspaceRole,
@@ -84,6 +85,7 @@ class PresentationRegisterRequest(BaseModel):
     presentation_id: uuid.UUID
     folder_id: uuid.UUID | None = None
     scene_type: str = Field(default="general", min_length=1, max_length=64)
+    creation_mode: PresentationCreationMode = PresentationCreationMode.IMPORT
 
     @field_validator("scene_type")
     @classmethod
@@ -101,7 +103,9 @@ class PresentationEntryResponse(BaseModel):
     created_by: uuid.UUID | None
     title: str | None
     scene_type: str
+    creation_mode: PresentationCreationMode
     status: PresentationEntryStatus
+    can_open: bool = True
     row_version: int
     created_at: datetime
     updated_at: datetime

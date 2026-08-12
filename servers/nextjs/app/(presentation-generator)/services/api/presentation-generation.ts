@@ -84,6 +84,10 @@ export class PresentationGenerationApi {
     web_search,
     generation_mode = "standard",
     community_design_ids,
+    workspace_id,
+    folder_id,
+    scene_type = "general",
+    creation_mode = "topic",
 
   }: {
     content: string;
@@ -99,6 +103,10 @@ export class PresentationGenerationApi {
     web_search?: boolean;
     generation_mode?: "standard" | "smart";
     community_design_ids?: number[];
+    workspace_id?: string;
+    folder_id?: string;
+    scene_type?: string;
+    creation_mode?: "topic" | "document" | "template" | "import";
   }) {
     try {
       const limitedSlideCount =
@@ -124,6 +132,10 @@ export class PresentationGenerationApi {
             web_search,
             generation_mode,
             community_design_ids,
+            workspace_id,
+            folder_id,
+            scene_type,
+            creation_mode,
           }),
           cache: "no-cache",
         }
@@ -136,13 +148,22 @@ export class PresentationGenerationApi {
     }
   }
 
-  static async createBlankPresentation(): Promise<BlankPresentationResponse> {
+  static async createBlankPresentation(context?: {
+    workspace_id?: string;
+    folder_id?: string;
+    scene_type?: string;
+  }): Promise<BlankPresentationResponse> {
     try {
       const response = await fetch(
         getApiUrl(`/api/v1/ppt/presentation/create/blank`),
         {
           method: "POST",
           headers: getHeader(),
+          body: JSON.stringify({
+            workspace_id: context?.workspace_id,
+            folder_id: context?.folder_id,
+            scene_type: context?.scene_type || "general",
+          }),
           cache: "no-cache",
         }
       );

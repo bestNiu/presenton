@@ -4,7 +4,7 @@ import uuid
 from sqlalchemy import Column, DateTime, ForeignKey, Integer, String, UniqueConstraint
 from sqlmodel import Field, SQLModel
 
-from domains.platform.enums import PresentationEntryStatus
+from domains.platform.enums import PresentationCreationMode, PresentationEntryStatus
 from utils.datetime_utils import get_current_utc_datetime
 
 
@@ -48,6 +48,10 @@ class PresentationEntryModel(SQLModel, table=True):
     )
     scene_type: str = Field(
         default="general", sa_column=Column(String(64), nullable=False, index=True)
+    )
+    creation_mode: PresentationCreationMode = Field(
+        default=PresentationCreationMode.TOPIC,
+        sa_column=Column(String(32), nullable=False, index=True),
     )
     status: PresentationEntryStatus = Field(
         default=PresentationEntryStatus.DRAFT,

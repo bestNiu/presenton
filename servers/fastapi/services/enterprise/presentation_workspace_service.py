@@ -6,7 +6,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.v1.auth.principal import AuthPrincipal
-from domains.platform.enums import WorkspaceRole
+from domains.platform.enums import PresentationCreationMode, WorkspaceRole
 from models.sql.enterprise.presentation_entry import PresentationEntryModel
 from models.sql.enterprise.workspace import WorkspaceFolderModel
 from models.sql.presentation import PresentationModel
@@ -23,13 +23,8 @@ async def register_presentation(
     presentation_id: uuid.UUID,
     folder_id: uuid.UUID | None,
     scene_type: str,
+    creation_mode: PresentationCreationMode = PresentationCreationMode.IMPORT,
 ) -> PresentationEntryModel:
-    await require_workspace_role(
-        session,
-        workspace_id=workspace_id,
-        principal=principal,
-        required_role=WorkspaceRole.EDITOR,
-    )
     presentation = await session.scalar(
         select(PresentationModel)
         .execution_options(skip_owner_scope=True)
@@ -40,6 +35,49 @@ async def register_presentation(
     )
     if presentation is None:
         raise HTTPException(status_code=404, detail="Presentation not found")
+    entry = await attach_presentation_to_workspace(
+        session,
+        principal=principal,
+        workspace_id=workspace_id,
+        presentation=presentation,
+        folder_id=folder_id,
+        scene_type=scene_type,
+        creation_mode=creation_mode,
+    )
+    try:
+        await session.commit()
+    except IntegrityError as exc:
+        await session.rollback()
+        raise HTTPException(
+            status_code=409, detail="Presentation is already registered"
+        ) from exc
+    await session.refresh(entry)
+    return entry
+
+
+async def attach_presentation_to_workspace(
+    session: AsyncSession,
+    *,
+    principal: AuthPrincipal,
+    workspace_id: uuid.UUID,
+    presentation: PresentationModel,
+    folder_id: uuid.UUID | None,
+    scene_type: str,
+    creation_mode: PresentationCreationMode,
+) -> PresentationEntryModel:
+    """Attach a presentation inside the caller's transaction.
+
+    Creation endpoints use this helper so the presentation, workspace entry and
+    audit event either commit together or all roll back.
+    """
+    await require_workspace_role(
+        session,
+        workspace_id=workspace_id,
+        principal=principal,
+        required_role=WorkspaceRole.EDITOR,
+    )
+    if presentation.owner_id != principal.user_id:
+        raise HTTPException(status_code=404, detail="Presentation not found")
     if folder_id is not None:
         folder = await session.get(WorkspaceFolderModel, folder_id)
         if folder is None or folder.workspace_id != workspace_id or folder.is_archived:
@@ -49,10 +87,11 @@ async def register_presentation(
     entry = PresentationEntryModel(
         workspace_id=workspace_id,
         folder_id=folder_id,
-        presentation_id=presentation_id,
+        presentation_id=presentation.id,
         created_by=principal.user_id,
         title=presentation.title,
         scene_type=scene_type,
+        creation_mode=creation_mode,
     )
     session.add(entry)
     record_audit_event(
@@ -63,18 +102,11 @@ async def register_presentation(
         resource_type="presentation_entry",
         resource_id=entry.id,
         metadata={
-            "presentation_id": str(presentation_id),
+            "presentation_id": str(presentation.id),
             "scene_type": scene_type,
+            "creation_mode": creation_mode.value,
         },
     )
-    try:
-        await session.commit()
-    except IntegrityError as exc:
-        await session.rollback()
-        raise HTTPException(
-            status_code=409, detail="Presentation is already registered"
-        ) from exc
-    await session.refresh(entry)
     return entry
 
 

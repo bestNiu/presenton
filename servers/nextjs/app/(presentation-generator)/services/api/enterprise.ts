@@ -27,6 +27,26 @@ export interface SceneDefinitionResponse {
   status: "active" | "inactive";
 }
 
+export type PresentationCreationMode =
+  | "topic"
+  | "document"
+  | "template"
+  | "blank"
+  | "import";
+
+export interface PresentationEntryResponse {
+  id: string;
+  workspace_id: string;
+  folder_id: string | null;
+  presentation_id: string;
+  title: string | null;
+  scene_type: string;
+  creation_mode: PresentationCreationMode;
+  status: string;
+  can_open: boolean;
+  updated_at: string;
+}
+
 export class EnterpriseApi {
   static async ensurePersonalWorkspace(): Promise<WorkspaceResponse> {
     const response = await fetch(
@@ -77,6 +97,21 @@ export class EnterpriseApi {
     return ApiResponseHandler.handleResponse(
       response,
       "Failed to load professional workspaces"
+    );
+  }
+
+  static async getPresentations(
+    workspaceId: string
+  ): Promise<PresentationEntryResponse[]> {
+    const response = await fetch(
+      getApiUrl(
+        `/api/v1/enterprise/workspaces/${encodeURIComponent(workspaceId)}/presentations`
+      ),
+      { method: "GET", credentials: "include", cache: "no-store" }
+    );
+    return ApiResponseHandler.handleResponse(
+      response,
+      "Failed to load workspace presentations"
     );
   }
 }

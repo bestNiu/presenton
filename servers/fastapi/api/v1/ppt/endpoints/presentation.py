@@ -96,6 +96,11 @@ from utils.icon_weights import DEFAULT_ICON_TYPE, extract_icon_type_from_setting
 from utils.llm_utils import TextGenerationMetrics, message_content_to_text
 from utils.sse import safe_sse_stream
 from api.v1.auth.config import SESSION_COOKIE_NAME
+from api.v1.auth.principal import AuthPrincipal, principal_from_request
+from domains.platform.enums import PresentationCreationMode
+from services.enterprise.presentation_workspace_service import (
+    attach_presentation_to_workspace,
+)
 from utils.web_search import get_selected_web_search_provider, get_web_search_route
 from utils.web_search import build_web_search_query, get_web_search_context
 from api.v1.auth.context import get_current_owner_id
@@ -1451,6 +1456,13 @@ async def create_presentation(
     web_search: Annotated[bool, Body()] = False,
     generation_mode: Annotated[Literal["standard", "smart"], Body()] = "standard",
     community_design_ids: Annotated[Optional[List[int]], Body()] = None,
+    workspace_id: Annotated[Optional[uuid.UUID], Body()] = None,
+    folder_id: Annotated[Optional[uuid.UUID], Body()] = None,
+    scene_type: Annotated[str, Body()] = "general",
+    creation_mode: Annotated[
+        PresentationCreationMode, Body()
+    ] = PresentationCreationMode.TOPIC,
+    principal: AuthPrincipal = Depends(principal_from_request),
     sql_session: AsyncSession = Depends(get_async_session),
 ):
 
@@ -1498,6 +1510,7 @@ async def create_presentation(
 
     presentation = PresentationModel(
         id=presentation_id,
+        owner_id=getattr(principal, "user_id", None),
         version=PresentationVersion.V2_STANDARD,
         content=content,
         n_slides=n_slides_to_store,
@@ -1514,6 +1527,16 @@ async def create_presentation(
     )
 
     sql_session.add(presentation)
+    if workspace_id is not None:
+        await attach_presentation_to_workspace(
+            sql_session,
+            principal=principal,
+            workspace_id=workspace_id,
+            presentation=presentation,
+            folder_id=folder_id,
+            scene_type=scene_type.strip().lower(),
+            creation_mode=creation_mode,
+        )
     await sql_session.commit()
 
     search_route, actual_search_provider = get_web_search_route()
@@ -1540,11 +1563,16 @@ async def create_presentation(
     status_code=201,
 )
 async def create_blank_presentation(
+    workspace_id: Annotated[Optional[uuid.UUID], Body()] = None,
+    folder_id: Annotated[Optional[uuid.UUID], Body()] = None,
+    scene_type: Annotated[str, Body()] = "general",
+    principal: AuthPrincipal = Depends(principal_from_request),
     sql_session: AsyncSession = Depends(get_async_session),
 ):
     presentation_id = uuid.uuid4()
     presentation = PresentationModel(
         id=presentation_id,
+        owner_id=getattr(principal, "user_id", None),
         version=PresentationVersion.V2_STANDARD,
         content="",
         n_slides=1,
@@ -1566,6 +1594,16 @@ async def create_blank_presentation(
 
     sql_session.add(presentation)
     sql_session.add(slide)
+    if workspace_id is not None:
+        await attach_presentation_to_workspace(
+            sql_session,
+            principal=principal,
+            workspace_id=workspace_id,
+            presentation=presentation,
+            folder_id=folder_id,
+            scene_type=scene_type.strip().lower(),
+            creation_mode=PresentationCreationMode.BLANK,
+        )
     try:
         await sql_session.commit()
     except Exception:

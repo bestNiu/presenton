@@ -236,6 +236,7 @@ async def post_presentation_entry(
         presentation_id=body.presentation_id,
         folder_id=body.folder_id,
         scene_type=body.scene_type,
+        creation_mode=body.creation_mode,
     )
 
 
@@ -249,12 +250,18 @@ async def get_presentation_entries(
     principal: AuthPrincipal = Depends(principal_from_request),
     session: AsyncSession = Depends(get_async_session),
 ):
-    return await list_presentation_entries(
+    entries = await list_presentation_entries(
         session,
         principal=principal,
         workspace_id=workspace_id,
         folder_id=folder_id,
     )
+    return [
+        PresentationEntryResponse.model_validate(entry).model_copy(
+            update={"can_open": entry.created_by == principal.user_id}
+        )
+        for entry in entries
+    ]
 
 
 @API_V1_ENTERPRISE_ROUTER.get(

@@ -31,6 +31,14 @@ class PresentationEntryStatus(str, Enum):
     ARCHIVED = "archived"
 
 
+class PresentationCreationMode(str, Enum):
+    TOPIC = "topic"
+    DOCUMENT = "document"
+    TEMPLATE = "template"
+    BLANK = "blank"
+    IMPORT = "import"
+
+
 class SceneStatus(str, Enum):
     ACTIVE = "active"
     INACTIVE = "inactive"

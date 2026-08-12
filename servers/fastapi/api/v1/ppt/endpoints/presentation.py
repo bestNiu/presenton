@@ -101,6 +101,9 @@ from domains.platform.enums import PresentationCreationMode
 from services.enterprise.presentation_workspace_service import (
     attach_presentation_to_workspace,
 )
+from services.enterprise.template_publication_service import (
+    get_accessible_published_template,
+)
 from utils.web_search import get_selected_web_search_provider, get_web_search_route
 from utils.web_search import build_web_search_query, get_web_search_context
 from api.v1.auth.context import get_current_owner_id
@@ -200,6 +203,9 @@ async def _resolve_requested_template(
         return None
 
     template = await sql_session.get(TemplateV2, template_id)
+    if template:
+        return template
+    template = await get_accessible_published_template(sql_session, template_id)
     if template:
         return template
     if resolve_default_template_id(template_name):

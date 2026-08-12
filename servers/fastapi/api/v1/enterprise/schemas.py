@@ -8,6 +8,8 @@ from domains.platform.enums import (
     PresentationCreationMode,
     PresentationEntryStatus,
     SceneStatus,
+    TemplatePublicationStatus,
+    TemplateScopeType,
     WorkspaceRole,
     WorkspaceType,
 )
@@ -135,3 +137,52 @@ class AuditEventResponse(BaseModel):
     result: str
     event_metadata: dict
     created_at: datetime
+
+
+class TemplatePublicationCreateRequest(BaseModel):
+    template_id: str = Field(min_length=1, max_length=128)
+    publication_key: str = Field(min_length=1, max_length=128)
+    version: int = Field(default=1, ge=1)
+    scope_type: TemplateScopeType = TemplateScopeType.WORKSPACE
+    workspace_id: uuid.UUID | None = None
+    scene_type: str | None = Field(default=None, max_length=64)
+    display_name: str | None = Field(default=None, max_length=200)
+    description: str | None = Field(default=None, max_length=1000)
+    rules: dict = Field(default_factory=dict)
+    compatibility: dict = Field(default_factory=dict)
+    preview_url: str | None = Field(default=None, max_length=2000)
+    recommended_order: int = Field(default=0, ge=0, le=10000)
+
+    @field_validator("template_id", "publication_key")
+    @classmethod
+    def normalize_required_text(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("Value is required")
+        return value
+
+
+class TemplatePublicationResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    publication_key: str
+    template_id: str
+    workspace_id: uuid.UUID | None
+    created_by: uuid.UUID | None
+    scope_type: TemplateScopeType
+    scene_type: str | None
+    version: int
+    status: TemplatePublicationStatus
+    display_name: str
+    description: str | None
+    rules: dict
+    compatibility: dict
+    preview_url: str | None
+    is_default: bool
+    recommended_order: int
+    submitted_at: datetime | None
+    published_at: datetime | None
+    offline_at: datetime | None
+    created_at: datetime
+    updated_at: datetime

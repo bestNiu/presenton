@@ -39,6 +39,20 @@ class PresentationCreationMode(str, Enum):
     IMPORT = "import"
 
 
+class TemplateScopeType(str, Enum):
+    ENTERPRISE = "enterprise"
+    WORKSPACE = "workspace"
+    SCENE = "scene"
+
+
+class TemplatePublicationStatus(str, Enum):
+    DRAFT = "draft"
+    IN_REVIEW = "in_review"
+    PUBLISHED = "published"
+    OFFLINE = "offline"
+    ARCHIVED = "archived"
+
+
 class SceneStatus(str, Enum):
     ACTIVE = "active"
     INACTIVE = "inactive"

@@ -12,12 +12,14 @@ from api.v1.enterprise.schemas import (
     PresentationEntryResponse,
     PresentationRegisterRequest,
     SceneDefinitionResponse,
+    TemplatePublicationCreateRequest,
+    TemplatePublicationResponse,
     WorkspaceCreateRequest,
     WorkspaceMemberResponse,
     WorkspaceMemberUpsertRequest,
     WorkspaceResponse,
 )
-from domains.platform.enums import WorkspaceRole
+from domains.platform.enums import TemplatePublicationStatus, WorkspaceRole
 from models.sql.enterprise.audit_event import AuditEventModel
 from models.sql.user import User
 from services.database import get_async_session
@@ -26,6 +28,12 @@ from services.enterprise.presentation_workspace_service import (
     register_presentation,
 )
 from services.enterprise.scene_service import list_active_scenes
+from services.enterprise.template_publication_service import (
+    create_template_publication,
+    list_visible_publications,
+    set_default_publication,
+    transition_publication,
+)
 from services.enterprise.workspace_service import (
     add_or_update_member,
     create_folder,
@@ -42,6 +50,77 @@ from services.enterprise.workspace_service import (
 API_V1_ENTERPRISE_ROUTER = APIRouter(
     prefix="/api/v1/enterprise", tags=["Enterprise Platform"]
 )
+
+
+@API_V1_ENTERPRISE_ROUTER.post(
+    "/template-publications",
+    response_model=TemplatePublicationResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def post_template_publication(
+    body: TemplatePublicationCreateRequest,
+    principal: AuthPrincipal = Depends(principal_from_request),
+    session: AsyncSession = Depends(get_async_session),
+):
+    return await create_template_publication(
+        session,
+        principal=principal,
+        template_id=body.template_id,
+        publication_key=body.publication_key,
+        version=body.version,
+        scope_type=body.scope_type,
+        workspace_id=body.workspace_id,
+        scene_type=body.scene_type,
+        display_name=body.display_name,
+        description=body.description,
+        rules=body.rules,
+        compatibility=body.compatibility,
+        preview_url=body.preview_url,
+        recommended_order=body.recommended_order,
+    )
+
+
+@API_V1_ENTERPRISE_ROUTER.get(
+    "/template-publications", response_model=list[TemplatePublicationResponse]
+)
+async def get_template_publications(
+    workspace_id: uuid.UUID | None = Query(default=None),
+    publication_status: TemplatePublicationStatus | None = Query(
+        default=None, alias="status"
+    ),
+    principal: AuthPrincipal = Depends(principal_from_request),
+    session: AsyncSession = Depends(get_async_session),
+):
+    return await list_visible_publications(
+        session,
+        principal=principal,
+        workspace_id=workspace_id,
+        status=publication_status,
+    )
+
+
+@API_V1_ENTERPRISE_ROUTER.post(
+    "/template-publications/{publication_id}/{action}",
+    response_model=TemplatePublicationResponse,
+)
+async def post_template_publication_action(
+    publication_id: uuid.UUID,
+    action: str,
+    principal: AuthPrincipal = Depends(principal_from_request),
+    session: AsyncSession = Depends(get_async_session),
+):
+    if action == "set-default":
+        return await set_default_publication(
+            session, publication_id=publication_id, principal=principal
+        )
+    if action not in {"submit", "publish", "reject", "offline", "archive"}:
+        raise HTTPException(status_code=404, detail="Template action not found")
+    return await transition_publication(
+        session,
+        publication_id=publication_id,
+        principal=principal,
+        action=action,
+    )
 
 
 def _workspace_response(workspace, role: WorkspaceRole) -> WorkspaceResponse:

@@ -37,6 +37,7 @@ from models.sql.enterprise import (  # noqa: F401, E402
     AuditEventModel,
     PresentationEntryModel,
     SceneDefinitionModel,
+    TemplatePublicationModel,
     WorkspaceFolderModel,
     WorkspaceMemberModel,
     WorkspaceModel,

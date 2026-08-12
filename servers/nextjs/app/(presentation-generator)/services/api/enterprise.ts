@@ -47,6 +47,36 @@ export interface PresentationEntryResponse {
   updated_at: string;
 }
 
+export interface TemplatePublicationResponse {
+  id: string;
+  publication_key: string;
+  template_id: string;
+  workspace_id: string | null;
+  scope_type: "enterprise" | "workspace" | "scene";
+  scene_type: string | null;
+  version: number;
+  status: "draft" | "in_review" | "published" | "offline" | "archived";
+  display_name: string;
+  description: string | null;
+  compatibility: Record<string, unknown>;
+  preview_url: string | null;
+  is_default: boolean;
+  recommended_order: number;
+}
+
+export interface TemplatePublicationCreateInput {
+  template_id: string;
+  publication_key: string;
+  version: number;
+  scope_type: "workspace" | "scene";
+  workspace_id: string;
+  scene_type?: string;
+  display_name?: string;
+  description?: string;
+  compatibility: { pptx: boolean };
+  recommended_order?: number;
+}
+
 export class EnterpriseApi {
   static async ensurePersonalWorkspace(): Promise<WorkspaceResponse> {
     const response = await fetch(
@@ -112,6 +142,71 @@ export class EnterpriseApi {
     return ApiResponseHandler.handleResponse(
       response,
       "Failed to load workspace presentations"
+    );
+  }
+
+  static async getPublishedTemplates(
+    workspaceId: string
+  ): Promise<TemplatePublicationResponse[]> {
+    const params = new URLSearchParams({
+      workspace_id: workspaceId,
+      status: "published",
+    });
+    const response = await fetch(
+      getApiUrl(`/api/v1/enterprise/template-publications?${params.toString()}`),
+      { method: "GET", credentials: "include", cache: "no-store" }
+    );
+    return ApiResponseHandler.handleResponse(
+      response,
+      "Failed to load published templates"
+    );
+  }
+
+  static async getTemplatePublications(
+    workspaceId: string
+  ): Promise<TemplatePublicationResponse[]> {
+    const params = new URLSearchParams({ workspace_id: workspaceId });
+    const response = await fetch(
+      getApiUrl(`/api/v1/enterprise/template-publications?${params.toString()}`),
+      { method: "GET", credentials: "include", cache: "no-store" }
+    );
+    return ApiResponseHandler.handleResponse(
+      response,
+      "Failed to load template publications"
+    );
+  }
+
+  static async createTemplatePublication(
+    input: TemplatePublicationCreateInput
+  ): Promise<TemplatePublicationResponse> {
+    const response = await fetch(
+      getApiUrl("/api/v1/enterprise/template-publications"),
+      {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(input),
+      }
+    );
+    return ApiResponseHandler.handleResponse(
+      response,
+      "Failed to register template publication"
+    );
+  }
+
+  static async transitionTemplatePublication(
+    publicationId: string,
+    action: "submit" | "publish" | "reject" | "offline" | "archive" | "set-default"
+  ): Promise<TemplatePublicationResponse> {
+    const response = await fetch(
+      getApiUrl(
+        `/api/v1/enterprise/template-publications/${encodeURIComponent(publicationId)}/${action}`
+      ),
+      { method: "POST", credentials: "include" }
+    );
+    return ApiResponseHandler.handleResponse(
+      response,
+      "Failed to update template publication"
     );
   }
 }

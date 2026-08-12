@@ -24,6 +24,7 @@ import {
   type ConfidentialityLevel,
   type PresentationEntryResponse,
   type SceneDefinitionResponse,
+  type TemplatePublicationResponse,
   type WorkspaceResponse,
 } from "@/app/(presentation-generator)/services/api/enterprise";
 import { PresentationGenerationApi } from "@/app/(presentation-generator)/services/api/presentation-generation";
@@ -56,6 +57,8 @@ function WorkspacePage() {
   const [scenes, setScenes] = useState<SceneDefinitionResponse[]>([]);
   const [presentations, setPresentations] =
     useState<PresentationEntryResponse[]>([]);
+  const [publishedTemplates, setPublishedTemplates] =
+    useState<TemplatePublicationResponse[]>([]);
   const [activeWorkspaceId, setActiveWorkspaceId] = useState("");
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
@@ -90,12 +93,19 @@ function WorkspacePage() {
   useEffect(() => {
     if (!activeWorkspaceId) {
       setPresentations([]);
+      setPublishedTemplates([]);
       return;
     }
     let active = true;
-    EnterpriseApi.getPresentations(activeWorkspaceId)
-      .then((rows) => {
-        if (active) setPresentations(rows);
+    Promise.all([
+      EnterpriseApi.getPresentations(activeWorkspaceId),
+      EnterpriseApi.getPublishedTemplates(activeWorkspaceId),
+    ])
+      .then(([presentationRows, templateRows]) => {
+        if (active) {
+          setPresentations(presentationRows);
+          setPublishedTemplates(templateRows);
+        }
       })
       .catch((loadError) => {
         if (active) {
@@ -199,6 +209,15 @@ function WorkspacePage() {
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
+          {activeWorkspaceId && (
+            <Link
+              href={`/workspace/templates?workspace_id=${encodeURIComponent(activeWorkspaceId)}`}
+              className="inline-flex h-10 items-center gap-2 rounded-lg border border-[#D9DCE3] bg-white px-4 text-sm font-medium text-[#344054] transition hover:bg-[#F7F7FA]"
+            >
+              <LayoutTemplate className="h-4 w-4" />
+              模板治理
+            </Link>
+          )}
           <button
             type="button"
             onClick={() => void load()}
@@ -371,6 +390,58 @@ function WorkspacePage() {
             </button>
           </div>
         </section>
+
+        {publishedTemplates.length > 0 && (
+          <section className="mt-9">
+            <div className="flex items-center justify-between">
+              <div>
+                <h2 className="text-base font-semibold text-[#1D2939]">已发布模板</h2>
+                <p className="mt-1 text-sm text-[#667085]">
+                  企业级和当前空间授权模板；发布版本不可原地覆盖。
+                </p>
+              </div>
+              <span className="text-sm text-[#667085]">
+                {publishedTemplates.length} 个模板
+              </span>
+            </div>
+            <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+              {publishedTemplates.map((template) => {
+                const params = new URLSearchParams({
+                  entry: "template",
+                  workspace_id: activeWorkspaceId,
+                  template: template.template_id,
+                });
+                return (
+                  <Link
+                    key={template.id}
+                    href={`/upload?${params.toString()}`}
+                    className="rounded-xl border border-[#E3E4EA] bg-white p-4 transition hover:border-[#A8DADC] hover:shadow-sm"
+                  >
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-[#EAF8F6] text-[#087E8B]">
+                        <LayoutTemplate className="h-4 w-4" />
+                      </div>
+                      {template.is_default && (
+                        <span className="rounded-full bg-[#ECFDF3] px-2 py-1 text-[11px] font-medium text-[#027A48]">
+                          默认
+                        </span>
+                      )}
+                    </div>
+                    <h3 className="mt-3 truncate text-sm font-semibold text-[#101828]">
+                      {template.display_name}
+                    </h3>
+                    <p className="mt-1 line-clamp-2 text-xs leading-5 text-[#667085]">
+                      {template.description || "企业授权模板"}
+                    </p>
+                    <p className="mt-3 text-xs text-[#98A2B3]">
+                      v{template.version} · {template.scope_type}
+                    </p>
+                  </Link>
+                );
+              })}
+            </div>
+          </section>
+        )}
 
         <section className="mt-9">
           <div className="flex items-center justify-between">

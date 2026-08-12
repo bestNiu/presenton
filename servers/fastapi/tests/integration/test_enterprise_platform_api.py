@@ -8,11 +8,13 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from api.v1.auth.principal import AuthPrincipal, principal_from_request
 from api.v1.enterprise.router import API_V1_ENTERPRISE_ROUTER
 from api.v1.ppt.endpoints.presentation import PRESENTATION_ROUTER
+from api.v1.ppt.endpoints.template import TEMPLATE_ROUTER
 from domains.platform.enums import SceneStatus
 from models.sql.enterprise import (
     AuditEventModel,
     PresentationEntryModel,
     SceneDefinitionModel,
+    TemplatePublicationModel,
     WorkspaceFolderModel,
     WorkspaceMemberModel,
     WorkspaceModel,
@@ -20,7 +22,11 @@ from models.sql.enterprise import (
 from models.sql.presentation import PresentationModel, PresentationVersion
 from models.sql.slide import SlideModel
 from models.sql.user import User
+from models.sql.template_v2 import TemplateV2
 from services.database import get_async_session
+from services.enterprise.template_publication_service import (
+    get_accessible_published_template,
+)
 
 
 def _build_client(tmp_path):
@@ -61,12 +67,14 @@ def _build_client(tmp_path):
                 User.__table__,
                 PresentationModel.__table__,
                 SlideModel.__table__,
+                TemplateV2.__table__,
                 WorkspaceModel.__table__,
                 WorkspaceMemberModel.__table__,
                 WorkspaceFolderModel.__table__,
                 SceneDefinitionModel.__table__,
                 PresentationEntryModel.__table__,
                 AuditEventModel.__table__,
+                TemplatePublicationModel.__table__,
             ):
                 await connection.run_sync(table.create)
         async with session_maker() as session:
@@ -110,6 +118,7 @@ def _build_client(tmp_path):
     app = FastAPI()
     app.include_router(API_V1_ENTERPRISE_ROUTER)
     app.include_router(PRESENTATION_ROUTER, prefix="/api/v1/ppt")
+    app.include_router(TEMPLATE_ROUTER, prefix="/api/v1/ppt")
     app.dependency_overrides[get_async_session] = override_session
     app.dependency_overrides[principal_from_request] = override_principal
     return TestClient(app), engine, session_maker, users
@@ -319,5 +328,107 @@ def test_blank_creation_is_atomically_registered_in_workspace(tmp_path):
             and event["event_metadata"]["creation_mode"] == "blank"
             for event in events.json()
         )
+    finally:
+        asyncio.run(engine.dispose())
+
+
+def test_template_publication_lifecycle_default_and_immutability(tmp_path):
+    client, engine, session_maker, users = _build_client(tmp_path)
+    template_id = str(uuid.uuid4())
+
+    async def seed_template():
+        async with session_maker() as session:
+            session.add(
+                TemplateV2(
+                    id=template_id,
+                    name="管理汇报模板",
+                    layouts={"layouts": [{"id": "cover"}]},
+                    assets={"slide_image_urls": ["/preview.png"]},
+                )
+            )
+            await session.commit()
+
+    asyncio.run(seed_template())
+    try:
+        workspace = client.post(
+            "/api/v1/enterprise/workspaces",
+            json={"name": "品牌模板空间", "workspace_type": "team"},
+        ).json()
+        client.put(
+            f"/api/v1/enterprise/workspaces/{workspace['id']}/members/{users['member'].id}",
+            json={"user_id": str(users["member"].id), "role": "viewer"},
+        )
+        created = client.post(
+            "/api/v1/enterprise/template-publications",
+            json={
+                "template_id": template_id,
+                "publication_key": "executive-report",
+                "version": 1,
+                "scope_type": "workspace",
+                "workspace_id": workspace["id"],
+                "display_name": "企业管理汇报",
+                "compatibility": {"pptx": True},
+            },
+        )
+        publication_id = created.json()["id"]
+        viewer_drafts = client.get(
+            "/api/v1/enterprise/template-publications",
+            params={"workspace_id": workspace["id"]},
+            headers={"x-test-user": "member"},
+        )
+        submitted = client.post(
+            f"/api/v1/enterprise/template-publications/{publication_id}/submit"
+        )
+        published = client.post(
+            f"/api/v1/enterprise/template-publications/{publication_id}/publish"
+        )
+        defaulted = client.post(
+            f"/api/v1/enterprise/template-publications/{publication_id}/set-default"
+        )
+        visible = client.get(
+            "/api/v1/enterprise/template-publications",
+            params={"workspace_id": workspace["id"], "status": "published"},
+        )
+        viewer_published = client.get(
+            "/api/v1/enterprise/template-publications",
+            params={"workspace_id": workspace["id"], "status": "published"},
+            headers={"x-test-user": "member"},
+        )
+        blocked_update = client.patch(
+            f"/api/v1/ppt/template/{template_id}",
+            json={"name": "不应覆盖已发布版本"},
+        )
+        outsider = client.get(
+            "/api/v1/enterprise/template-publications",
+            params={"workspace_id": workspace["id"]},
+            headers={"x-test-user": "outsider"},
+        )
+
+        async def resolve_shared_templates():
+            async with session_maker() as session:
+                member_template = await get_accessible_published_template(
+                    session, template_id, user_id=users["member"].id
+                )
+                outsider_template = await get_accessible_published_template(
+                    session, template_id, user_id=users["outsider"].id
+                )
+                return member_template, outsider_template
+
+        member_template, outsider_template = asyncio.run(resolve_shared_templates())
+
+        assert created.status_code == 201
+        assert created.json()["status"] == "draft"
+        assert viewer_drafts.json() == []
+        assert submitted.json()["status"] == "in_review"
+        assert published.json()["status"] == "published"
+        assert defaulted.json()["is_default"] is True
+        assert visible.status_code == 200
+        assert visible.json()[0]["display_name"] == "企业管理汇报"
+        assert viewer_published.json()[0]["template_id"] == template_id
+        assert blocked_update.status_code == 409
+        assert outsider.json() == []
+        assert member_template is not None
+        assert member_template.id == template_id
+        assert outsider_template is None
     finally:
         asyncio.run(engine.dispose())

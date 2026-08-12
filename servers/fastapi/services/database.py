@@ -32,6 +32,7 @@ from models.sql.enterprise import (
     AuditEventModel,
     PresentationEntryModel,
     SceneDefinitionModel,
+    TemplatePublicationModel,
     WorkspaceFolderModel,
     WorkspaceMemberModel,
     WorkspaceModel,
@@ -158,6 +159,7 @@ async def create_db_and_tables():
                         SceneDefinitionModel.__table__,
                         PresentationEntryModel.__table__,
                         AuditEventModel.__table__,
+                        TemplatePublicationModel.__table__,
                     ],
                 )
             )

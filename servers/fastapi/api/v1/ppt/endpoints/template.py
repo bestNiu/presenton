@@ -40,6 +40,7 @@ from models.sql.async_task import AsyncTaskModel
 from models.sql.template_v2 import TemplateV2
 from services.database import async_session_maker, get_async_session
 from services.export_task_service import EXPORT_TASK_SERVICE
+from services.enterprise.template_publication_service import template_is_published
 from templates.preview import (
     FontsUploadAndSlidesPreviewResponse,
     upload_fonts_and_slides_preview_handler,
@@ -1364,6 +1365,7 @@ async def create_template_slide_layouts(
     if not template:
         raise HTTPException(status_code=404, detail="Template not found")
     _require_private_template(template)
+    await _require_unpublished_template(sql_session, template)
 
     if not isinstance(template.raw_layouts, dict):
         raise HTTPException(
@@ -1448,6 +1450,7 @@ async def generate_template_blocks(
     if not template:
         raise HTTPException(status_code=404, detail="Template not found")
     _require_private_template(template)
+    await _require_unpublished_template(sql_session, template)
 
     if template.layouts is None:
         raise HTTPException(
@@ -1501,6 +1504,7 @@ async def patch_template_slide_layout(
         if not template:
             raise HTTPException(status_code=404, detail="Template not found")
         _require_private_template(template)
+        await _require_unpublished_template(sql_session, template)
 
         try:
             updated_layouts, layout_indexes = _merge_template_layout_items(
@@ -1552,6 +1556,7 @@ async def update_template_metadata(
     if not template:
         raise HTTPException(status_code=404, detail="Template not found")
     _require_private_template(template)
+    await _require_unpublished_template(sql_session, template)
 
     has_updates = False
 
@@ -1679,12 +1684,25 @@ async def delete_template(
         raise HTTPException(status_code=404, detail="Template not found")
 
     _require_private_template(template)
+    await _require_unpublished_template(sql_session, template)
     await sql_session.delete(template)
     await sql_session.commit()
     return Response(status_code=204)
+
+
 def _require_private_template(template: TemplateV2) -> None:
     if template.is_default:
         raise HTTPException(
             status_code=403,
             detail="Built-in templates are read-only",
+        )
+
+
+async def _require_unpublished_template(
+    session: AsyncSession, template: TemplateV2
+) -> None:
+    if await template_is_published(session, template.id):
+        raise HTTPException(
+            status_code=409,
+            detail="Published template versions are immutable; create a new version",
         )

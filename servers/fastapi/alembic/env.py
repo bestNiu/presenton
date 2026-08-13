@@ -36,6 +36,7 @@ from models.sql.provider_settings import ProviderSettings  # noqa: F401, E402
 from models.sql.enterprise import (  # noqa: F401, E402
     AuditEventModel,
     AssetItemModel,
+    AssetFavoriteModel,
     AssetPromotionRequestModel,
     AssetUsageEventModel,
     EnterpriseNotificationModel,

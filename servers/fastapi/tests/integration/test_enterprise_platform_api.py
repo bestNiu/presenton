@@ -16,6 +16,7 @@ from api.v1.ppt.endpoints.template import TEMPLATE_ROUTER
 from domains.platform.enums import SceneStatus
 from models.sql.enterprise import (
     AssetItemModel,
+    AssetFavoriteModel,
     AssetPromotionRequestModel,
     AssetUsageEventModel,
     AuditEventModel,
@@ -112,6 +113,7 @@ def _build_client(tmp_path):
                 SceneDefinitionModel.__table__,
                 PresentationEntryModel.__table__,
                 AssetItemModel.__table__,
+                AssetFavoriteModel.__table__,
                 AssetPromotionRequestModel.__table__,
                 AssetUsageEventModel.__table__,
                 PresentationCommentThreadModel.__table__,
@@ -559,6 +561,25 @@ def test_asset_library_page_snapshot_lifecycle_and_reuse(tmp_path):
             params={"workspace_id": workspace["id"], "asset_type": "page", "tags": "经营"},
             headers={"x-test-user": "member"},
         )
+        member_favorite = client.post(
+            f"/api/v1/enterprise/assets/{asset_id}/favorite",
+            headers={"x-test-user": "member"},
+        )
+        member_favorites = client.get(
+            "/api/v1/enterprise/assets/personalized",
+            params={"workspace_id": workspace["id"], "view": "favorites"},
+            headers={"x-test-user": "member"},
+        )
+        member_recommendations = client.get(
+            "/api/v1/enterprise/assets/personalized",
+            params={
+                "workspace_id": workspace["id"],
+                "view": "recommended",
+                "scene_type": "general",
+                "tags": "经营",
+            },
+            headers={"x-test-user": "member"},
+        )
         reviewer_insert_denied = client.post(
             f"/api/v1/enterprise/assets/{asset_id}/insert-page",
             json={
@@ -688,6 +709,16 @@ def test_asset_library_page_snapshot_lifecycle_and_reuse(tmp_path):
             "/api/v1/enterprise/assets/analytics",
             params={"workspace_id": workspace["id"]},
         )
+        recent_assets = client.get(
+            "/api/v1/enterprise/assets/personalized",
+            params={"workspace_id": workspace["id"], "view": "recent"},
+        )
+        owner_favorite = client.post(
+            f"/api/v1/enterprise/assets/{asset_id}/favorite"
+        )
+        owner_unfavorite = client.delete(
+            f"/api/v1/enterprise/assets/{asset_id}/favorite"
+        )
         presentation = client.get(f"/api/v1/ppt/presentation/{presentation_id}")
         offline = client.post(
             f"/api/v1/enterprise/assets/{asset_id}/transitions/offline"
@@ -715,6 +746,11 @@ def test_asset_library_page_snapshot_lifecycle_and_reuse(tmp_path):
         assert hidden_draft.json() == []
         assert published.json()["status"] == "published"
         assert [item["id"] for item in visible_published.json()] == [asset_id]
+        assert member_favorite.json() == {"asset_id": asset_id, "is_favorite": True}
+        assert member_favorites.json()[0]["asset"]["id"] == asset_id
+        assert member_favorites.json()[0]["is_favorite"] is True
+        assert member_recommendations.json()[0]["asset"]["id"] == asset_id
+        assert any("标签" in reason for reason in member_recommendations.json()[0]["recommendation_reasons"])
         assert reviewer_insert_denied.status_code == 404
         assert unconfirmed_promotion.status_code == 422
         assert promotion.status_code == 201
@@ -746,6 +782,10 @@ def test_asset_library_page_snapshot_lifecycle_and_reuse(tmp_path):
         assert analytics.json()["unique_users"] == 1
         assert analytics.json()["top_assets"][0]["asset_id"] == asset_id
         assert saved.json()["preview"]["title"] == "核心经营指标"
+        assert recent_assets.json()[0]["asset"]["id"] == asset_id
+        assert recent_assets.json()[0]["last_used_at"]
+        assert owner_favorite.json()["is_favorite"] is True
+        assert owner_unfavorite.json()["is_favorite"] is False
         assert len(presentation.json()["slides"]) == 2
         assert presentation.json()["slides"][1]["content"]["title"] == "核心经营指标"
         assert offline.json()["status"] == "offline"
@@ -754,6 +794,7 @@ def test_asset_library_page_snapshot_lifecycle_and_reuse(tmp_path):
         assert {event["action"] for event in events} >= {
             "asset.created", "asset.publish", "asset.reused", "asset.offline",
             "asset.promotion_requested", "asset.promotion_approved",
+            "asset.favorited", "asset.unfavorited",
         }
     finally:
         asyncio.run(engine.dispose())

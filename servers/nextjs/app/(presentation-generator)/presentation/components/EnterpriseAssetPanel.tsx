@@ -1,12 +1,13 @@
 "use client";
 
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
-import { Archive, Library, Loader2, Plus, Save, X } from "lucide-react";
+import { Library, Loader2, Plus, Save, Star, X } from "lucide-react";
 
 import {
   EnterpriseApi,
   type AssetItemResponse,
   type AssetScopeType,
+  type AssetPersonalizedItemResponse,
 } from "@/app/(presentation-generator)/services/api/enterprise";
 
 interface EnterpriseAssetPanelProps {
@@ -32,6 +33,8 @@ export default function EnterpriseAssetPanel({
 }: EnterpriseAssetPanelProps) {
   const [open, setOpen] = useState(false);
   const [assets, setAssets] = useState<AssetItemResponse[]>([]);
+  const [personalized, setPersonalized] = useState<Record<string, AssetPersonalizedItemResponse[]>>({});
+  const [view, setView] = useState<"all" | "recommended" | "recent" | "favorites">("recommended");
   const [name, setName] = useState("");
   const [tags, setTags] = useState("");
   const [scope, setScope] = useState<"personal" | "workspace">("personal");
@@ -41,7 +44,14 @@ export default function EnterpriseAssetPanel({
 
   const load = useCallback(async () => {
     try {
-      setAssets(await EnterpriseApi.getAssets(workspaceId, { assetType: "page" }));
+      const [assetRows, recommended, recent, favorites] = await Promise.all([
+        EnterpriseApi.getAssets(workspaceId, { assetType: "page" }),
+        EnterpriseApi.getPersonalizedAssets(workspaceId, "recommended", { limit: 30 }),
+        EnterpriseApi.getPersonalizedAssets(workspaceId, "recent", { limit: 30 }),
+        EnterpriseApi.getPersonalizedAssets(workspaceId, "favorites", { limit: 30 }),
+      ]);
+      setAssets(assetRows);
+      setPersonalized({ recommended, recent, favorites });
       setError(null);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "资产加载失败");
@@ -54,17 +64,35 @@ export default function EnterpriseAssetPanel({
 
   const visibleAssets = useMemo(() => {
     const keyword = query.trim().toLowerCase();
-    return assets.filter(
-      (asset) =>
-        asset.status !== "offline" &&
-        asset.status !== "archived" &&
-        asset.authorization_status !== "revoked" &&
-        (!asset.expires_at || new Date(asset.expires_at).getTime() > Date.now()) &&
-        (!keyword ||
-          asset.name.toLowerCase().includes(keyword) ||
-          asset.tags.some((tag) => tag.toLowerCase().includes(keyword)))
+    const favoriteIds = new Set((personalized.favorites || []).map((item) => item.asset.id));
+    const source: AssetPersonalizedItemResponse[] = view === "all" ? assets.map((asset) => ({ asset, is_favorite: favoriteIds.has(asset.id), last_used_at: null, recommendation_score: null, recommendation_reasons: [] })) : (personalized[view] || []);
+    return source.filter(
+      (item) => item.asset.asset_type === "page"
+    ).filter(
+      (item) => {
+        const asset = item.asset;
+        return (
+          asset.status !== "offline" &&
+          asset.status !== "archived" &&
+          asset.authorization_status !== "revoked" &&
+          (!asset.expires_at || new Date(asset.expires_at).getTime() > Date.now()) &&
+          (!keyword ||
+            asset.name.toLowerCase().includes(keyword) ||
+            asset.tags.some((tag) => tag.toLowerCase().includes(keyword)))
+        );
+      }
     );
-  }, [assets, query]);
+  }, [assets, personalized, query, view]);
+
+  const toggleFavorite = async (item: { asset: AssetItemResponse; is_favorite?: boolean }) => {
+    setPending(`favorite:${item.asset.id}`);
+    try {
+      await EnterpriseApi.setAssetFavorite(item.asset.id, !item.is_favorite);
+      await load();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "收藏状态更新失败");
+    } finally { setPending(""); }
+  };
 
   const saveCurrentSlide = async (event: FormEvent) => {
     event.preventDefault();
@@ -121,15 +149,17 @@ export default function EnterpriseAssetPanel({
         <button disabled={!currentSlideId || !name.trim() || pending === "save"} className="flex h-9 w-full items-center justify-center gap-2 rounded-lg bg-[#635BFF] text-xs text-white disabled:opacity-40">{pending === "save" && <Loader2 className="h-3.5 w-3.5 animate-spin" />}保存快照</button>
       </form>
       <div className="flex min-h-0 flex-1 flex-col p-4">
+        <div className="mb-3 grid grid-cols-4 gap-1 rounded-lg bg-[#F2F4F7] p-1">{(["recommended", "recent", "favorites", "all"] as const).map((item) => <button key={item} onClick={() => setView(item)} className={`rounded-md px-1 py-1.5 text-[10px] ${view === item ? "bg-white font-medium text-[#4238CA] shadow-sm" : "text-[#667085]"}`}>{item === "recommended" ? "推荐" : item === "recent" ? "最近" : item === "favorites" ? "收藏" : "全部"}</button>)}</div>
         <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索名称或标签" className="h-9 rounded-lg border border-[#D9DCE3] px-3 text-xs" />
         {error && <p className="mt-2 rounded-lg bg-[#FEF2F2] p-2 text-xs text-[#B42318]">{error}</p>}
         <div className="mt-3 min-h-0 flex-1 space-y-2 overflow-y-auto">
           {visibleAssets.length === 0 && <p className="rounded-xl bg-[#F8F9FC] p-5 text-center text-xs text-[#667085]">暂无可复用页面资产</p>}
-          {visibleAssets.map((asset) => <article key={asset.id} className="rounded-xl border border-[#EAECF0] p-3">
-            <div className="flex items-start justify-between gap-2"><div className="min-w-0"><p className="truncate text-sm font-medium text-[#101828]">{asset.name}</p><p className="mt-1 text-[11px] text-[#667085]">{scopeLabel[asset.scope_type]} · {asset.status === "published" ? "已发布" : "草稿"} · 复用 {asset.usage_count} 次</p></div><Archive className="h-4 w-4 shrink-0 text-[#98A2B3]" /></div>
+          {visibleAssets.map((item) => { const asset = item.asset; return <article key={asset.id} className="rounded-xl border border-[#EAECF0] p-3">
+            <div className="flex items-start justify-between gap-2"><div className="min-w-0"><p className="truncate text-sm font-medium text-[#101828]">{asset.name}</p><p className="mt-1 text-[11px] text-[#667085]">{scopeLabel[asset.scope_type]} · {asset.status === "published" ? "已发布" : "草稿"} · 复用 {asset.usage_count} 次</p></div><button type="button" onClick={() => void toggleFavorite(item)} className="rounded p-1 hover:bg-[#F2F4F7]" title="收藏"><Star className={`h-4 w-4 ${item.is_favorite ? "fill-[#F5B700] text-[#F5B700]" : "text-[#98A2B3]"}`} /></button></div>
+            {item.recommendation_reasons?.length > 0 && <p className="mt-2 text-[10px] text-[#667085]">{item.recommendation_reasons.slice(0, 2).join(" · ")}</p>}
             {asset.tags.length > 0 && <div className="mt-2 flex flex-wrap gap-1">{asset.tags.map((tag) => <span key={tag} className="rounded bg-[#F2F1FF] px-1.5 py-0.5 text-[10px] text-[#4238CA]">{tag}</span>)}</div>}
             <button type="button" disabled={Boolean(pending)} onClick={() => void insert(asset)} className="mt-3 flex h-8 w-full items-center justify-center gap-1 rounded-lg border border-[#CBC7FF] text-xs text-[#4238CA] disabled:opacity-40">{pending === asset.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Plus className="h-3.5 w-3.5" />}插入到当前页后</button>
-          </article>)}
+          </article>; })}
         </div>
       </div>
     </aside>}

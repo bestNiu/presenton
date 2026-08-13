@@ -31,6 +31,7 @@ from models.sql.provider_settings import ProviderSettings
 from models.sql.enterprise import (
     AuditEventModel,
     AssetItemModel,
+    AssetFavoriteModel,
     AssetPromotionRequestModel,
     AssetUsageEventModel,
     EnterpriseNotificationModel,

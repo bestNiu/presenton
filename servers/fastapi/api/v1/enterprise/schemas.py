@@ -178,6 +178,19 @@ class AssetAnalyticsResponse(BaseModel):
     top_assets: list[AssetAnalyticsTopItem]
 
 
+class AssetPersonalizedItemResponse(BaseModel):
+    asset: AssetItemResponse
+    is_favorite: bool
+    last_used_at: datetime | None = None
+    recommendation_score: float | None = None
+    recommendation_reasons: list[str] = Field(default_factory=list)
+
+
+class AssetFavoriteResponse(BaseModel):
+    asset_id: uuid.UUID
+    is_favorite: bool
+
+
 class BidProjectCreateRequest(BaseModel):
     workspace_id: uuid.UUID
     bid_code: str = Field(min_length=1, max_length=64)

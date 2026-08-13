@@ -16,6 +16,8 @@ from api.v1.enterprise.schemas import (
     AssetPromotionResponse,
     AssetAnalyticsResponse,
     AssetBulkTransitionRequest,
+    AssetFavoriteResponse,
+    AssetPersonalizedItemResponse,
     SlideAssetCreateRequest,
     AuditEventResponse,
     BidDocumentCreateRequest,
@@ -138,6 +140,10 @@ from services.enterprise.asset_promotion_service import (
     decide_promotion_request,
     list_promotion_requests,
 )
+from services.enterprise.asset_personalization_service import (
+    list_personalized_assets,
+    set_asset_favorite,
+)
 from services.enterprise.bid_project_service import (
     add_project_document,
     confirm_project_profile,
@@ -252,6 +258,58 @@ async def get_enterprise_asset_analytics(
 ):
     return await get_asset_analytics(
         session, principal=principal, workspace_id=workspace_id
+    )
+
+
+@API_V1_ENTERPRISE_ROUTER.get(
+    "/assets/personalized",
+    response_model=list[AssetPersonalizedItemResponse],
+)
+async def get_enterprise_personalized_assets(
+    workspace_id: uuid.UUID = Query(),
+    view: str = Query(default="recommended", pattern="^(favorites|recent|recommended)$"),
+    scene_type: str | None = Query(default=None, max_length=64),
+    tags: list[str] = Query(default=[]),
+    limit: int = Query(default=20, ge=1, le=100),
+    principal: AuthPrincipal = Depends(principal_from_request),
+    session: AsyncSession = Depends(get_async_session),
+):
+    return await list_personalized_assets(
+        session,
+        principal=principal,
+        workspace_id=workspace_id,
+        view=view,
+        scene_type=scene_type,
+        tags=tags,
+        limit=limit,
+    )
+
+
+@API_V1_ENTERPRISE_ROUTER.post(
+    "/assets/{asset_id}/favorite",
+    response_model=AssetFavoriteResponse,
+)
+async def post_enterprise_asset_favorite(
+    asset_id: uuid.UUID,
+    principal: AuthPrincipal = Depends(principal_from_request),
+    session: AsyncSession = Depends(get_async_session),
+):
+    return await set_asset_favorite(
+        session, asset_id=asset_id, principal=principal, favorite=True
+    )
+
+
+@API_V1_ENTERPRISE_ROUTER.delete(
+    "/assets/{asset_id}/favorite",
+    response_model=AssetFavoriteResponse,
+)
+async def delete_enterprise_asset_favorite(
+    asset_id: uuid.UUID,
+    principal: AuthPrincipal = Depends(principal_from_request),
+    session: AsyncSession = Depends(get_async_session),
+):
+    return await set_asset_favorite(
+        session, asset_id=asset_id, principal=principal, favorite=False
     )
 
 

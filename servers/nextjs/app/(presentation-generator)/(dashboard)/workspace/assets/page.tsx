@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Archive, ArrowLeft, Library, Loader2, Search, Send, ShieldCheck, X } from "lucide-react";
+import { Archive, ArrowLeft, Library, Loader2, Search, Send, ShieldCheck, Star, X } from "lucide-react";
 
 import {
   EnterpriseApi,
@@ -48,6 +48,8 @@ export default function AssetCenterPage() {
   const [authorizationConfirmed, setAuthorizationConfirmed] = useState(false);
   const [decisionComments, setDecisionComments] = useState<Record<string, string>>({});
   const [selectedAssetIds, setSelectedAssetIds] = useState<string[]>([]);
+  const [favoriteAssetIds, setFavoriteAssetIds] = useState<string[]>([]);
+  const [favoritesOnly, setFavoritesOnly] = useState(false);
 
   useEffect(() => {
     EnterpriseApi.getWorkspaces()
@@ -64,7 +66,7 @@ export default function AssetCenterPage() {
     setLoading(true);
     setError(null);
     try {
-      const [assetRows, mineRows, reviewRows, analyticsResult] = await Promise.all([
+      const [assetRows, mineRows, reviewRows, analyticsResult, favoriteRows] = await Promise.all([
         EnterpriseApi.getAssets(workspaceId, {
           assetType: typeFilter || undefined,
           status: statusFilter || undefined,
@@ -72,11 +74,13 @@ export default function AssetCenterPage() {
         EnterpriseApi.getAssetPromotionRequests(undefined, "mine"),
         EnterpriseApi.getAssetPromotionRequests(undefined, "review"),
         EnterpriseApi.getAssetAnalytics(workspaceId),
+        EnterpriseApi.getPersonalizedAssets(workspaceId, "favorites", { limit: 100 }),
       ]);
       setAssets(assetRows);
       setMyPromotions(mineRows);
       setReviewPromotions(reviewRows);
       setAnalytics(analyticsResult);
+      setFavoriteAssetIds(favoriteRows.map((item) => item.asset.id));
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "资产加载失败");
     } finally {
@@ -88,8 +92,8 @@ export default function AssetCenterPage() {
 
   const visibleAssets = useMemo(() => {
     const keyword = query.trim().toLowerCase();
-    return assets.filter((asset) => !keyword || asset.name.toLowerCase().includes(keyword) || asset.tags.some((tag) => tag.toLowerCase().includes(keyword)));
-  }, [assets, query]);
+    return assets.filter((asset) => (!favoritesOnly || favoriteAssetIds.includes(asset.id)) && (!keyword || asset.name.toLowerCase().includes(keyword) || asset.tags.some((tag) => tag.toLowerCase().includes(keyword))));
+  }, [assets, favoriteAssetIds, favoritesOnly, query]);
 
   const workspaceRole = workspaces.find((item) => item.id === workspaceId)?.current_user_role;
   const canManageAsset = (asset: AssetItemResponse) =>
@@ -122,6 +126,18 @@ export default function AssetCenterPage() {
     } finally {
       setPending("");
     }
+  };
+
+  const toggleFavorite = async (asset: AssetItemResponse) => {
+    const next = !favoriteAssetIds.includes(asset.id);
+    setPending(`favorite:${asset.id}`);
+    setError(null);
+    try {
+      await EnterpriseApi.setAssetFavorite(asset.id, next);
+      setFavoriteAssetIds((current) => next ? [...current, asset.id] : current.filter((id) => id !== asset.id));
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "收藏状态更新失败");
+    } finally { setPending(""); }
   };
 
   const submitPromotion = async () => {
@@ -172,10 +188,11 @@ export default function AssetCenterPage() {
         <select value={workspaceId} onChange={(event) => setWorkspaceId(event.target.value)} className="h-10 rounded-lg border border-[#D9DCE3] bg-white px-3 text-sm">{workspaces.map((workspace) => <option key={workspace.id} value={workspace.id}>{workspace.name}</option>)}</select>
       </header>
 
-      <section className="mt-6 grid gap-3 rounded-2xl border border-[#EAECF0] bg-white p-4 md:grid-cols-[1fr_180px_180px]">
+      <section className="mt-6 grid gap-3 rounded-2xl border border-[#EAECF0] bg-white p-4 md:grid-cols-[1fr_180px_180px_auto]">
         <label className="relative"><Search className="absolute left-3 top-3 h-4 w-4 text-[#98A2B3]" /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索名称或标签" className="h-10 w-full rounded-lg border border-[#D9DCE3] pl-9 pr-3 text-sm" /></label>
         <select value={typeFilter} onChange={(event) => setTypeFilter(event.target.value)} className="h-10 rounded-lg border border-[#D9DCE3] px-3 text-sm"><option value="">全部类型</option>{Object.entries(typeLabel).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select>
         <select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value as "" | AssetStatus)} className="h-10 rounded-lg border border-[#D9DCE3] px-3 text-sm"><option value="">全部状态</option>{Object.entries(statusLabel).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select>
+        <button onClick={() => setFavoritesOnly((value) => !value)} className={`inline-flex h-10 items-center justify-center gap-2 rounded-lg border px-3 text-sm ${favoritesOnly ? "border-[#F5B700] bg-[#FFF9E6] text-[#8A6100]" : "border-[#D9DCE3] text-[#475467]"}`}><Star className={`h-4 w-4 ${favoritesOnly ? "fill-[#F5B700] text-[#F5B700]" : ""}`} />收藏</button>
       </section>
 
       {analytics && <section className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
@@ -191,7 +208,7 @@ export default function AssetCenterPage() {
       {loading ? <div className="flex justify-center py-20"><Loader2 className="h-6 w-6 animate-spin text-[#635BFF]" /></div> : <section className="mt-5 grid gap-4 md:grid-cols-2 lg:grid-cols-3">
         {visibleAssets.length === 0 && <p className="col-span-full rounded-2xl border border-dashed border-[#D0D5DD] bg-white p-12 text-center text-sm text-[#667085]">暂无符合条件的资产，可在文稿编辑器中将当前页保存到资产库。</p>}
         {visibleAssets.map((asset) => <article key={asset.id} className="flex min-h-52 flex-col rounded-2xl border border-[#EAECF0] bg-white p-5 shadow-sm">
-          {canManageAsset(asset) && <label className="mb-2 flex items-center justify-end gap-1 text-[10px] text-[#667085]"><input type="checkbox" checked={selectedAssetIds.includes(asset.id)} onChange={(event) => setSelectedAssetIds((current) => event.target.checked ? [...current, asset.id] : current.filter((id) => id !== asset.id))} />选择治理</label>}
+          <div className="mb-2 flex items-center justify-between"><button type="button" onClick={() => void toggleFavorite(asset)} className="rounded p-1 hover:bg-[#F2F4F7]" title="收藏资产"><Star className={`h-4 w-4 ${favoriteAssetIds.includes(asset.id) ? "fill-[#F5B700] text-[#F5B700]" : "text-[#98A2B3]"}`} /></button>{canManageAsset(asset) && <label className="flex items-center justify-end gap-1 text-[10px] text-[#667085]"><input type="checkbox" checked={selectedAssetIds.includes(asset.id)} onChange={(event) => setSelectedAssetIds((current) => event.target.checked ? [...current, asset.id] : current.filter((id) => id !== asset.id))} />选择治理</label>}</div>
           <div className="mb-4 aspect-[16/9] overflow-hidden rounded-xl border border-[#EAECF0] bg-[#F8F9FC] p-3" style={{ borderTop: `4px solid ${asset.preview.accent || "#635BFF"}` }}><div className="flex h-full flex-col justify-between"><div><p className="line-clamp-2 text-sm font-semibold leading-5 text-[#101828]">{asset.preview.title || asset.name}</p>{asset.preview.subtitle && <p className="mt-1 line-clamp-2 text-[10px] leading-4 text-[#667085]">{asset.preview.subtitle}</p>}</div><div className="flex items-center justify-between text-[9px] uppercase tracking-wide text-[#98A2B3]"><span>{asset.preview.layout || asset.asset_type}</span><span>{asset.preview.element_count || 0} elements</span></div></div></div>
           <div className="flex items-start justify-between gap-3"><div className="min-w-0"><p className="text-xs font-medium text-[#635BFF]">{typeLabel[asset.asset_type] || asset.asset_type} · {asset.scope_type === "personal" ? "个人" : asset.scope_type === "workspace" ? "空间" : "企业"}</p><h2 className="mt-2 truncate text-base font-semibold">{asset.name}</h2></div><div className="flex flex-col items-end gap-1"><span className="rounded-full bg-[#F2F4F7] px-2 py-1 text-xs text-[#475467]">{statusLabel[asset.status]}</span>{asset.authorization_status === "revoked" && <span className="rounded-full bg-[#FEF2F2] px-2 py-1 text-[10px] text-[#B42318]">授权撤销</span>}{asset.expires_at && new Date(asset.expires_at).getTime() <= Date.now() && <span className="rounded-full bg-[#FEF2F2] px-2 py-1 text-[10px] text-[#B42318]">授权过期</span>}</div></div>
           <p className="mt-3 line-clamp-2 text-xs leading-5 text-[#667085]">{asset.description || "暂无说明"}</p>

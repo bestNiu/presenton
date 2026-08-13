@@ -44,7 +44,8 @@ REVISION_ENTERPRISE_NOTIFICATIONS = "f5d9b3c7e1a2"
 REVISION_ENTERPRISE_ASSET_LIBRARY = "g6e0c4d8f2b3"
 REVISION_ASSET_PROMOTION_GOVERNANCE = "b7f1d5e9a3c4"
 REVISION_ASSET_OPERATIONS_ANALYTICS = "c8a2e6f0b4d5"
-REVISION_HEAD = REVISION_ASSET_OPERATIONS_ANALYTICS
+REVISION_ASSET_PERSONALIZATION = "d9b3f7a1c5e6"
+REVISION_HEAD = REVISION_ASSET_PERSONALIZATION
 
 
 async def migrate_database_on_startup() -> None:
@@ -139,6 +140,8 @@ def _infer_revision_from_schema(
         "enterprise_audit_events",
     }
     if enterprise_tables.issubset(tables):
+        if "enterprise_asset_favorites" in tables:
+            return REVISION_ASSET_PERSONALIZATION
         if "enterprise_asset_usage_events" in tables:
             return REVISION_ASSET_OPERATIONS_ANALYTICS
         if "enterprise_asset_promotion_requests" in tables:

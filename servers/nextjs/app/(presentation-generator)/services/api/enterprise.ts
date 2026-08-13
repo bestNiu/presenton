@@ -463,6 +463,14 @@ export interface AssetAnalyticsResponse {
   }>;
 }
 
+export interface AssetPersonalizedItemResponse {
+  asset: AssetItemResponse;
+  is_favorite: boolean;
+  last_used_at: string | null;
+  recommendation_score: number | null;
+  recommendation_reasons: string[];
+}
+
 export class EnterpriseApi {
   static async ensurePersonalWorkspace(): Promise<WorkspaceResponse> {
     const response = await fetch(
@@ -510,6 +518,33 @@ export class EnterpriseApi {
       { credentials: "include", cache: "no-store" }
     );
     return ApiResponseHandler.handleResponse(response, "Failed to load asset analytics");
+  }
+
+  static async getPersonalizedAssets(
+    workspaceId: string,
+    view: "favorites" | "recent" | "recommended",
+    options: { sceneType?: string; tags?: string[]; limit?: number } = {}
+  ): Promise<AssetPersonalizedItemResponse[]> {
+    const params = new URLSearchParams({
+      workspace_id: workspaceId,
+      view,
+      limit: String(options.limit || 20),
+    });
+    if (options.sceneType) params.set("scene_type", options.sceneType);
+    options.tags?.forEach((tag) => params.append("tags", tag));
+    const response = await fetch(
+      getApiUrl(`/api/v1/enterprise/assets/personalized?${params.toString()}`),
+      { credentials: "include", cache: "no-store" }
+    );
+    return ApiResponseHandler.handleResponse(response, "Failed to load personalized assets");
+  }
+
+  static async setAssetFavorite(assetId: string, favorite: boolean): Promise<{ asset_id: string; is_favorite: boolean }> {
+    const response = await fetch(
+      getApiUrl(`/api/v1/enterprise/assets/${encodeURIComponent(assetId)}/favorite`),
+      { method: favorite ? "POST" : "DELETE", credentials: "include" }
+    );
+    return ApiResponseHandler.handleResponse(response, "Failed to update asset favorite");
   }
 
   static async saveSlideAsAsset(

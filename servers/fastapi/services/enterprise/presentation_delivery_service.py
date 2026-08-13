@@ -294,6 +294,88 @@ async def list_presentation_delivery_activity(
     ]
 
 
+async def build_presentation_delivery_evidence_package(
+    session: AsyncSession,
+    *,
+    workspace_id: uuid.UUID,
+    entry_id: uuid.UUID,
+    artifact_id: uuid.UUID,
+    principal: AuthPrincipal,
+) -> tuple[bytes, str, str]:
+    evidence = await get_presentation_delivery_evidence(
+        session,
+        workspace_id=workspace_id,
+        entry_id=entry_id,
+        artifact_id=artifact_id,
+        principal=principal,
+    )
+    activity = await list_presentation_delivery_activity(
+        session,
+        workspace_id=workspace_id,
+        entry_id=entry_id,
+        artifact_id=artifact_id,
+        principal=principal,
+    )
+    snapshot = await session.get(PresentationSnapshotModel, evidence["snapshot_id"])
+    artifact = evidence["artifact"]
+    manifest = snapshot.manifest or {} if snapshot else {}
+    body = {
+        "package_version": "1.0",
+        "artifact": {
+            "id": str(artifact.id),
+            "snapshot_id": str(artifact.snapshot_id),
+            "format": getattr(artifact.format, "value", artifact.format),
+            "file_name": artifact.file_name,
+            "sha256": artifact.sha256,
+            "size_bytes": artifact.size_bytes,
+            "watermark_text": artifact.watermark_text,
+            "status": getattr(artifact.status, "value", artifact.status),
+        },
+        "integrity": {
+            "file": evidence["file_integrity"],
+            "snapshot": evidence["snapshot_integrity"],
+            "citations": evidence["citation_integrity"],
+            "credential_hash": evidence["credential_hash"],
+        },
+        "snapshot": {
+            "id": str(evidence["snapshot_id"]),
+            "version_no": evidence["snapshot_version"],
+            "manifest_hash": evidence["snapshot_manifest_hash"],
+            "citation_manifest_hash": evidence["citation_manifest_hash"],
+            "citations": manifest.get("citation_manifest", []),
+        },
+        "activity": [
+            {
+                "id": str(event.id),
+                "actor_id": str(event.actor_id) if event.actor_id else None,
+                "workspace_id": str(event.workspace_id) if event.workspace_id else None,
+                "action": event.action,
+                "resource_type": event.resource_type,
+                "resource_id": event.resource_id,
+                "result": getattr(event.result, "value", event.result),
+                "event_metadata": event.event_metadata,
+                "created_at": event.created_at.isoformat(),
+            }
+            for event in activity
+        ],
+    }
+    package_hash = _canonical_hash(body)
+    package = {**body, "package_hash": package_hash}
+    content = json.dumps(package, ensure_ascii=False, sort_keys=True, indent=2).encode("utf-8")
+    filename = f"presentation-delivery-{artifact.id}-evidence.json"
+    record_audit_event(
+        session,
+        actor_id=principal.user_id,
+        workspace_id=workspace_id,
+        action="presentation.delivery_evidence_exported",
+        resource_type="presentation_delivery_artifact",
+        resource_id=artifact.id,
+        metadata={"package_hash": package_hash},
+    )
+    await session.commit()
+    return content, filename, package_hash
+
+
 async def revoke_presentation_delivery(
     session: AsyncSession,
     *,

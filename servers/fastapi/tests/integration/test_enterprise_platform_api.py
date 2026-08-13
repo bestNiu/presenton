@@ -1052,6 +1052,13 @@ def test_presentation_registration_preserves_owner_and_allows_member_listing(tmp
             f"/api/v1/enterprise/workspaces/{workspace['id']}/presentations/{entry_id}/deliveries/{delivery.json()['id']}/activity",
             headers={"x-test-user": "member"},
         )
+        evidence_package = client.get(
+            f"/api/v1/enterprise/workspaces/{workspace['id']}/presentations/{entry_id}/deliveries/{delivery.json()['id']}/evidence-package"
+        )
+        evidence_package_denied = client.get(
+            f"/api/v1/enterprise/workspaces/{workspace['id']}/presentations/{entry_id}/deliveries/{delivery.json()['id']}/evidence-package",
+            headers={"x-test-user": "member"},
+        )
         governance = client.get(
             f"/api/v1/enterprise/workspaces/{workspace['id']}/presentations/{entry_id}/governance",
             headers={"x-test-user": "member"},
@@ -1119,6 +1126,12 @@ def test_presentation_registration_preserves_owner_and_allows_member_listing(tmp
             "presentation.delivery_revoked",
         }
         assert delivery_activity_denied.status_code == 404
+        assert evidence_package.status_code == 200
+        assert evidence_package.headers["content-type"].startswith("application/json")
+        assert evidence_package.headers["x-evidence-package-sha256"] == evidence_package.json()["package_hash"]
+        assert evidence_package.json()["artifact"]["sha256"] == delivery.json()["sha256"]
+        assert evidence_package.json()["snapshot"]["citations"] == []
+        assert evidence_package_denied.status_code == 404
         assert frozen.json()["version_no"] == 1
         assert frozen.json()["manifest"]["scene"]["type"] == "general"
         assert governance.json()["entry"]["status"] == "frozen"

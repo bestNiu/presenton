@@ -1259,6 +1259,17 @@ export class EnterpriseApi {
     return ApiResponseHandler.handleResponse(response, "Failed to load delivery activity");
   }
 
+  static async downloadPresentationDeliveryEvidencePackage(workspaceId: string, entryId: string, artifactId: string): Promise<void> {
+    const response = await fetch(getApiUrl(`/api/v1/enterprise/workspaces/${encodeURIComponent(workspaceId)}/presentations/${encodeURIComponent(entryId)}/deliveries/${encodeURIComponent(artifactId)}/evidence-package`), { credentials: "include", cache: "no-store" });
+    if (!response.ok) await ApiResponseHandler.handleResponse(response, "Failed to export delivery evidence package");
+    const blobUrl = URL.createObjectURL(await response.blob());
+    const anchor = document.createElement("a");
+    anchor.href = blobUrl;
+    anchor.download = `presentation-delivery-${artifactId}-evidence.json`;
+    anchor.click();
+    URL.revokeObjectURL(blobUrl);
+  }
+
   static async issuePresentationDownloadGrant(workspaceId: string, entryId: string, artifactId: string): Promise<BidDownloadGrantResponse> {
     const response = await fetch(getApiUrl(`/api/v1/enterprise/workspaces/${encodeURIComponent(workspaceId)}/presentations/${encodeURIComponent(entryId)}/deliveries/${encodeURIComponent(artifactId)}/grants`), { method: "POST", credentials: "include", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ expires_in_minutes: 30, max_downloads: 1 }) });
     const grant = await ApiResponseHandler.handleResponse(response, "Failed to authorize governed download") as BidDownloadGrantResponse;

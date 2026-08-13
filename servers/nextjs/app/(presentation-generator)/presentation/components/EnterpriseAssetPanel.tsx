@@ -125,6 +125,19 @@ export default function EnterpriseAssetPanel({
     setPending(asset.id);
     setError(null);
     try {
+      const compatibility = await EnterpriseApi.getAssetCompatibility(
+        asset.id,
+        workspaceId,
+        entryId
+      );
+      if (!compatibility.can_insert) {
+        setError(compatibility.issues.map((issue) => issue.message).join("；") || "该资产与当前文稿不兼容");
+        return;
+      }
+      if (
+        compatibility.status === "warning" &&
+        !window.confirm(`${compatibility.issues.map((issue) => issue.message).join("；")}。是否按保留源样式方式插入？`)
+      ) return;
       await EnterpriseApi.insertAssetPage(
         asset.id,
         workspaceId,
@@ -137,6 +150,23 @@ export default function EnterpriseAssetPanel({
     } finally {
       setPending("");
     }
+  };
+
+  const createVersion = async (asset: AssetItemResponse) => {
+    if (!currentSlideId) return;
+    setPending(`version:${asset.id}`);
+    setError(null);
+    try {
+      await EnterpriseApi.saveSlideAsAssetVersion(
+        workspaceId,
+        entryId,
+        currentSlideId,
+        asset.id
+      );
+      await load();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "资产新版本创建失败");
+    } finally { setPending(""); }
   };
 
   return <>
@@ -161,12 +191,12 @@ export default function EnterpriseAssetPanel({
         <div className="mt-3 min-h-0 flex-1 space-y-2 overflow-y-auto">
           {visibleAssets.length === 0 && <p className="rounded-xl bg-[#F8F9FC] p-5 text-center text-xs text-[#667085]">暂无可复用页面资产</p>}
           {visibleAssets.map((item) => { const asset = item.asset; return <article key={asset.id} className="rounded-xl border border-[#EAECF0] p-3">
-            <div className="flex items-start justify-between gap-2"><div className="min-w-0"><p className="truncate text-sm font-medium text-[#101828]">{asset.name}</p><p className="mt-1 text-[11px] text-[#667085]">{scopeLabel[asset.scope_type]} · {asset.status === "published" ? "已发布" : "草稿"} · 复用 {asset.usage_count} 次</p></div><button type="button" onClick={() => void toggleFavorite(item)} className="rounded p-1 hover:bg-[#F2F4F7]" title="收藏"><Star className={`h-4 w-4 ${item.is_favorite ? "fill-[#F5B700] text-[#F5B700]" : "text-[#98A2B3]"}`} /></button></div>
+            <div className="flex items-start justify-between gap-2"><div className="min-w-0"><p className="truncate text-sm font-medium text-[#101828]">{asset.name}</p><p className="mt-1 text-[11px] text-[#667085]">{scopeLabel[asset.scope_type]} · v{asset.version_no}{asset.is_latest ? " 当前版" : ""} · {asset.status === "published" ? "已发布" : "草稿"} · 复用 {asset.usage_count} 次</p></div><button type="button" onClick={() => void toggleFavorite(item)} className="rounded p-1 hover:bg-[#F2F4F7]" title="收藏"><Star className={`h-4 w-4 ${item.is_favorite ? "fill-[#F5B700] text-[#F5B700]" : "text-[#98A2B3]"}`} /></button></div>
             {EnterpriseApi.getAssetPreviewUrl(asset) && <div className="mt-2 aspect-[16/9] rounded-lg border border-[#EAECF0] bg-cover bg-center" role="img" aria-label={`${asset.name}预览图`} style={{ backgroundImage: `url(${EnterpriseApi.getAssetPreviewUrl(asset)})` }} />}
             {["queued", "rendering"].includes(asset.preview_status) && <p className="mt-2 inline-flex items-center gap-1 text-[10px] text-[#667085]"><Loader2 className="h-3 w-3 animate-spin" />正在生成高清预览</p>}
             {item.recommendation_reasons?.length > 0 && <p className="mt-2 text-[10px] text-[#667085]">{item.recommendation_reasons.slice(0, 2).join(" · ")}</p>}
             {asset.tags.length > 0 && <div className="mt-2 flex flex-wrap gap-1">{asset.tags.map((tag) => <span key={tag} className="rounded bg-[#F2F1FF] px-1.5 py-0.5 text-[10px] text-[#4238CA]">{tag}</span>)}</div>}
-            <button type="button" disabled={Boolean(pending)} onClick={() => void insert(asset)} className="mt-3 flex h-8 w-full items-center justify-center gap-1 rounded-lg border border-[#CBC7FF] text-xs text-[#4238CA] disabled:opacity-40">{pending === asset.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Plus className="h-3.5 w-3.5" />}插入到当前页后</button>
+            <div className="mt-3 grid grid-cols-2 gap-2"><button type="button" disabled={Boolean(pending)} onClick={() => void insert(asset)} className="flex h-8 items-center justify-center gap-1 rounded-lg border border-[#CBC7FF] text-xs text-[#4238CA] disabled:opacity-40">{pending === asset.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Plus className="h-3.5 w-3.5" />}兼容检查并插入</button><button type="button" disabled={Boolean(pending) || !currentSlideId || asset.status !== "published"} onClick={() => void createVersion(asset)} className="flex h-8 items-center justify-center gap-1 rounded-lg border border-[#D9DCE3] text-xs text-[#475467] disabled:opacity-40">{pending === `version:${asset.id}` && <Loader2 className="h-3.5 w-3.5 animate-spin" />}当前页建新版</button></div>
           </article>; })}
         </div>
       </div>

@@ -1,7 +1,7 @@
 from datetime import datetime
 import uuid
 
-from sqlalchemy import Column, DateTime, ForeignKey, Integer, JSON, String, Text
+from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, JSON, String, Text, UniqueConstraint
 from sqlmodel import Field, SQLModel
 
 from domains.platform.enums import AssetScopeType, AssetStatus
@@ -10,8 +10,15 @@ from utils.datetime_utils import get_current_utc_datetime
 
 class AssetItemModel(SQLModel, table=True):
     __tablename__ = "enterprise_asset_items"
+    __table_args__ = (
+        UniqueConstraint("version_group_id", "version_no", name="uq_enterprise_asset_version"),
+    )
 
     id: uuid.UUID = Field(primary_key=True, default_factory=uuid.uuid4)
+    version_group_id: uuid.UUID = Field(default_factory=uuid.uuid4, index=True)
+    version_no: int = Field(default=1, sa_column=Column(Integer, nullable=False))
+    is_latest: bool = Field(default=True, sa_column=Column(Boolean, nullable=False, index=True))
+    supersedes_asset_id: uuid.UUID | None = Field(default=None, sa_column=Column(ForeignKey("enterprise_asset_items.id", ondelete="SET NULL"), index=True))
     workspace_id: uuid.UUID | None = Field(default=None, sa_column=Column(ForeignKey("enterprise_workspaces.id", ondelete="CASCADE"), index=True))
     created_by: uuid.UUID | None = Field(default=None, sa_column=Column(ForeignKey("user.id", ondelete="SET NULL"), index=True))
     scope_type: AssetScopeType = Field(sa_column=Column(String(32), nullable=False, index=True))

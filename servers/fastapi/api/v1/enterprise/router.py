@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from api.v1.auth.principal import AuthPrincipal, principal_from_request
 from api.v1.enterprise.schemas import (
     AssetCreateRequest,
+    AssetCompatibilityResponse,
     AssetItemResponse,
     AssetPageInsertRequest,
     AssetPageInsertResponse,
@@ -20,6 +21,7 @@ from api.v1.enterprise.schemas import (
     AssetPersonalizedItemResponse,
     AssetPreviewTaskResponse,
     SlideAssetCreateRequest,
+    SlideAssetVersionCreateRequest,
     AuditEventResponse,
     BidDocumentCreateRequest,
     BidDocumentResponse,
@@ -131,9 +133,12 @@ from services.enterprise.asset_library_service import (
     create_asset,
     bulk_transition_assets,
     get_asset_analytics,
+    get_asset_compatibility,
     insert_asset_page,
+    list_asset_versions,
     list_assets,
     save_slide_as_asset,
+    save_slide_as_asset_version,
     transition_asset,
 )
 from services.enterprise.asset_promotion_service import (
@@ -352,6 +357,69 @@ async def post_presentation_slide_asset(
 
 
 @API_V1_ENTERPRISE_ROUTER.post(
+    "/workspaces/{workspace_id}/presentations/{entry_id}/slides/{slide_id}/assets/{asset_id}/versions",
+    response_model=AssetItemResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def post_presentation_slide_asset_version(
+    workspace_id: uuid.UUID,
+    entry_id: uuid.UUID,
+    slide_id: uuid.UUID,
+    asset_id: uuid.UUID,
+    body: SlideAssetVersionCreateRequest,
+    background_tasks: BackgroundTasks,
+    principal: AuthPrincipal = Depends(principal_from_request),
+    session: AsyncSession = Depends(get_async_session),
+):
+    asset = await save_slide_as_asset_version(
+        session,
+        principal=principal,
+        workspace_id=workspace_id,
+        entry_id=entry_id,
+        slide_id=slide_id,
+        asset_id=asset_id,
+        values=body.model_dump(),
+    )
+    task = await queue_asset_preview(session, asset_id=asset.id, principal=principal)
+    background_tasks.add_task(run_asset_preview_task, asset.id, task.id)
+    return asset
+
+
+@API_V1_ENTERPRISE_ROUTER.get(
+    "/assets/{asset_id}/versions",
+    response_model=list[AssetItemResponse],
+)
+async def get_enterprise_asset_versions(
+    asset_id: uuid.UUID,
+    principal: AuthPrincipal = Depends(principal_from_request),
+    session: AsyncSession = Depends(get_async_session),
+):
+    return await list_asset_versions(
+        session, asset_id=asset_id, principal=principal
+    )
+
+
+@API_V1_ENTERPRISE_ROUTER.get(
+    "/assets/{asset_id}/compatibility",
+    response_model=AssetCompatibilityResponse,
+)
+async def get_enterprise_asset_compatibility(
+    asset_id: uuid.UUID,
+    workspace_id: uuid.UUID = Query(),
+    presentation_entry_id: uuid.UUID = Query(),
+    principal: AuthPrincipal = Depends(principal_from_request),
+    session: AsyncSession = Depends(get_async_session),
+):
+    return await get_asset_compatibility(
+        session,
+        asset_id=asset_id,
+        workspace_id=workspace_id,
+        entry_id=presentation_entry_id,
+        principal=principal,
+    )
+
+
+@API_V1_ENTERPRISE_ROUTER.post(
     "/assets/{asset_id}/preview-tasks",
     response_model=AssetPreviewTaskResponse,
     status_code=status.HTTP_202_ACCEPTED,
@@ -422,7 +490,7 @@ async def post_enterprise_asset_insert_page(
     principal: AuthPrincipal = Depends(principal_from_request),
     session: AsyncSession = Depends(get_async_session),
 ):
-    slide = await insert_asset_page(
+    slide, compatibility = await insert_asset_page(
         session,
         asset_id=asset_id,
         workspace_id=body.workspace_id,
@@ -431,7 +499,10 @@ async def post_enterprise_asset_insert_page(
         after_index=body.after_index,
     )
     return AssetPageInsertResponse(
-        slide_id=slide.id, slide_index=slide.index, asset_id=asset_id
+        slide_id=slide.id,
+        slide_index=slide.index,
+        asset_id=asset_id,
+        compatibility=AssetCompatibilityResponse.model_validate(compatibility),
     )
 
 

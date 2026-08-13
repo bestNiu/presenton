@@ -385,6 +385,10 @@ export type AssetStatus = "draft" | "published" | "offline" | "archived";
 
 export interface AssetItemResponse {
   id: string;
+  version_group_id: string;
+  version_no: number;
+  is_latest: boolean;
+  supersedes_asset_id: string | null;
   workspace_id: string | null;
   created_by: string | null;
   scope_type: AssetScopeType;
@@ -424,6 +428,24 @@ export interface AssetPageInsertResponse {
   slide_id: string;
   slide_index: number;
   asset_id: string;
+  compatibility: AssetCompatibilityResponse;
+}
+
+export interface AssetCompatibilityIssue {
+  code: string;
+  severity: "warning" | "blocked";
+  message: string;
+}
+
+export interface AssetCompatibilityResponse {
+  asset_id: string;
+  presentation_entry_id: string;
+  status: "compatible" | "warning" | "blocked";
+  can_insert: boolean;
+  strategy: "preserve_source";
+  source_template_id: string | null;
+  target_template_id: string | null;
+  issues: AssetCompatibilityIssue[];
 }
 
 export interface AssetPreviewTaskResponse {
@@ -592,6 +614,50 @@ export class EnterpriseApi {
       }
     );
     return ApiResponseHandler.handleResponse(response, "Failed to save slide as asset");
+  }
+
+  static async saveSlideAsAssetVersion(
+    workspaceId: string,
+    entryId: string,
+    slideId: string,
+    assetId: string
+  ): Promise<AssetItemResponse> {
+    const response = await fetch(
+      getApiUrl(
+        `/api/v1/enterprise/workspaces/${encodeURIComponent(workspaceId)}/presentations/${encodeURIComponent(entryId)}/slides/${encodeURIComponent(slideId)}/assets/${encodeURIComponent(assetId)}/versions`
+      ),
+      {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+      }
+    );
+    return ApiResponseHandler.handleResponse(response, "Failed to create asset version");
+  }
+
+  static async getAssetVersions(assetId: string): Promise<AssetItemResponse[]> {
+    const response = await fetch(
+      getApiUrl(`/api/v1/enterprise/assets/${encodeURIComponent(assetId)}/versions`),
+      { credentials: "include", cache: "no-store" }
+    );
+    return ApiResponseHandler.handleResponse(response, "Failed to load asset versions");
+  }
+
+  static async getAssetCompatibility(
+    assetId: string,
+    workspaceId: string,
+    entryId: string
+  ): Promise<AssetCompatibilityResponse> {
+    const params = new URLSearchParams({
+      workspace_id: workspaceId,
+      presentation_entry_id: entryId,
+    });
+    const response = await fetch(
+      getApiUrl(`/api/v1/enterprise/assets/${encodeURIComponent(assetId)}/compatibility?${params.toString()}`),
+      { credentials: "include", cache: "no-store" }
+    );
+    return ApiResponseHandler.handleResponse(response, "Failed to check asset compatibility");
   }
 
   static async transitionAsset(

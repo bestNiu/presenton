@@ -727,6 +727,22 @@ def test_asset_library_page_snapshot_lifecycle_and_reuse(tmp_path, monkeypatch):
             "/api/v1/enterprise/assets",
             params={"workspace_id": workspace["id"]},
         )
+
+        async def change_target_theme():
+            async with session_maker() as session:
+                target = await session.get(PresentationModel, presentation_id)
+                target.theme = {"colors": {"primary": "#0052CC"}}
+                session.add(target)
+                await session.commit()
+
+        asyncio.run(change_target_theme())
+        compatibility = client.get(
+            f"/api/v1/enterprise/assets/{asset_id}/compatibility",
+            params={
+                "workspace_id": workspace["id"],
+                "presentation_entry_id": entry["id"],
+            },
+        )
         inserted = client.post(
             f"/api/v1/enterprise/assets/{asset_id}/insert-page",
             json={
@@ -752,6 +768,45 @@ def test_asset_library_page_snapshot_lifecycle_and_reuse(tmp_path, monkeypatch):
         )
         owner_unfavorite = client.delete(
             f"/api/v1/enterprise/assets/{asset_id}/favorite"
+        )
+        new_version = client.post(
+            f"/api/v1/enterprise/workspaces/{workspace['id']}/presentations/{entry['id']}/slides/{slide_id}/assets/{asset_id}/versions",
+            json={},
+        )
+        version_history = client.get(
+            f"/api/v1/enterprise/assets/{asset_id}/versions"
+        )
+        published_new_version = client.post(
+            f"/api/v1/enterprise/assets/{new_version.json()['id']}/transitions/publish"
+        )
+        old_version_after_publish = next(
+            version for version in client.get(
+                f"/api/v1/enterprise/assets/{asset_id}/versions"
+            ).json() if version["id"] == asset_id
+        )
+
+        async def change_target_presentation_version():
+            async with session_maker() as session:
+                target = await session.get(PresentationModel, presentation_id)
+                target.version = PresentationVersion.V1_STANDARD
+                session.add(target)
+                await session.commit()
+
+        asyncio.run(change_target_presentation_version())
+        blocked_compatibility = client.get(
+            f"/api/v1/enterprise/assets/{new_version.json()['id']}/compatibility",
+            params={
+                "workspace_id": workspace["id"],
+                "presentation_entry_id": entry["id"],
+            },
+        )
+        blocked_insert = client.post(
+            f"/api/v1/enterprise/assets/{new_version.json()['id']}/insert-page",
+            json={
+                "workspace_id": workspace["id"],
+                "presentation_entry_id": entry["id"],
+                "after_index": 1,
+            },
         )
         presentation = client.get(f"/api/v1/ppt/presentation/{presentation_id}")
         offline = client.post(
@@ -785,8 +840,7 @@ def test_asset_library_page_snapshot_lifecycle_and_reuse(tmp_path, monkeypatch):
         failed_preview_asset = next(
             item
             for item in client.get(
-                "/api/v1/enterprise/assets",
-                params={"workspace_id": workspace["id"]},
+                f"/api/v1/enterprise/assets/{asset_id}/versions"
             ).json()
             if item["id"] == asset_id
         )
@@ -801,8 +855,7 @@ def test_asset_library_page_snapshot_lifecycle_and_reuse(tmp_path, monkeypatch):
         recovered_preview_asset = next(
             item
             for item in client.get(
-                "/api/v1/enterprise/assets",
-                params={"workspace_id": workspace["id"]},
+                f"/api/v1/enterprise/assets/{asset_id}/versions"
             ).json()
             if item["id"] == asset_id
         )
@@ -856,8 +909,13 @@ def test_asset_library_page_snapshot_lifecycle_and_reuse(tmp_path, monkeypatch):
         assert promoted_enterprise_asset["parent_asset_id"] == asset_id
         assert promoted_enterprise_asset["preview_status"] == "ready"
         assert promoted_enterprise_asset["preview_url"]
+        assert compatibility.status_code == 200
+        assert compatibility.json()["status"] == "warning"
+        assert compatibility.json()["can_insert"] is True
+        assert any(issue["code"] == "theme_mismatch" for issue in compatibility.json()["issues"])
         assert inserted.status_code == 201
         assert inserted.json()["slide_index"] == 1
+        assert inserted.json()["compatibility"]["status"] == "warning"
         assert next(item for item in reused_assets.json() if item["id"] == asset_id)["usage_count"] == 1
         assert analytics.status_code == 200
         assert analytics.json()["total_reuses"] == 1
@@ -869,6 +927,18 @@ def test_asset_library_page_snapshot_lifecycle_and_reuse(tmp_path, monkeypatch):
         assert recent_assets.json()[0]["last_used_at"]
         assert owner_favorite.json()["is_favorite"] is True
         assert owner_unfavorite.json()["is_favorite"] is False
+        assert new_version.status_code == 201
+        assert new_version.json()["version_no"] == 2
+        assert new_version.json()["supersedes_asset_id"] == asset_id
+        assert new_version.json()["is_latest"] is False
+        assert [version["version_no"] for version in version_history.json()] == [2, 1]
+        assert published_new_version.json()["is_latest"] is True
+        assert old_version_after_publish["is_latest"] is False
+        assert blocked_compatibility.json()["status"] == "blocked"
+        assert blocked_compatibility.json()["can_insert"] is False
+        assert any(issue["code"] == "presentation_version_mismatch" for issue in blocked_compatibility.json()["issues"])
+        assert blocked_insert.status_code == 409
+        assert blocked_insert.json()["detail"]["compatibility"]["status"] == "blocked"
         assert len(presentation.json()["slides"]) == 2
         assert presentation.json()["slides"][1]["content"]["title"] == "核心经营指标"
         assert offline.json()["status"] == "offline"
@@ -887,6 +957,7 @@ def test_asset_library_page_snapshot_lifecycle_and_reuse(tmp_path, monkeypatch):
             "asset.promotion_requested", "asset.promotion_approved",
             "asset.favorited", "asset.unfavorited",
             "asset.preview_queued", "asset.preview_ready", "asset.preview_failed",
+            "asset.version_created",
         }
     finally:
         asyncio.run(engine.dispose())

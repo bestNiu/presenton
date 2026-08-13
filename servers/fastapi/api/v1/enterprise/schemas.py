@@ -79,9 +79,19 @@ class SlideAssetCreateRequest(AssetMetadataRequest):
     pass
 
 
+class SlideAssetVersionCreateRequest(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=300)
+    description: str | None = None
+    tags: list[str] | None = Field(default=None, max_length=30)
+
+
 class AssetItemResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: uuid.UUID
+    version_group_id: uuid.UUID
+    version_no: int
+    is_latest: bool
+    supersedes_asset_id: uuid.UUID | None
     workspace_id: uuid.UUID | None
     created_by: uuid.UUID | None
     scope_type: AssetScopeType
@@ -122,10 +132,28 @@ class AssetPageInsertRequest(BaseModel):
     after_index: int | None = Field(default=None, ge=-1)
 
 
+class AssetCompatibilityIssue(BaseModel):
+    code: str
+    severity: str
+    message: str
+
+
+class AssetCompatibilityResponse(BaseModel):
+    asset_id: uuid.UUID
+    presentation_entry_id: uuid.UUID
+    status: str
+    can_insert: bool
+    strategy: str
+    source_template_id: str | None = None
+    target_template_id: str | None = None
+    issues: list[AssetCompatibilityIssue] = Field(default_factory=list)
+
+
 class AssetPageInsertResponse(BaseModel):
     slide_id: uuid.UUID
     slide_index: int
     asset_id: uuid.UUID
+    compatibility: AssetCompatibilityResponse
 
 
 class AssetBulkTransitionRequest(BaseModel):

@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Archive, ArrowLeft, Library, Loader2, Search, Send, ShieldCheck, Star, X } from "lucide-react";
+import { Archive, ArrowLeft, History, Library, Loader2, Search, Send, ShieldCheck, Star, X } from "lucide-react";
 
 import {
   EnterpriseApi,
@@ -50,6 +50,7 @@ export default function AssetCenterPage() {
   const [selectedAssetIds, setSelectedAssetIds] = useState<string[]>([]);
   const [favoriteAssetIds, setFavoriteAssetIds] = useState<string[]>([]);
   const [favoritesOnly, setFavoritesOnly] = useState(false);
+  const [assetVersions, setAssetVersions] = useState<Record<string, AssetItemResponse[]>>({});
 
   useEffect(() => {
     EnterpriseApi.getWorkspaces()
@@ -157,6 +158,20 @@ export default function AssetCenterPage() {
     } finally { setPending(""); }
   };
 
+  const toggleVersions = async (asset: AssetItemResponse) => {
+    if (assetVersions[asset.id]) {
+      setAssetVersions((current) => { const next = { ...current }; delete next[asset.id]; return next; });
+      return;
+    }
+    setPending(`versions:${asset.id}`);
+    try {
+      const rows = await EnterpriseApi.getAssetVersions(asset.id);
+      setAssetVersions((current) => ({ ...current, [asset.id]: rows }));
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "版本历史加载失败");
+    } finally { setPending(""); }
+  };
+
   const submitPromotion = async () => {
     if (!promotionTarget || !justification.trim() || !desensitizationNotes.trim() || !authorizationConfirmed) return;
     setPending(`promote:${promotionTarget.id}`);
@@ -231,9 +246,11 @@ export default function AssetCenterPage() {
             {["queued", "rendering"].includes(asset.preview_status) && <span className="absolute bottom-2 right-2 inline-flex items-center gap-1 rounded-full bg-white/90 px-2 py-1 text-[10px] text-[#475467] shadow"><Loader2 className="h-3 w-3 animate-spin" />生成预览中</span>}
             {asset.preview_status === "error" && <button type="button" disabled={pending === `preview:${asset.id}`} onClick={() => void retryPreview(asset)} title={asset.preview_error || "预览生成失败"} className="absolute bottom-2 right-2 rounded-full bg-[#FEF2F2] px-2 py-1 text-[10px] text-[#B42318] shadow disabled:opacity-50">重新生成预览</button>}
           </div>
-          <div className="flex items-start justify-between gap-3"><div className="min-w-0"><p className="text-xs font-medium text-[#635BFF]">{typeLabel[asset.asset_type] || asset.asset_type} · {asset.scope_type === "personal" ? "个人" : asset.scope_type === "workspace" ? "空间" : "企业"}</p><h2 className="mt-2 truncate text-base font-semibold">{asset.name}</h2></div><div className="flex flex-col items-end gap-1"><span className="rounded-full bg-[#F2F4F7] px-2 py-1 text-xs text-[#475467]">{statusLabel[asset.status]}</span>{asset.authorization_status === "revoked" && <span className="rounded-full bg-[#FEF2F2] px-2 py-1 text-[10px] text-[#B42318]">授权撤销</span>}{asset.expires_at && new Date(asset.expires_at).getTime() <= Date.now() && <span className="rounded-full bg-[#FEF2F2] px-2 py-1 text-[10px] text-[#B42318]">授权过期</span>}</div></div>
+          <div className="flex items-start justify-between gap-3"><div className="min-w-0"><p className="text-xs font-medium text-[#635BFF]">{typeLabel[asset.asset_type] || asset.asset_type} · {asset.scope_type === "personal" ? "个人" : asset.scope_type === "workspace" ? "空间" : "企业"} · v{asset.version_no}{asset.is_latest ? " 当前版" : ""}</p><h2 className="mt-2 truncate text-base font-semibold">{asset.name}</h2></div><div className="flex flex-col items-end gap-1"><span className="rounded-full bg-[#F2F4F7] px-2 py-1 text-xs text-[#475467]">{statusLabel[asset.status]}</span>{asset.authorization_status === "revoked" && <span className="rounded-full bg-[#FEF2F2] px-2 py-1 text-[10px] text-[#B42318]">授权撤销</span>}{asset.expires_at && new Date(asset.expires_at).getTime() <= Date.now() && <span className="rounded-full bg-[#FEF2F2] px-2 py-1 text-[10px] text-[#B42318]">授权过期</span>}</div></div>
           <p className="mt-3 line-clamp-2 text-xs leading-5 text-[#667085]">{asset.description || "暂无说明"}</p>
           <div className="mt-3 flex flex-wrap gap-1">{asset.tags.map((tag) => <span key={tag} className="rounded bg-[#F2F1FF] px-2 py-1 text-[10px] text-[#4238CA]">{tag}</span>)}</div>
+          <button type="button" onClick={() => void toggleVersions(asset)} className="mt-3 inline-flex items-center gap-1 self-start text-[11px] text-[#667085] hover:text-[#4238CA]"><History className="h-3.5 w-3.5" />{pending === `versions:${asset.id}` ? "加载版本…" : assetVersions[asset.id] ? "收起版本" : "版本历史"}</button>
+          {assetVersions[asset.id] && <div className="mt-2 space-y-1 rounded-lg bg-[#F8F9FC] p-2">{assetVersions[asset.id].map((version) => <div key={version.id} className="flex items-center justify-between text-[10px] text-[#667085]"><span>v{version.version_no} · {statusLabel[version.status]}</span><span>{version.is_latest ? "当前发布版" : new Date(version.created_at).toLocaleDateString()}</span></div>)}</div>}
           <div className="mt-auto border-t border-[#EAECF0] pt-4"><div className="flex items-center justify-between"><span className="text-xs text-[#667085]">已复用 {asset.usage_count} 次</span>{canManageAsset(asset) && <div className="flex gap-2">{asset.status === "draft" && <button disabled={pending === asset.id} onClick={() => void transition(asset, "publish")} className="rounded-lg bg-[#635BFF] px-3 py-1.5 text-xs text-white disabled:opacity-40">发布</button>}{asset.status === "published" && <button disabled={pending === asset.id} onClick={() => void transition(asset, "offline")} className="rounded-lg border border-[#D9DCE3] px-3 py-1.5 text-xs disabled:opacity-40">下线</button>}{asset.status !== "archived" && asset.status !== "published" && <button disabled={pending === asset.id} onClick={() => void transition(asset, "archive")} className="rounded-lg border border-[#FECACA] px-2 py-1.5 text-[#B42318] disabled:opacity-40" title="归档"><Archive className="h-3.5 w-3.5" /></button>}</div>}</div>{asset.status !== "offline" && asset.status !== "archived" && asset.scope_type !== "enterprise" && <button onClick={() => setPromotionTarget(asset)} className="mt-3 w-full rounded-lg bg-[#F2F1FF] py-2 text-xs font-medium text-[#4238CA]">申请提升为{asset.scope_type === "personal" ? "空间" : "企业"}资产</button>}</div>
         </article>)}
       </section>}

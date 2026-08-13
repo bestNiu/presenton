@@ -7,6 +7,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.v1.auth.principal import AuthPrincipal, principal_from_request
 from api.v1.enterprise.schemas import (
+    AssetCreateRequest,
+    AssetItemResponse,
+    AssetPageInsertRequest,
+    AssetPageInsertResponse,
+    AssetPromotionCreateRequest,
+    AssetPromotionDecisionRequest,
+    AssetPromotionResponse,
+    AssetAnalyticsResponse,
+    AssetBulkTransitionRequest,
+    SlideAssetCreateRequest,
     AuditEventResponse,
     BidDocumentCreateRequest,
     BidDocumentResponse,
@@ -73,7 +83,7 @@ from api.v1.enterprise.schemas import (
     WorkspaceResponse,
     WorkspaceGovernancePolicyRequest,
 )
-from domains.platform.enums import BidGateType, TemplatePublicationStatus, WorkspaceRole
+from domains.platform.enums import AssetStatus, BidGateType, TemplatePublicationStatus, WorkspaceRole
 from models.sql.enterprise.audit_event import AuditEventModel
 from models.sql.user import User
 from services.database import get_async_session
@@ -113,6 +123,20 @@ from services.enterprise.notification_service import (
     mark_all_notifications_read,
     mark_notification_read,
     refresh_due_notifications,
+)
+from services.enterprise.asset_library_service import (
+    create_asset,
+    bulk_transition_assets,
+    get_asset_analytics,
+    insert_asset_page,
+    list_assets,
+    save_slide_as_asset,
+    transition_asset,
+)
+from services.enterprise.asset_promotion_service import (
+    create_promotion_request,
+    decide_promotion_request,
+    list_promotion_requests,
 )
 from services.enterprise.bid_project_service import (
     add_project_document,
@@ -176,6 +200,196 @@ from services.enterprise.workspace_service import (
 API_V1_ENTERPRISE_ROUTER = APIRouter(
     prefix="/api/v1/enterprise", tags=["Enterprise Platform"]
 )
+
+
+@API_V1_ENTERPRISE_ROUTER.post(
+    "/assets",
+    response_model=AssetItemResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def post_enterprise_asset(
+    body: AssetCreateRequest,
+    principal: AuthPrincipal = Depends(principal_from_request),
+    session: AsyncSession = Depends(get_async_session),
+):
+    return await create_asset(
+        session, principal=principal, values=body.model_dump()
+    )
+
+
+@API_V1_ENTERPRISE_ROUTER.get(
+    "/assets",
+    response_model=list[AssetItemResponse],
+)
+async def get_enterprise_assets(
+    workspace_id: uuid.UUID | None = Query(default=None),
+    asset_type: str | None = Query(default=None),
+    asset_status: AssetStatus | None = Query(default=None, alias="status"),
+    q: str | None = Query(default=None, max_length=300),
+    tags: list[str] = Query(default=[]),
+    principal: AuthPrincipal = Depends(principal_from_request),
+    session: AsyncSession = Depends(get_async_session),
+):
+    return await list_assets(
+        session,
+        principal=principal,
+        workspace_id=workspace_id,
+        asset_type=asset_type,
+        status=asset_status,
+        query=q,
+        tags=tags,
+    )
+
+
+@API_V1_ENTERPRISE_ROUTER.get(
+    "/assets/analytics",
+    response_model=AssetAnalyticsResponse,
+)
+async def get_enterprise_asset_analytics(
+    workspace_id: uuid.UUID = Query(),
+    principal: AuthPrincipal = Depends(principal_from_request),
+    session: AsyncSession = Depends(get_async_session),
+):
+    return await get_asset_analytics(
+        session, principal=principal, workspace_id=workspace_id
+    )
+
+
+@API_V1_ENTERPRISE_ROUTER.post(
+    "/workspaces/{workspace_id}/presentations/{entry_id}/slides/{slide_id}/assets",
+    response_model=AssetItemResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def post_presentation_slide_asset(
+    workspace_id: uuid.UUID,
+    entry_id: uuid.UUID,
+    slide_id: uuid.UUID,
+    body: SlideAssetCreateRequest,
+    principal: AuthPrincipal = Depends(principal_from_request),
+    session: AsyncSession = Depends(get_async_session),
+):
+    return await save_slide_as_asset(
+        session,
+        principal=principal,
+        workspace_id=workspace_id,
+        entry_id=entry_id,
+        slide_id=slide_id,
+        values=body.model_dump(),
+    )
+
+
+@API_V1_ENTERPRISE_ROUTER.post(
+    "/assets/{asset_id}/transitions/{action}",
+    response_model=AssetItemResponse,
+)
+async def post_enterprise_asset_transition(
+    asset_id: uuid.UUID,
+    action: str,
+    principal: AuthPrincipal = Depends(principal_from_request),
+    session: AsyncSession = Depends(get_async_session),
+):
+    if action not in {"publish", "offline", "archive"}:
+        raise HTTPException(status_code=404, detail="Asset action not found")
+    return await transition_asset(
+        session, asset_id=asset_id, principal=principal, action=action
+    )
+
+
+@API_V1_ENTERPRISE_ROUTER.post(
+    "/assets/bulk-transition",
+    response_model=list[AssetItemResponse],
+)
+async def post_enterprise_asset_bulk_transition(
+    body: AssetBulkTransitionRequest,
+    principal: AuthPrincipal = Depends(principal_from_request),
+    session: AsyncSession = Depends(get_async_session),
+):
+    return await bulk_transition_assets(
+        session,
+        asset_ids=body.asset_ids,
+        principal=principal,
+        action=body.action,
+    )
+
+
+@API_V1_ENTERPRISE_ROUTER.post(
+    "/assets/{asset_id}/insert-page",
+    response_model=AssetPageInsertResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def post_enterprise_asset_insert_page(
+    asset_id: uuid.UUID,
+    body: AssetPageInsertRequest,
+    principal: AuthPrincipal = Depends(principal_from_request),
+    session: AsyncSession = Depends(get_async_session),
+):
+    slide = await insert_asset_page(
+        session,
+        asset_id=asset_id,
+        workspace_id=body.workspace_id,
+        entry_id=body.presentation_entry_id,
+        principal=principal,
+        after_index=body.after_index,
+    )
+    return AssetPageInsertResponse(
+        slide_id=slide.id, slide_index=slide.index, asset_id=asset_id
+    )
+
+
+@API_V1_ENTERPRISE_ROUTER.post(
+    "/assets/{asset_id}/promotion-requests",
+    response_model=AssetPromotionResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def post_asset_promotion_request(
+    asset_id: uuid.UUID,
+    body: AssetPromotionCreateRequest,
+    principal: AuthPrincipal = Depends(principal_from_request),
+    session: AsyncSession = Depends(get_async_session),
+):
+    return await create_promotion_request(
+        session,
+        asset_id=asset_id,
+        principal=principal,
+        values=body.model_dump(),
+    )
+
+
+@API_V1_ENTERPRISE_ROUTER.get(
+    "/asset-promotion-requests",
+    response_model=list[AssetPromotionResponse],
+)
+async def get_asset_promotion_requests(
+    workspace_id: uuid.UUID | None = Query(default=None),
+    view: str = Query(default="mine", pattern="^(mine|review)$"),
+    principal: AuthPrincipal = Depends(principal_from_request),
+    session: AsyncSession = Depends(get_async_session),
+):
+    return await list_promotion_requests(
+        session,
+        principal=principal,
+        workspace_id=workspace_id,
+        view=view,
+    )
+
+
+@API_V1_ENTERPRISE_ROUTER.post(
+    "/asset-promotion-requests/{request_id}/decision",
+    response_model=AssetPromotionResponse,
+)
+async def post_asset_promotion_decision(
+    request_id: uuid.UUID,
+    body: AssetPromotionDecisionRequest,
+    principal: AuthPrincipal = Depends(principal_from_request),
+    session: AsyncSession = Depends(get_async_session),
+):
+    return await decide_promotion_request(
+        session,
+        request_id=request_id,
+        principal=principal,
+        action=body.action,
+        comment=body.comment,
+    )
 
 
 @API_V1_ENTERPRISE_ROUTER.get(

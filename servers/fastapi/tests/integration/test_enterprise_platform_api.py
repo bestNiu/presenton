@@ -2,7 +2,7 @@ import asyncio
 import hashlib
 import json
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 from fastapi import FastAPI, HTTPException, Request
@@ -15,6 +15,9 @@ from api.v1.ppt.endpoints.presentation import PRESENTATION_ROUTER
 from api.v1.ppt.endpoints.template import TEMPLATE_ROUTER
 from domains.platform.enums import SceneStatus
 from models.sql.enterprise import (
+    AssetItemModel,
+    AssetPromotionRequestModel,
+    AssetUsageEventModel,
     AuditEventModel,
     EnterpriseNotificationModel,
     BidDeliveryArtifactModel,
@@ -86,6 +89,14 @@ def _build_client(tmp_path):
             is_superuser=False,
             is_verified=True,
         ),
+        "admin": User(
+            id=uuid.uuid4(),
+            username="admin",
+            hashed_password="unused",
+            is_active=True,
+            is_superuser=True,
+            is_verified=True,
+        ),
     }
 
     async def initialize():
@@ -100,6 +111,9 @@ def _build_client(tmp_path):
                 WorkspaceFolderModel.__table__,
                 SceneDefinitionModel.__table__,
                 PresentationEntryModel.__table__,
+                AssetItemModel.__table__,
+                AssetPromotionRequestModel.__table__,
+                AssetUsageEventModel.__table__,
                 PresentationCommentThreadModel.__table__,
                 PresentationCommentReplyModel.__table__,
                 PresentationReviewModel.__table__,
@@ -468,6 +482,279 @@ def test_presentation_registration_preserves_owner_and_allows_member_listing(tmp
         assert snapshot_diff.json()["unchanged"] == 1
         assert shared_read.status_code == 200
         assert shared_read.json()["slides"][0]["ui"]["id"] == "slide-1"
+    finally:
+        asyncio.run(engine.dispose())
+
+
+def test_asset_library_page_snapshot_lifecycle_and_reuse(tmp_path):
+    client, engine, session_maker, users = _build_client(tmp_path)
+    presentation_id = uuid.uuid4()
+    slide_id = uuid.uuid4()
+
+    async def seed_presentation():
+        async with session_maker() as session:
+            session.add(
+                PresentationModel(
+                    id=presentation_id,
+                    owner_id=users["owner"].id,
+                    version=PresentationVersion.V2_STANDARD,
+                    content="quarterly business review",
+                    n_slides=1,
+                    language="Chinese",
+                    title="季度经营复盘",
+                )
+            )
+            session.add(
+                SlideModel(
+                    id=slide_id,
+                    owner_id=users["owner"].id,
+                    presentation=presentation_id,
+                    layout_group="general",
+                    layout="metrics",
+                    index=0,
+                    content={"title": "核心经营指标", "value": "42%"},
+                    ui={"id": "asset-source", "elements": []},
+                )
+            )
+            await session.commit()
+
+    asyncio.run(seed_presentation())
+    try:
+        workspace = client.post(
+            "/api/v1/enterprise/workspaces",
+            json={"name": "经营分析空间", "workspace_type": "team"},
+        ).json()
+        client.put(
+            f"/api/v1/enterprise/workspaces/{workspace['id']}/members/{users['member'].id}",
+            json={"user_id": str(users["member"].id), "role": "reviewer"},
+        )
+        entry = client.post(
+            "/api/v1/enterprise/presentations",
+            json={
+                "workspace_id": workspace["id"],
+                "presentation_id": str(presentation_id),
+                "scene_type": "general",
+            },
+        ).json()
+
+        saved = client.post(
+            f"/api/v1/enterprise/workspaces/{workspace['id']}/presentations/{entry['id']}/slides/{slide_id}/assets",
+            json={
+                "scope_type": "workspace",
+                "name": "经营指标页",
+                "tags": ["经营", "指标"],
+            },
+        )
+        asset_id = saved.json()["id"]
+        hidden_draft = client.get(
+            "/api/v1/enterprise/assets",
+            params={"workspace_id": workspace["id"], "asset_type": "page"},
+            headers={"x-test-user": "member"},
+        )
+        published = client.post(
+            f"/api/v1/enterprise/assets/{asset_id}/transitions/publish"
+        )
+        visible_published = client.get(
+            "/api/v1/enterprise/assets",
+            params={"workspace_id": workspace["id"], "asset_type": "page", "tags": "经营"},
+            headers={"x-test-user": "member"},
+        )
+        reviewer_insert_denied = client.post(
+            f"/api/v1/enterprise/assets/{asset_id}/insert-page",
+            json={
+                "workspace_id": workspace["id"],
+                "presentation_entry_id": entry["id"],
+                "after_index": 0,
+            },
+            headers={"x-test-user": "member"},
+        )
+        personal_asset = client.post(
+            f"/api/v1/enterprise/workspaces/{workspace['id']}/presentations/{entry['id']}/slides/{slide_id}/assets",
+            json={
+                "scope_type": "personal",
+                "name": "个人经营指标页",
+                "tags": ["经营", "待提升"],
+                "expires_at": (datetime.now(timezone.utc) + timedelta(days=3)).isoformat(),
+            },
+        ).json()
+        second_personal_asset = client.post(
+            f"/api/v1/enterprise/workspaces/{workspace['id']}/presentations/{entry['id']}/slides/{slide_id}/assets",
+            json={
+                "scope_type": "personal",
+                "name": "个人经营指标页二",
+                "tags": ["经营", "批量治理"],
+            },
+        ).json()
+        client.put(
+            f"/api/v1/enterprise/workspaces/{workspace['id']}/members/{users['member'].id}",
+            json={"user_id": str(users["member"].id), "role": "admin"},
+        )
+        unconfirmed_promotion = client.post(
+            f"/api/v1/enterprise/assets/{personal_asset['id']}/promotion-requests",
+            json={
+                "target_scope_type": "workspace",
+                "target_workspace_id": workspace["id"],
+                "justification": "供经营复盘团队统一复用",
+                "desensitization_notes": "已移除客户名称和敏感经营明细",
+                "authorization_confirmed": False,
+            },
+        )
+        promotion = client.post(
+            f"/api/v1/enterprise/assets/{personal_asset['id']}/promotion-requests",
+            json={
+                "target_scope_type": "workspace",
+                "target_workspace_id": workspace["id"],
+                "justification": "供经营复盘团队统一复用",
+                "desensitization_notes": "已移除客户名称和敏感经营明细",
+                "authorization_confirmed": True,
+            },
+        )
+        duplicate_promotion = client.post(
+            f"/api/v1/enterprise/assets/{personal_asset['id']}/promotion-requests",
+            json={
+                "target_scope_type": "workspace",
+                "target_workspace_id": workspace["id"],
+                "justification": "供经营复盘团队统一复用",
+                "desensitization_notes": "已移除客户名称和敏感经营明细",
+                "authorization_confirmed": True,
+            },
+        )
+        self_approval_denied = client.post(
+            f"/api/v1/enterprise/asset-promotion-requests/{promotion.json()['id']}/decision",
+            json={"action": "approve", "comment": "申请人自行审批"},
+        )
+        review_queue = client.get(
+            "/api/v1/enterprise/asset-promotion-requests",
+            params={"workspace_id": workspace["id"], "view": "review"},
+            headers={"x-test-user": "member"},
+        )
+        approved_promotion = client.post(
+            f"/api/v1/enterprise/asset-promotion-requests/{promotion.json()['id']}/decision",
+            json={"action": "approve", "comment": "脱敏与授权检查通过"},
+            headers={"x-test-user": "member"},
+        )
+        promoted_assets = client.get(
+            "/api/v1/enterprise/assets",
+            params={"workspace_id": workspace["id"]},
+            headers={"x-test-user": "member"},
+        )
+        requester_notifications = client.get(
+            "/api/v1/enterprise/notifications",
+            params={"workspace_id": workspace["id"]},
+        )
+        bulk_published = client.post(
+            "/api/v1/enterprise/assets/bulk-transition",
+            json={
+                "asset_ids": [personal_asset["id"], second_personal_asset["id"]],
+                "action": "publish",
+            },
+        )
+        enterprise_promotion = client.post(
+            f"/api/v1/enterprise/assets/{asset_id}/promotion-requests",
+            json={
+                "target_scope_type": "enterprise",
+                "justification": "供企业经营汇报场景统一复用",
+                "desensitization_notes": "已移除空间成员、客户和内部经营明细",
+                "authorization_confirmed": True,
+            },
+        )
+        enterprise_review_queue = client.get(
+            "/api/v1/enterprise/asset-promotion-requests",
+            params={"view": "review"},
+            headers={"x-test-user": "admin"},
+        )
+        enterprise_approved = client.post(
+            f"/api/v1/enterprise/asset-promotion-requests/{enterprise_promotion.json()['id']}/decision",
+            json={"action": "approve", "comment": "企业范围授权与脱敏检查通过"},
+            headers={"x-test-user": "admin"},
+        )
+        enterprise_assets = client.get(
+            "/api/v1/enterprise/assets",
+            params={"workspace_id": workspace["id"]},
+        )
+        inserted = client.post(
+            f"/api/v1/enterprise/assets/{asset_id}/insert-page",
+            json={
+                "workspace_id": workspace["id"],
+                "presentation_entry_id": entry["id"],
+                "after_index": 0,
+            },
+        )
+        reused_assets = client.get(
+            "/api/v1/enterprise/assets",
+            params={"workspace_id": workspace["id"]},
+        )
+        analytics = client.get(
+            "/api/v1/enterprise/assets/analytics",
+            params={"workspace_id": workspace["id"]},
+        )
+        presentation = client.get(f"/api/v1/ppt/presentation/{presentation_id}")
+        offline = client.post(
+            f"/api/v1/enterprise/assets/{asset_id}/transitions/offline"
+        )
+        offline_insert_denied = client.post(
+            f"/api/v1/enterprise/assets/{asset_id}/insert-page",
+            json={
+                "workspace_id": workspace["id"],
+                "presentation_entry_id": entry["id"],
+                "after_index": 1,
+            },
+        )
+        outsider_list_denied = client.get(
+            "/api/v1/enterprise/assets",
+            params={"workspace_id": workspace["id"]},
+            headers={"x-test-user": "outsider"},
+        )
+        events = client.get(
+            f"/api/v1/enterprise/workspaces/{workspace['id']}/audit-events"
+        ).json()
+
+        assert saved.status_code == 201
+        assert saved.json()["status"] == "draft"
+        assert saved.json()["payload_hash"]
+        assert hidden_draft.json() == []
+        assert published.json()["status"] == "published"
+        assert [item["id"] for item in visible_published.json()] == [asset_id]
+        assert reviewer_insert_denied.status_code == 404
+        assert unconfirmed_promotion.status_code == 422
+        assert promotion.status_code == 201
+        assert promotion.json()["status"] == "pending"
+        assert duplicate_promotion.status_code == 409
+        assert self_approval_denied.status_code == 409
+        assert review_queue.json()[0]["id"] == promotion.json()["id"]
+        assert approved_promotion.json()["status"] == "approved"
+        promoted_asset = next(item for item in promoted_assets.json() if item["id"] == approved_promotion.json()["promoted_asset_id"])
+        assert promoted_asset["scope_type"] == "workspace"
+        assert promoted_asset["status"] == "published"
+        assert promoted_asset["parent_asset_id"] == personal_asset["id"]
+        assert any(item["notification_type"] == "asset.promotion_approved" for item in requester_notifications.json()["notifications"])
+        assert any(item["notification_type"] == "asset.authorization_expiring" for item in requester_notifications.json()["notifications"])
+        assert bulk_published.status_code == 200
+        assert {item["status"] for item in bulk_published.json()} == {"published"}
+        assert enterprise_promotion.status_code == 201
+        assert enterprise_review_queue.json()[0]["id"] == enterprise_promotion.json()["id"]
+        assert enterprise_approved.json()["status"] == "approved"
+        promoted_enterprise_asset = next(item for item in enterprise_assets.json() if item["id"] == enterprise_approved.json()["promoted_asset_id"])
+        assert promoted_enterprise_asset["scope_type"] == "enterprise"
+        assert promoted_enterprise_asset["parent_asset_id"] == asset_id
+        assert inserted.status_code == 201
+        assert inserted.json()["slide_index"] == 1
+        assert reused_assets.json()[0]["usage_count"] == 1
+        assert analytics.status_code == 200
+        assert analytics.json()["total_reuses"] == 1
+        assert analytics.json()["unique_presentations"] == 1
+        assert analytics.json()["unique_users"] == 1
+        assert analytics.json()["top_assets"][0]["asset_id"] == asset_id
+        assert saved.json()["preview"]["title"] == "核心经营指标"
+        assert len(presentation.json()["slides"]) == 2
+        assert presentation.json()["slides"][1]["content"]["title"] == "核心经营指标"
+        assert offline.json()["status"] == "offline"
+        assert offline_insert_denied.status_code == 409
+        assert outsider_list_denied.status_code == 404
+        assert {event["action"] for event in events} >= {
+            "asset.created", "asset.publish", "asset.reused", "asset.offline",
+            "asset.promotion_requested", "asset.promotion_approved",
+        }
     finally:
         asyncio.run(engine.dispose())
 

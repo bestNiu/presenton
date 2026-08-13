@@ -40,6 +40,7 @@ import {
 import PresentationHeader from "./PresentationHeader";
 import PresentationActions from "./PresentationActions";
 import EnterpriseReviewPanel from "./EnterpriseReviewPanel";
+import EnterpriseAssetPanel from "./EnterpriseAssetPanel";
 import {
   TEMPLATE_V2_ACTIVATE_SURFACE_EVENT,
   TEMPLATE_V2_SURFACE_SELECTED_EVENT,
@@ -699,6 +700,13 @@ const PresentationPage: React.FC<PresentationPageProps> = ({
           entryId={enterpriseEntryId}
           currentSlideIndex={selectedSlide}
           currentSlideId={presentationData?.slides?.[selectedSlide]?.id}
+        />}
+        {enterpriseWorkspaceId && enterpriseEntryId && <EnterpriseAssetPanel
+          workspaceId={enterpriseWorkspaceId}
+          entryId={enterpriseEntryId}
+          currentSlideIndex={selectedSlide}
+          currentSlideId={presentationData?.slides?.[selectedSlide]?.id}
+          onPresentationChanged={handlePresentationChanged}
         />}
         <div className="flex flex-1 min-h-0 gap-3 overflow-hidden xl:gap-5 2xl:gap-6">
           <div className="hidden h-full w-[120px] shrink-0 self-start sticky top-0 pt-[18px] md:block">

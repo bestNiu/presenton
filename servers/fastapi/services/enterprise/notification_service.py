@@ -7,9 +7,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.v1.auth.principal import AuthPrincipal
 from models.sql.enterprise.notification import EnterpriseNotificationModel
+from models.sql.enterprise.asset_item import AssetItemModel
 from models.sql.enterprise.presentation_entry import PresentationEntryModel
 from models.sql.enterprise.presentation_governance import PresentationCommentThreadModel
-from domains.platform.enums import PresentationCommentStatus
+from domains.platform.enums import AssetStatus, PresentationCommentStatus
 from services.enterprise.workspace_service import require_workspace_role
 
 
@@ -70,8 +71,6 @@ async def refresh_due_notifications(
         .join(PresentationEntryModel, PresentationEntryModel.id == PresentationCommentThreadModel.presentation_entry_id)
         .where(*predicates)
     )).all())
-    if not rows:
-        return 0
     existing = set((await session.execute(
         select(EnterpriseNotificationModel.notification_type, EnterpriseNotificationModel.resource_id).where(
             EnterpriseNotificationModel.recipient_id == principal.user_id,
@@ -104,6 +103,49 @@ async def refresh_due_notifications(
             metadata={"due_at": due_at.isoformat()},
         )
         created += 1
+    asset_predicates = [
+        AssetItemModel.created_by == principal.user_id,
+        AssetItemModel.status.in_([AssetStatus.DRAFT, AssetStatus.PUBLISHED]),
+        AssetItemModel.expires_at.is_not(None),
+        AssetItemModel.expires_at <= now + timedelta(days=7),
+    ]
+    if workspace_id is not None:
+        asset_predicates.append(AssetItemModel.workspace_id == workspace_id)
+    expiring_assets = list((await session.scalars(
+        select(AssetItemModel).where(*asset_predicates)
+    )).all())
+    if expiring_assets:
+        existing_asset_notifications = set((await session.execute(
+            select(EnterpriseNotificationModel.notification_type, EnterpriseNotificationModel.resource_id).where(
+                EnterpriseNotificationModel.recipient_id == principal.user_id,
+                EnterpriseNotificationModel.resource_type == "asset_item",
+                EnterpriseNotificationModel.resource_id.in_([str(asset.id) for asset in expiring_assets]),
+                EnterpriseNotificationModel.notification_type.in_(["asset.authorization_expiring", "asset.authorization_expired"]),
+            )
+        )).all())
+        for asset in expiring_assets:
+            expires_at = asset.expires_at
+            if expires_at is None:
+                continue
+            if expires_at.tzinfo is None:
+                expires_at = expires_at.replace(tzinfo=timezone.utc)
+            notification_type = "asset.authorization_expired" if expires_at <= now else "asset.authorization_expiring"
+            if (notification_type, str(asset.id)) in existing_asset_notifications:
+                continue
+            queue_notifications(
+                session,
+                recipient_ids={principal.user_id},
+                actor_id=None,
+                workspace_id=asset.workspace_id,
+                notification_type=notification_type,
+                title="资产授权已到期" if expires_at <= now else "资产授权即将到期",
+                body=f"{asset.name} 的使用授权{'已到期' if expires_at <= now else '将在 7 天内到期'}",
+                resource_type="asset_item",
+                resource_id=asset.id,
+                action_url=f"/workspace/assets{f'?workspace_id={asset.workspace_id}' if asset.workspace_id else ''}",
+                metadata={"expires_at": expires_at.isoformat()},
+            )
+            created += 1
     if created:
         await session.commit()
     return created

@@ -70,6 +70,26 @@ class PresentationCommentStatus(str, Enum):
     RESOLVED = "resolved"
 
 
+class AssetScopeType(str, Enum):
+    PERSONAL = "personal"
+    WORKSPACE = "workspace"
+    ENTERPRISE = "enterprise"
+
+
+class AssetStatus(str, Enum):
+    DRAFT = "draft"
+    PUBLISHED = "published"
+    OFFLINE = "offline"
+    ARCHIVED = "archived"
+
+
+class AssetPromotionStatus(str, Enum):
+    PENDING = "pending"
+    APPROVED = "approved"
+    REJECTED = "rejected"
+    CANCELLED = "cancelled"
+
+
 class TemplateScopeType(str, Enum):
     ENTERPRISE = "enterprise"
     WORKSPACE = "workspace"

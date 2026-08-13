@@ -4,6 +4,9 @@ import uuid
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from domains.platform.enums import (
+    AssetScopeType,
+    AssetStatus,
+    AssetPromotionStatus,
     BidContentStatus,
     BidCommitmentStatus,
     BidDocumentStatus,
@@ -33,6 +36,146 @@ from domains.platform.enums import (
     WorkspaceRole,
     WorkspaceType,
 )
+
+
+class AssetMetadataRequest(BaseModel):
+    scope_type: AssetScopeType = AssetScopeType.PERSONAL
+    name: str = Field(min_length=1, max_length=300)
+    description: str | None = None
+    scene_type: str | None = Field(default=None, max_length=64)
+    tags: list[str] = Field(default_factory=list, max_length=30)
+    authorization_status: str = Field(default="internal", pattern="^(internal|authorized|revoked)$")
+    expires_at: datetime | None = None
+
+    @field_validator("name")
+    @classmethod
+    def normalize_asset_name(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("Asset name is required")
+        return value
+
+    @field_validator("tags")
+    @classmethod
+    def normalize_asset_tags(cls, values: list[str]) -> list[str]:
+        normalized: list[str] = []
+        for value in values:
+            tag = value.strip()
+            if tag and tag not in normalized:
+                if len(tag) > 64:
+                    raise ValueError("Asset tag cannot exceed 64 characters")
+                normalized.append(tag)
+        return normalized
+
+
+class AssetCreateRequest(AssetMetadataRequest):
+    workspace_id: uuid.UUID | None = None
+    asset_type: str = Field(pattern="^(page|chart|image|logo|copy|component)$")
+    payload: dict
+    compatibility: dict = Field(default_factory=dict)
+
+
+class SlideAssetCreateRequest(AssetMetadataRequest):
+    pass
+
+
+class AssetItemResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: uuid.UUID
+    workspace_id: uuid.UUID | None
+    created_by: uuid.UUID | None
+    scope_type: AssetScopeType
+    asset_type: str
+    name: str
+    description: str | None
+    scene_type: str | None
+    tags: list[str]
+    payload_hash: str
+    preview: dict
+    source_presentation_entry_id: uuid.UUID | None
+    source_slide_id: uuid.UUID | None
+    parent_asset_id: uuid.UUID | None
+    authorization_status: str
+    expires_at: datetime | None
+    compatibility: dict
+    status: AssetStatus
+    usage_count: int
+    published_by: uuid.UUID | None
+    published_at: datetime | None
+    created_at: datetime
+    updated_at: datetime
+
+
+class AssetPageInsertRequest(BaseModel):
+    workspace_id: uuid.UUID
+    presentation_entry_id: uuid.UUID
+    after_index: int | None = Field(default=None, ge=-1)
+
+
+class AssetPageInsertResponse(BaseModel):
+    slide_id: uuid.UUID
+    slide_index: int
+    asset_id: uuid.UUID
+
+
+class AssetBulkTransitionRequest(BaseModel):
+    asset_ids: list[uuid.UUID] = Field(min_length=1, max_length=100)
+    action: str = Field(pattern="^(publish|offline|archive)$")
+
+
+class AssetPromotionCreateRequest(BaseModel):
+    target_scope_type: AssetScopeType
+    target_workspace_id: uuid.UUID | None = None
+    justification: str = Field(min_length=5, max_length=2000)
+    desensitization_notes: str = Field(min_length=5, max_length=4000)
+    authorization_confirmed: bool
+
+
+class AssetPromotionDecisionRequest(BaseModel):
+    action: str = Field(pattern="^(approve|reject)$")
+    comment: str = Field(min_length=2, max_length=2000)
+
+
+class AssetPromotionResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: uuid.UUID
+    source_asset_id: uuid.UUID
+    promoted_asset_id: uuid.UUID | None
+    target_scope_type: AssetScopeType
+    target_workspace_id: uuid.UUID | None
+    requested_by: uuid.UUID
+    asset_name_snapshot: str
+    justification: str
+    desensitization_notes: str
+    authorization_confirmed: bool
+    status: AssetPromotionStatus
+    decided_by: uuid.UUID | None
+    decision_comment: str | None
+    decided_at: datetime | None
+    created_at: datetime
+    updated_at: datetime
+
+
+class AssetAnalyticsTopItem(BaseModel):
+    asset_id: uuid.UUID
+    name: str
+    asset_type: str
+    scope_type: AssetScopeType
+    reuse_count: int
+
+
+class AssetAnalyticsResponse(BaseModel):
+    total_assets: int
+    published_assets: int
+    expiring_within_7_days: int
+    expired_assets: int
+    total_reuses: int
+    reuses_last_30_days: int
+    unique_presentations: int
+    unique_users: int
+    by_scope: dict[str, int]
+    by_type: dict[str, int]
+    top_assets: list[AssetAnalyticsTopItem]
 
 
 class BidProjectCreateRequest(BaseModel):

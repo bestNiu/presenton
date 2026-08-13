@@ -11,6 +11,7 @@ import {
   FileText,
   FolderKanban,
   LayoutTemplate,
+  Library,
   Loader2,
   MonitorPlay,
   PenLine,
@@ -336,6 +337,7 @@ function WorkspacePage() {
         <div className="flex flex-wrap gap-2">
           {activeWorkspaceId && <div className="relative"><button type="button" onClick={() => setShowNotifications((value) => !value)} className="relative inline-flex h-10 items-center gap-2 rounded-lg border border-[#D9DCE3] bg-white px-3 text-sm text-[#344054]"><Bell className="h-4 w-4" />通知{Boolean(notifications?.unread_count) && <span className="absolute -right-1 -top-1 flex h-5 min-w-5 items-center justify-center rounded-full bg-[#D92D20] px-1 text-[10px] text-white">{notifications?.unread_count}</span>}</button>{showNotifications && <div className="absolute right-0 top-12 z-30 w-[360px] overflow-hidden rounded-2xl border border-[#E3E4EA] bg-white shadow-xl"><div className="flex items-center justify-between border-b border-[#F0F1F3] px-4 py-3"><span className="text-sm font-semibold">站内通知</span><button type="button" onClick={() => void readAllNotifications()} className="text-xs text-[#635BFF]">全部已读</button></div><div className="max-h-96 overflow-y-auto">{notifications?.notifications.length ? notifications.notifications.map((item) => <button type="button" key={item.id} onClick={() => void openNotification(item.id, item.action_url)} className={`block w-full border-b border-[#F0F1F3] px-4 py-3 text-left hover:bg-[#F8F9FC] ${item.is_read ? "opacity-60" : "bg-[#FAFAFF]"}`}><div className="flex items-start justify-between gap-2"><p className="text-sm font-medium text-[#101828]">{item.title}</p>{!item.is_read && <span className="mt-1 h-2 w-2 shrink-0 rounded-full bg-[#635BFF]" />}</div><p className="mt-1 text-xs leading-5 text-[#667085]">{item.body}</p><p className="mt-1 text-[10px] text-[#98A2B3]">{new Date(item.created_at).toLocaleString()}</p></button>) : <p className="p-6 text-center text-sm text-[#667085]">暂无通知</p>}</div></div>}</div>}
           {activeWorkspaceId && (
+            <>
             <Link
               href={`/workspace/templates?workspace_id=${encodeURIComponent(activeWorkspaceId)}`}
               className="inline-flex h-10 items-center gap-2 rounded-lg border border-[#D9DCE3] bg-white px-4 text-sm font-medium text-[#344054] transition hover:bg-[#F7F7FA]"
@@ -343,6 +345,14 @@ function WorkspacePage() {
               <LayoutTemplate className="h-4 w-4" />
               模板治理
             </Link>
+            <Link
+              href={`/workspace/assets?workspace_id=${encodeURIComponent(activeWorkspaceId)}`}
+              className="inline-flex items-center gap-2 rounded-lg border border-[#D9DCE3] bg-white px-3 py-2 text-sm font-medium text-[#344054] hover:bg-[#F8F9FC]"
+            >
+              <Library className="h-4 w-4" />
+              资产中心
+            </Link>
+            </>
           )}
           <button
             type="button"

@@ -380,6 +380,89 @@ export interface TemplatePublicationCreateInput {
   recommended_order?: number;
 }
 
+export type AssetScopeType = "personal" | "workspace" | "enterprise";
+export type AssetStatus = "draft" | "published" | "offline" | "archived";
+
+export interface AssetItemResponse {
+  id: string;
+  workspace_id: string | null;
+  created_by: string | null;
+  scope_type: AssetScopeType;
+  asset_type: "page" | "chart" | "image" | "logo" | "copy" | "component";
+  name: string;
+  description: string | null;
+  scene_type: string | null;
+  tags: string[];
+  payload_hash: string;
+  preview: {
+    kind?: string;
+    title?: string;
+    subtitle?: string | null;
+    layout?: string;
+    element_count?: number;
+    accent?: string;
+  };
+  source_presentation_entry_id: string | null;
+  source_slide_id: string | null;
+  parent_asset_id: string | null;
+  authorization_status: "internal" | "authorized" | "revoked";
+  expires_at: string | null;
+  compatibility: Record<string, unknown>;
+  status: AssetStatus;
+  usage_count: number;
+  published_by: string | null;
+  published_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AssetPageInsertResponse {
+  slide_id: string;
+  slide_index: number;
+  asset_id: string;
+}
+
+export type AssetPromotionStatus = "pending" | "approved" | "rejected" | "cancelled";
+
+export interface AssetPromotionResponse {
+  id: string;
+  source_asset_id: string;
+  promoted_asset_id: string | null;
+  target_scope_type: AssetScopeType;
+  target_workspace_id: string | null;
+  requested_by: string;
+  asset_name_snapshot: string;
+  justification: string;
+  desensitization_notes: string;
+  authorization_confirmed: boolean;
+  status: AssetPromotionStatus;
+  decided_by: string | null;
+  decision_comment: string | null;
+  decided_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AssetAnalyticsResponse {
+  total_assets: number;
+  published_assets: number;
+  expiring_within_7_days: number;
+  expired_assets: number;
+  total_reuses: number;
+  reuses_last_30_days: number;
+  unique_presentations: number;
+  unique_users: number;
+  by_scope: Record<string, number>;
+  by_type: Record<string, number>;
+  top_assets: Array<{
+    asset_id: string;
+    name: string;
+    asset_type: string;
+    scope_type: AssetScopeType;
+    reuse_count: number;
+  }>;
+}
+
 export class EnterpriseApi {
   static async ensurePersonalWorkspace(): Promise<WorkspaceResponse> {
     const response = await fetch(
@@ -402,6 +485,154 @@ export class EnterpriseApi {
       response,
       "Failed to load workspaces"
     );
+  }
+
+  static async getAssets(
+    workspaceId?: string,
+    filters: { assetType?: string; status?: AssetStatus; q?: string } = {}
+  ): Promise<AssetItemResponse[]> {
+    const params = new URLSearchParams();
+    if (workspaceId) params.set("workspace_id", workspaceId);
+    if (filters.assetType) params.set("asset_type", filters.assetType);
+    if (filters.status) params.set("status", filters.status);
+    if (filters.q) params.set("q", filters.q);
+    const response = await fetch(
+      getApiUrl(`/api/v1/enterprise/assets?${params.toString()}`),
+      { credentials: "include", cache: "no-store" }
+    );
+    return ApiResponseHandler.handleResponse(response, "Failed to load assets");
+  }
+
+  static async getAssetAnalytics(workspaceId: string): Promise<AssetAnalyticsResponse> {
+    const params = new URLSearchParams({ workspace_id: workspaceId });
+    const response = await fetch(
+      getApiUrl(`/api/v1/enterprise/assets/analytics?${params.toString()}`),
+      { credentials: "include", cache: "no-store" }
+    );
+    return ApiResponseHandler.handleResponse(response, "Failed to load asset analytics");
+  }
+
+  static async saveSlideAsAsset(
+    workspaceId: string,
+    entryId: string,
+    slideId: string,
+    input: {
+      scope_type: "personal" | "workspace";
+      name: string;
+      description?: string;
+      tags?: string[];
+    }
+  ): Promise<AssetItemResponse> {
+    const response = await fetch(
+      getApiUrl(
+        `/api/v1/enterprise/workspaces/${encodeURIComponent(workspaceId)}/presentations/${encodeURIComponent(entryId)}/slides/${encodeURIComponent(slideId)}/assets`
+      ),
+      {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(input),
+      }
+    );
+    return ApiResponseHandler.handleResponse(response, "Failed to save slide as asset");
+  }
+
+  static async transitionAsset(
+    assetId: string,
+    action: "publish" | "offline" | "archive"
+  ): Promise<AssetItemResponse> {
+    const response = await fetch(
+      getApiUrl(`/api/v1/enterprise/assets/${encodeURIComponent(assetId)}/transitions/${action}`),
+      { method: "POST", credentials: "include" }
+    );
+    return ApiResponseHandler.handleResponse(response, "Failed to update asset");
+  }
+
+  static async bulkTransitionAssets(
+    assetIds: string[],
+    action: "publish" | "offline" | "archive"
+  ): Promise<AssetItemResponse[]> {
+    const response = await fetch(getApiUrl("/api/v1/enterprise/assets/bulk-transition"), {
+      method: "POST",
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ asset_ids: assetIds, action }),
+    });
+    return ApiResponseHandler.handleResponse(response, "Failed to bulk update assets");
+  }
+
+  static async insertAssetPage(
+    assetId: string,
+    workspaceId: string,
+    entryId: string,
+    afterIndex: number
+  ): Promise<AssetPageInsertResponse> {
+    const response = await fetch(
+      getApiUrl(`/api/v1/enterprise/assets/${encodeURIComponent(assetId)}/insert-page`),
+      {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          workspace_id: workspaceId,
+          presentation_entry_id: entryId,
+          after_index: afterIndex,
+        }),
+      }
+    );
+    return ApiResponseHandler.handleResponse(response, "Failed to insert asset page");
+  }
+
+  static async createAssetPromotionRequest(
+    assetId: string,
+    input: {
+      target_scope_type: "workspace" | "enterprise";
+      target_workspace_id?: string;
+      justification: string;
+      desensitization_notes: string;
+      authorization_confirmed: boolean;
+    }
+  ): Promise<AssetPromotionResponse> {
+    const response = await fetch(
+      getApiUrl(`/api/v1/enterprise/assets/${encodeURIComponent(assetId)}/promotion-requests`),
+      {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(input),
+      }
+    );
+    return ApiResponseHandler.handleResponse(response, "Failed to request asset promotion");
+  }
+
+  static async getAssetPromotionRequests(
+    workspaceId: string | undefined,
+    view: "mine" | "review"
+  ): Promise<AssetPromotionResponse[]> {
+    const params = new URLSearchParams({ view });
+    if (workspaceId) params.set("workspace_id", workspaceId);
+    const response = await fetch(
+      getApiUrl(`/api/v1/enterprise/asset-promotion-requests?${params.toString()}`),
+      { credentials: "include", cache: "no-store" }
+    );
+    return ApiResponseHandler.handleResponse(response, "Failed to load asset promotion requests");
+  }
+
+  static async decideAssetPromotionRequest(
+    requestId: string,
+    action: "approve" | "reject",
+    comment: string
+  ): Promise<AssetPromotionResponse> {
+    const response = await fetch(
+      getApiUrl(`/api/v1/enterprise/asset-promotion-requests/${encodeURIComponent(requestId)}/decision`),
+      {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action, comment }),
+      }
+    );
+    return ApiResponseHandler.handleResponse(response, "Failed to decide asset promotion request");
   }
 
   static async getWorkspaceMembers(workspaceId: string): Promise<WorkspaceMemberResponse[]> {

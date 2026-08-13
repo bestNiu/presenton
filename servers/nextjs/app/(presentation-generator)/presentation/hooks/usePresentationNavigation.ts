@@ -86,18 +86,23 @@ export const usePresentationNavigation = (
       document.exitFullscreen().catch(() => undefined);
     }
     setIsFullscreen(false);
-    router.push(`/presentation?id=${presentationId}`);
-  }, [router, presentationId, setIsFullscreen]);
+    const params = new URLSearchParams(searchParams.toString());
+    params.set("id", presentationId);
+    params.delete("mode");
+    params.delete("slide");
+    router.push(`/presentation?${params.toString()}`);
+  }, [router, presentationId, searchParams, setIsFullscreen]);
 
   const handleSlideChange = useCallback((newSlide: number, presentationData: any) => {
     if (newSlide >= 0 && newSlide < presentationData?.slides.length!) {
       setSelectedSlide(newSlide);
-      router.push(
-        `/presentation?id=${presentationId}&mode=present&slide=${newSlide}`,
-        { scroll: false }
-      );
+      const params = new URLSearchParams(searchParams.toString());
+      params.set("id", presentationId);
+      params.set("mode", "present");
+      params.set("slide", String(newSlide));
+      router.push(`/presentation?${params.toString()}`, { scroll: false });
     }
-  }, [router, presentationId, setSelectedSlide]);
+  }, [router, presentationId, searchParams, setSelectedSlide]);
 
   return {
     isPresentMode,

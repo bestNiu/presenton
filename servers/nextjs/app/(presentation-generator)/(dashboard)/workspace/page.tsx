@@ -652,7 +652,7 @@ function WorkspacePage() {
                   key={presentation.id}
                   className="rounded-xl border border-[#E3E4EA] bg-white p-4 transition hover:border-[#B9B2FF] hover:shadow-sm"
                 >
-                  <Link href={`/presentation?id=${encodeURIComponent(presentation.presentation_id)}&type=standard`} className="flex items-center gap-3">
+                  <Link href={`/presentation?id=${encodeURIComponent(presentation.presentation_id)}&type=standard&workspace_id=${encodeURIComponent(activeWorkspaceId)}&entry_id=${encodeURIComponent(presentation.id)}`} className="flex items-center gap-3">
                     <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-[#F2F1FF] text-[#635BFF]"><MonitorPlay className="h-5 w-5" /></div>
                     <div className="min-w-0"><p className="truncate text-sm font-semibold text-[#101828]">{presentation.title || "未命名演示文稿"}</p><p className="mt-1 text-xs text-[#667085]">{creationModeLabel[presentation.creation_mode]} · {presentation.status}</p></div>
                   </Link>

@@ -117,7 +117,7 @@ export default function PresentationReviewPage() {
         <Link href="/workspace" className="inline-flex items-center gap-2 text-sm text-[#475467]"><ArrowLeft className="h-4 w-4" />返回通用 PPT 工作台</Link>
         <div className="mt-5 flex flex-wrap items-end justify-between gap-4">
           <div><p className="text-xs font-medium text-[#635BFF]">企业演示评审中心</p><h1 className="mt-1 text-2xl font-semibold">{governance?.entry.title || "演示文稿"}</h1><p className="mt-2 text-sm text-[#667085]">页级评论、整改责任与冻结版本差异统一留痕，竞标及通用文稿均适用。</p></div>
-          <div className="flex gap-2 text-xs"><span className="rounded-full bg-white px-3 py-2">待处理 {openCount}</span><span className="rounded-full bg-[#FEF2F2] px-3 py-2 text-[#B42318]">阻断 {blockingCount}</span></div>
+          <div className="flex gap-2 text-xs"><Link href={governance ? `/presentation?id=${encodeURIComponent(governance.entry.presentation_id)}&type=standard&workspace_id=${encodeURIComponent(workspaceId)}&entry_id=${encodeURIComponent(entryId)}` : "#"} className="rounded-full bg-[#17171B] px-3 py-2 text-white">进入画布整改</Link><span className="rounded-full bg-white px-3 py-2">待处理 {openCount}</span><span className="rounded-full bg-[#FEF2F2] px-3 py-2 text-[#B42318]">阻断 {blockingCount}</span></div>
         </div>
         {error && <div className="mt-4 rounded-xl border border-[#FDA29B] bg-[#FEF2F2] p-3 text-sm text-[#B42318]">{error}</div>}
 

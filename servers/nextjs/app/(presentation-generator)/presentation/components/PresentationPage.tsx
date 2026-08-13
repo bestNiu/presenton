@@ -39,6 +39,7 @@ import {
 } from "../../_shared/blank-slide";
 import PresentationHeader from "./PresentationHeader";
 import PresentationActions from "./PresentationActions";
+import EnterpriseReviewPanel from "./EnterpriseReviewPanel";
 import {
   TEMPLATE_V2_ACTIVATE_SURFACE_EVENT,
   TEMPLATE_V2_SURFACE_SELECTED_EVENT,
@@ -167,6 +168,8 @@ const PresentationPage: React.FC<PresentationPageProps> = ({
   const router = useRouter();
   const shouldPreloadTemplateV2Presentation =
     searchParams.get("editor") === "v2" || searchParams.get("type") === "smart";
+  const enterpriseWorkspaceId = searchParams.get("workspace_id");
+  const enterpriseEntryId = searchParams.get("entry_id");
 
   const { presentationData, isStreaming } = useSelector(
     (state: RootState) => state.presentationGeneration
@@ -691,6 +694,12 @@ const PresentationPage: React.FC<PresentationPageProps> = ({
           currentSlide={selectedSlide}
           generationMode={isSmartPresentation ? "smart" : "standard"}
         />
+        {enterpriseWorkspaceId && enterpriseEntryId && <EnterpriseReviewPanel
+          workspaceId={enterpriseWorkspaceId}
+          entryId={enterpriseEntryId}
+          currentSlideIndex={selectedSlide}
+          currentSlideId={presentationData?.slides?.[selectedSlide]?.id}
+        />}
         <div className="flex flex-1 min-h-0 gap-3 overflow-hidden xl:gap-5 2xl:gap-6">
           <div className="hidden h-full w-[120px] shrink-0 self-start sticky top-0 pt-[18px] md:block">
             <SidePanel

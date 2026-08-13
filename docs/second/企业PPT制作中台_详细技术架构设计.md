@@ -551,6 +551,10 @@ sequenceDiagram
 
 冻结快照 manifest 增加 `citation_manifest` 与 `citation_manifest_hash`。清单固化引用 ID、页面、元素、来源类型、来源 ID、引用版本、locator、摘录、冻结时状态、资料名称和当时最新版本；它与当前可变的资料表分离，因此资料后续升级、撤销或删除时，历史交付件仍可证明冻结时使用了哪一版本和哪一段证据。引用 manifest 参与整个 snapshot manifest 哈希，任何事后篡改都会改变快照摘要。
 
+### 11.11 历史冻结证据查询与完整性验证（T37）
+
+快照证据接口按工作区 ACL 返回指定冻结版本的引用清单，并分别重新计算整体 manifest 哈希和引用 manifest 哈希。响应明确给出 `manifest_integrity` 与 `citation_integrity`，调用方无需信任数据库中的单一摘要字段。评审中心默认展示最新冻结版本的证据条目、来源版本、locator、摘录和完整性结果；该视图读取冻结副本，不受当前资料被替换或撤销影响。
+
 ---
 
 ## 12. AI 编排架构

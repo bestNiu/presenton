@@ -998,6 +998,13 @@ def test_presentation_registration_preserves_owner_and_allows_member_listing(tmp
         assert {item["code"] for item in freeze_preflight.json()["checks"]} == {"review", "quality", "comments", "citations"}
         assert frozen.json()["manifest"]["citation_manifest"] == []
         assert len(frozen.json()["manifest"]["citation_manifest_hash"]) == 64
+        snapshot_evidence = client.get(
+            f"/api/v1/enterprise/workspaces/{workspace['id']}/presentations/{entry_id}/snapshots/{frozen.json()['id']}/evidence"
+        )
+        assert snapshot_evidence.status_code == 200
+        assert snapshot_evidence.json()["manifest_integrity"] is True
+        assert snapshot_evidence.json()["citation_integrity"] is True
+        assert snapshot_evidence.json()["citations"] == []
         frozen_update_denied = client.patch(
             "/api/v1/ppt/presentation/update",
             json={"id": str(presentation_id), "title": "不应覆盖的标题"},

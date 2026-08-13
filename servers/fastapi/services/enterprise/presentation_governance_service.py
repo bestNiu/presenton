@@ -481,6 +481,35 @@ async def get_presentation_governance(
     return {"entry": entry, "reviews": reviews, "snapshots": snapshots}
 
 
+async def get_presentation_snapshot_evidence(
+    session: AsyncSession,
+    *,
+    workspace_id: uuid.UUID,
+    entry_id: uuid.UUID,
+    snapshot_id: uuid.UUID,
+    principal: AuthPrincipal,
+) -> dict:
+    await require_workspace_role(session, workspace_id=workspace_id, principal=principal)
+    await _require_entry(session, workspace_id=workspace_id, entry_id=entry_id)
+    snapshot = await session.get(PresentationSnapshotModel, snapshot_id)
+    if snapshot is None or snapshot.presentation_entry_id != entry_id:
+        raise HTTPException(status_code=404, detail="Presentation snapshot not found")
+    manifest = snapshot.manifest or {}
+    citations = manifest.get("citation_manifest")
+    citations = citations if isinstance(citations, list) else []
+    expected_citation_hash = manifest.get("citation_manifest_hash")
+    return {
+        "snapshot_id": snapshot.id,
+        "version_no": snapshot.version_no,
+        "frozen_at": snapshot.frozen_at,
+        "manifest_hash": snapshot.manifest_hash,
+        "manifest_integrity": _canonical_hash(manifest) == snapshot.manifest_hash,
+        "citation_manifest_hash": expected_citation_hash,
+        "citation_integrity": isinstance(expected_citation_hash, str) and _canonical_hash(citations) == expected_citation_hash,
+        "citations": citations,
+    }
+
+
 async def get_presentation_freeze_preflight(
     session: AsyncSession,
     *,

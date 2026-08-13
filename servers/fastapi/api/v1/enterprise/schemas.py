@@ -1013,6 +1013,17 @@ class PresentationFreezePreflightResponse(BaseModel):
     checks: list[PresentationFreezePreflightCheckResponse]
 
 
+class PresentationSnapshotEvidenceResponse(BaseModel):
+    snapshot_id: uuid.UUID
+    version_no: int
+    frozen_at: datetime
+    manifest_hash: str
+    manifest_integrity: bool
+    citation_manifest_hash: str | None
+    citation_integrity: bool
+    citations: list[dict]
+
+
 class PresentationCommentCreateRequest(BaseModel):
     slide_id: uuid.UUID | None = None
     slide_index: int | None = Field(default=None, ge=0)

@@ -379,6 +379,17 @@ export interface PresentationFreezePreflightResponse {
   checks: Array<{ code: string; label: string; passed: boolean; message: string; count: number }>;
 }
 
+export interface PresentationSnapshotEvidenceResponse {
+  snapshot_id: string;
+  version_no: number;
+  frozen_at: string;
+  manifest_hash: string;
+  manifest_integrity: boolean;
+  citation_manifest_hash: string | null;
+  citation_integrity: boolean;
+  citations: Array<{ id: string; slide_id: string | null; source_type: string; source_id: string; source_version: string | null; locator: string | null; excerpt: string | null; status: string; source_name: string | null; current_version: string | null }>;
+}
+
 export interface PresentationCommentThreadResponse {
   id: string;
   presentation_entry_id: string;
@@ -1149,6 +1160,11 @@ export class EnterpriseApi {
   static async getPresentationFreezePreflight(workspaceId: string, entryId: string): Promise<PresentationFreezePreflightResponse> {
     const response = await fetch(getApiUrl(`/api/v1/enterprise/workspaces/${encodeURIComponent(workspaceId)}/presentations/${encodeURIComponent(entryId)}/freeze-preflight`), { credentials: "include", cache: "no-store" });
     return ApiResponseHandler.handleResponse(response, "Failed to load freeze preflight");
+  }
+
+  static async getPresentationSnapshotEvidence(workspaceId: string, entryId: string, snapshotId: string): Promise<PresentationSnapshotEvidenceResponse> {
+    const response = await fetch(getApiUrl(`/api/v1/enterprise/workspaces/${encodeURIComponent(workspaceId)}/presentations/${encodeURIComponent(entryId)}/snapshots/${encodeURIComponent(snapshotId)}/evidence`), { credentials: "include", cache: "no-store" });
+    return ApiResponseHandler.handleResponse(response, "Failed to load snapshot evidence");
   }
 
   static async getPresentationComments(workspaceId: string, entryId: string): Promise<PresentationCommentThreadResponse[]> {

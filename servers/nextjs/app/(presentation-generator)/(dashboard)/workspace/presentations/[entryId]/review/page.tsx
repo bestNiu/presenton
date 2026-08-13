@@ -11,6 +11,7 @@ import {
   type PresentationGovernanceResponse,
   type PresentationFreezePreflightResponse,
   type PresentationSnapshotDiffResponse,
+  type PresentationSnapshotEvidenceResponse,
   type WorkspaceMemberResponse,
 } from "@/app/(presentation-generator)/services/api/enterprise";
 
@@ -31,6 +32,7 @@ export default function PresentationReviewPage() {
   const [canFreeze, setCanFreeze] = useState(false);
   const [threads, setThreads] = useState<PresentationCommentThreadResponse[]>([]);
   const [diff, setDiff] = useState<PresentationSnapshotDiffResponse | null>(null);
+  const [evidence, setEvidence] = useState<PresentationSnapshotEvidenceResponse | null>(null);
   const [members, setMembers] = useState<WorkspaceMemberResponse[]>([]);
   const [title, setTitle] = useState("");
   const [body, setBody] = useState("");
@@ -63,6 +65,11 @@ export default function PresentationReviewPage() {
         setDiff(await EnterpriseApi.comparePresentationSnapshots(workspaceId, entryId, governanceResult.snapshots[1].id, governanceResult.snapshots[0].id));
       } else {
         setDiff(null);
+      }
+      if (governanceResult.snapshots[0]) {
+        setEvidence(await EnterpriseApi.getPresentationSnapshotEvidence(workspaceId, entryId, governanceResult.snapshots[0].id));
+      } else {
+        setEvidence(null);
       }
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "评审批注加载失败");
@@ -154,6 +161,7 @@ export default function PresentationReviewPage() {
             <div className="rounded-2xl border border-[#E3E4EA] bg-white p-5"><div className="flex items-center justify-between gap-2"><div className="font-semibold">冻结前预检</div><span className={`rounded-full px-2.5 py-1 text-xs ${preflight?.can_freeze ? "bg-[#ECFDF3] text-[#027A48]" : "bg-[#FFF4E5] text-[#B54708]"}`}>{preflight?.can_freeze ? "可冻结" : "待处理"}</span></div><div className="mt-4 space-y-2">{preflight?.checks.map((check) => <div key={check.code} className="flex items-start gap-2 rounded-lg bg-[#F8F9FC] p-2.5">{check.passed ? <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-[#039855]" /> : <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-[#D92D20]" />}<div><p className="text-xs font-medium text-[#344054]">{check.label}</p><p className="mt-0.5 text-xs text-[#667085]">{check.message}</p></div></div>)}</div>{canFreeze && <button type="button" onClick={() => void freeze()} disabled={pending || !preflight?.can_freeze} className="mt-4 h-10 w-full rounded-lg bg-[#17171B] text-sm font-medium text-white disabled:opacity-40">冻结当前版本</button>}</div>
             <form onSubmit={createThread} className="rounded-2xl border border-[#E3E4EA] bg-white p-5"><div className="flex items-center gap-2 font-semibold"><MessageSquarePlus className="h-4 w-4 text-[#635BFF]" />新增整改项</div><input value={title} onChange={(event) => setTitle(event.target.value)} placeholder="问题标题" className="mt-4 h-10 w-full rounded-lg border border-[#D9DCE3] px-3 text-sm" /><textarea value={body} onChange={(event) => setBody(event.target.value)} placeholder="说明问题与验收要求" rows={4} className="mt-3 w-full rounded-lg border border-[#D9DCE3] p-3 text-sm" /><input type="number" min="1" value={slideIndex} onChange={(event) => setSlideIndex(event.target.value)} placeholder="页码（可选）" className="mt-3 h-10 w-full rounded-lg border border-[#D9DCE3] px-3 text-sm" /><select value={assignee} onChange={(event) => setAssignee(event.target.value)} className="mt-3 h-10 w-full rounded-lg border border-[#D9DCE3] bg-white px-3 text-sm"><option value="">未指派责任人</option>{members.map((member) => <option key={member.user_id} value={member.user_id}>{member.username} · {member.role}</option>)}</select><input type="date" value={dueAt} onChange={(event) => setDueAt(event.target.value)} className="mt-3 h-10 w-full rounded-lg border border-[#D9DCE3] px-3 text-sm" /><label className="mt-3 flex items-center gap-2 text-sm text-[#475467]"><input type="checkbox" checked={blocking} onChange={(event) => setBlocking(event.target.checked)} />审批前必须解决</label><button disabled={pending || !title.trim() || !body.trim()} className="mt-4 h-10 w-full rounded-lg bg-[#635BFF] text-sm font-medium text-white disabled:opacity-40">创建整改项</button></form>
             <div className="rounded-2xl border border-[#E3E4EA] bg-white p-5"><div className="flex items-center gap-2 font-semibold"><GitCompareArrows className="h-4 w-4 text-[#635BFF]" />版本差异</div>{diff ? <div className="mt-4 text-sm text-[#475467]"><p>V{diff.from_version_no} → V{diff.to_version_no}</p><div className="mt-3 grid grid-cols-2 gap-2 text-xs"><span className="rounded-lg bg-[#ECFDF3] p-2">新增 {diff.added}</span><span className="rounded-lg bg-[#FFF4E5] p-2">修改 {diff.changed}</span><span className="rounded-lg bg-[#FEF2F2] p-2">删除 {diff.removed}</span><span className="rounded-lg bg-[#F2F4F7] p-2">未变 {diff.unchanged}</span></div>{diff.slides.some((slide) => slide.change_type !== "unchanged") && <div className="mt-4 space-y-2 border-t border-[#F0F1F3] pt-3">{diff.slides.filter((slide) => slide.change_type !== "unchanged").map((slide) => <div key={slide.slide_id} className="rounded-lg bg-[#F8F9FC] p-2.5 text-xs"><div className="flex items-center justify-between"><span>{slide.change_type === "added" ? `新增第 ${(slide.after_index ?? 0) + 1} 页` : slide.change_type === "removed" ? `删除原第 ${(slide.before_index ?? 0) + 1} 页` : `修改第 ${(slide.after_index ?? 0) + 1} 页`}</span><span className={slide.change_type === "changed" ? "text-[#B54708]" : slide.change_type === "added" ? "text-[#027A48]" : "text-[#B42318]"}>{slide.change_type}</span></div>{slide.changed_fields.length > 0 && <p className="mt-1 text-[#667085]">变化字段：{slide.changed_fields.map((field) => diffFieldLabel[field] || field).join("、")}</p>}</div>)}</div>}</div> : <p className="mt-3 text-sm text-[#667085]">至少形成两个冻结版本后自动展示逐页差异。</p>}</div>
+            {evidence && <div className="rounded-2xl border border-[#E3E4EA] bg-white p-5"><div className="flex items-center justify-between"><div className="font-semibold">V{evidence.version_no} 冻结证据</div><span className={`rounded-full px-2 py-1 text-xs ${evidence.manifest_integrity && evidence.citation_integrity ? "bg-[#ECFDF3] text-[#027A48]" : "bg-[#FEF2F2] text-[#B42318]"}`}>{evidence.manifest_integrity && evidence.citation_integrity ? "完整性通过" : "完整性异常"}</span></div><p className="mt-2 break-all text-[10px] text-[#98A2B3]">{evidence.manifest_hash}</p><div className="mt-3 space-y-2">{evidence.citations.length === 0 ? <p className="rounded-lg bg-[#F8F9FC] p-3 text-xs text-[#667085]">该冻结版本无引用证据。</p> : evidence.citations.map((item) => <div key={item.id} className="rounded-lg bg-[#F8F9FC] p-2.5 text-xs"><p className="font-medium text-[#344054]">{item.source_name || item.source_id} · v{item.source_version || "-"}</p><p className="mt-1 text-[#667085]">{item.locator || "无定位"} · 冻结时 {item.status}</p>{item.excerpt && <p className="mt-1 line-clamp-2 text-[#475467]">{item.excerpt}</p>}</div>)}</div></div>}
           </aside>
         </div>
       </div>

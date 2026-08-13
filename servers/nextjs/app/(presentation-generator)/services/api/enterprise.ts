@@ -201,9 +201,40 @@ export interface PresentationEntryResponse {
   title: string | null;
   scene_type: string;
   creation_mode: PresentationCreationMode;
-  status: string;
+  status: "draft" | "in_review" | "approved" | "frozen" | "published" | "archived";
   can_open: boolean;
   updated_at: string;
+}
+
+export interface PresentationGovernanceResponse {
+  entry: PresentationEntryResponse;
+  reviews: Array<{
+    id: string;
+    submission_no: number;
+    status: "pending" | "approved" | "rejected";
+    submitted_by: string | null;
+    decided_by: string | null;
+    decision_comment: string | null;
+    submitted_at: string;
+    decided_at: string | null;
+  }>;
+  snapshots: Array<{
+    id: string;
+    version_no: number;
+    manifest_hash: string;
+    frozen_at: string;
+  }>;
+}
+
+export interface PresentationDeliveryArtifactResponse {
+  id: string;
+  snapshot_id: string;
+  format: "pptx" | "pdf";
+  watermark_text: string;
+  file_name: string;
+  sha256: string;
+  size_bytes: number;
+  status: "ready" | "revoked";
 }
 
 export interface TemplatePublicationResponse {
@@ -319,6 +350,42 @@ export class EnterpriseApi {
       response,
       "Failed to load workspace presentations"
     );
+  }
+
+  static async submitPresentationReview(workspaceId: string, entryId: string) {
+    const response = await fetch(getApiUrl(`/api/v1/enterprise/workspaces/${encodeURIComponent(workspaceId)}/presentations/${encodeURIComponent(entryId)}/review/submit`), { method: "POST", credentials: "include" });
+    return ApiResponseHandler.handleResponse(response, "Failed to submit presentation review");
+  }
+
+  static async decidePresentationReview(workspaceId: string, entryId: string, action: "approve" | "reject", comment?: string) {
+    const response = await fetch(getApiUrl(`/api/v1/enterprise/workspaces/${encodeURIComponent(workspaceId)}/presentations/${encodeURIComponent(entryId)}/review/decision`), { method: "POST", credentials: "include", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action, comment }) });
+    return ApiResponseHandler.handleResponse(response, "Failed to decide presentation review");
+  }
+
+  static async reopenPresentationReview(workspaceId: string, entryId: string): Promise<PresentationEntryResponse> {
+    const response = await fetch(getApiUrl(`/api/v1/enterprise/workspaces/${encodeURIComponent(workspaceId)}/presentations/${encodeURIComponent(entryId)}/review/reopen`), { method: "POST", credentials: "include" });
+    return ApiResponseHandler.handleResponse(response, "Failed to reopen presentation review");
+  }
+
+  static async freezePresentation(workspaceId: string, entryId: string) {
+    const response = await fetch(getApiUrl(`/api/v1/enterprise/workspaces/${encodeURIComponent(workspaceId)}/presentations/${encodeURIComponent(entryId)}/freeze`), { method: "POST", credentials: "include" });
+    return ApiResponseHandler.handleResponse(response, "Failed to freeze presentation");
+  }
+
+  static async getPresentationGovernance(workspaceId: string, entryId: string): Promise<PresentationGovernanceResponse> {
+    const response = await fetch(getApiUrl(`/api/v1/enterprise/workspaces/${encodeURIComponent(workspaceId)}/presentations/${encodeURIComponent(entryId)}/governance`), { credentials: "include", cache: "no-store" });
+    return ApiResponseHandler.handleResponse(response, "Failed to load presentation governance");
+  }
+
+  static async createPresentationDelivery(workspaceId: string, entryId: string, snapshotId: string, format: "pptx" | "pdf"): Promise<PresentationDeliveryArtifactResponse> {
+    const response = await fetch(getApiUrl(`/api/v1/enterprise/workspaces/${encodeURIComponent(workspaceId)}/presentations/${encodeURIComponent(entryId)}/deliveries`), { method: "POST", credentials: "include", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ snapshot_id: snapshotId, format }) });
+    return ApiResponseHandler.handleResponse(response, "Failed to export governed presentation");
+  }
+
+  static async issuePresentationDownloadGrant(workspaceId: string, entryId: string, artifactId: string): Promise<BidDownloadGrantResponse> {
+    const response = await fetch(getApiUrl(`/api/v1/enterprise/workspaces/${encodeURIComponent(workspaceId)}/presentations/${encodeURIComponent(entryId)}/deliveries/${encodeURIComponent(artifactId)}/grants`), { method: "POST", credentials: "include", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ expires_in_minutes: 30, max_downloads: 1 }) });
+    const grant = await ApiResponseHandler.handleResponse(response, "Failed to authorize governed download") as BidDownloadGrantResponse;
+    return { ...grant, download_url: getApiUrl(grant.download_url) };
   }
 
   static async getPublishedTemplates(

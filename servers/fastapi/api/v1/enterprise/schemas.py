@@ -21,6 +21,9 @@ from domains.platform.enums import (
     ConfidentialityLevel,
     PresentationCreationMode,
     PresentationEntryStatus,
+    PresentationDeliveryFormat,
+    PresentationDeliveryStatus,
+    PresentationReviewStatus,
     SceneStatus,
     TemplatePublicationStatus,
     TemplateScopeType,
@@ -457,6 +460,65 @@ class PresentationEntryResponse(BaseModel):
     row_version: int
     created_at: datetime
     updated_at: datetime
+
+
+class PresentationReviewDecisionRequest(BaseModel):
+    action: str = Field(pattern="^(approve|reject)$")
+    comment: str | None = Field(default=None, max_length=2000)
+
+
+class PresentationReviewResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: uuid.UUID
+    presentation_entry_id: uuid.UUID
+    submission_no: int
+    slide_snapshot_hash: str
+    status: PresentationReviewStatus
+    submitted_by: uuid.UUID | None
+    decided_by: uuid.UUID | None
+    decision_comment: str | None
+    submitted_at: datetime
+    decided_at: datetime | None
+
+
+class PresentationSnapshotResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: uuid.UUID
+    presentation_entry_id: uuid.UUID
+    review_id: uuid.UUID
+    version_no: int
+    manifest: dict
+    manifest_hash: str
+    slide_snapshot_hash: str
+    frozen_by: uuid.UUID | None
+    frozen_at: datetime
+
+
+class PresentationGovernanceResponse(BaseModel):
+    entry: PresentationEntryResponse
+    reviews: list[PresentationReviewResponse]
+    snapshots: list[PresentationSnapshotResponse]
+
+
+class PresentationDeliveryCreateRequest(BaseModel):
+    snapshot_id: uuid.UUID
+    format: PresentationDeliveryFormat = PresentationDeliveryFormat.PPTX
+    watermark_text: str | None = Field(default=None, max_length=300)
+
+
+class PresentationDeliveryArtifactResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: uuid.UUID
+    snapshot_id: uuid.UUID
+    derived_presentation_id: uuid.UUID | None
+    format: PresentationDeliveryFormat
+    watermark_text: str
+    file_name: str
+    sha256: str
+    size_bytes: int
+    status: PresentationDeliveryStatus
+    created_by: uuid.UUID | None
+    created_at: datetime
 
 
 class SceneDefinitionResponse(BaseModel):

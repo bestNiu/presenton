@@ -30,6 +30,10 @@ from models.sql.enterprise import (
     BidReviewIssueModel,
     BidStrategyModel,
     PresentationEntryModel,
+    PresentationDeliveryArtifactModel,
+    PresentationDownloadGrantModel,
+    PresentationReviewModel,
+    PresentationSnapshotModel,
     SceneDefinitionModel,
     TemplatePublicationModel,
     WorkspaceFolderModel,
@@ -90,6 +94,10 @@ def _build_client(tmp_path):
                 WorkspaceFolderModel.__table__,
                 SceneDefinitionModel.__table__,
                 PresentationEntryModel.__table__,
+                PresentationReviewModel.__table__,
+                PresentationSnapshotModel.__table__,
+                PresentationDeliveryArtifactModel.__table__,
+                PresentationDownloadGrantModel.__table__,
                 AuditEventModel.__table__,
                 TemplatePublicationModel.__table__,
                 BidProjectModel.__table__,
@@ -236,7 +244,7 @@ def test_folder_parent_must_belong_to_same_workspace(tmp_path):
         asyncio.run(engine.dispose())
 
 
-def test_presentation_registration_preserves_owner_and_allows_member_listing(tmp_path):
+def test_presentation_registration_preserves_owner_and_allows_member_listing(tmp_path, monkeypatch):
     client, engine, session_maker, users = _build_client(tmp_path)
 
     presentation_id = uuid.uuid4()
@@ -252,6 +260,17 @@ def test_presentation_registration_preserves_owner_and_allows_member_listing(tmp
                     n_slides=10,
                     language="Chinese",
                     title="企业架构汇报",
+                )
+            )
+            session.add(
+                SlideModel(
+                    owner_id=users["owner"].id,
+                    presentation=presentation_id,
+                    layout_group="general",
+                    layout="general-1",
+                    index=0,
+                    content={"title": "企业架构"},
+                    ui={"id": "slide-1", "elements": []},
                 )
             )
             await session.commit()
@@ -287,14 +306,77 @@ def test_presentation_registration_preserves_owner_and_allows_member_listing(tmp
             },
             headers={"x-test-user": "member"},
         )
+        entry_id = registered.json()["id"]
+        submitted = client.post(
+            f"/api/v1/enterprise/workspaces/{workspace['id']}/presentations/{entry_id}/review/submit"
+        )
+        self_review_denied = client.post(
+            f"/api/v1/enterprise/workspaces/{workspace['id']}/presentations/{entry_id}/review/decision",
+            json={"action": "approve"},
+        )
+        approved = client.post(
+            f"/api/v1/enterprise/workspaces/{workspace['id']}/presentations/{entry_id}/review/decision",
+            json={"action": "approve", "comment": "内容与品牌规范检查通过"},
+            headers={"x-test-user": "member"},
+        )
+        frozen = client.post(
+            f"/api/v1/enterprise/workspaces/{workspace['id']}/presentations/{entry_id}/freeze"
+        )
+        frozen_update_denied = client.patch(
+            "/api/v1/ppt/presentation/update",
+            json={"id": str(presentation_id), "title": "不应覆盖的标题"},
+        )
+        delivery_path = tmp_path / "general-delivery.pdf"
+        delivery_path.write_bytes(b"governed-general-pdf")
+
+        async def fake_general_export(*_args, **_kwargs):
+            return SimpleNamespace(path=str(delivery_path))
+
+        monkeypatch.setattr(
+            "services.enterprise.presentation_delivery_service.export_presentation",
+            fake_general_export,
+        )
+        delivery = client.post(
+            f"/api/v1/enterprise/workspaces/{workspace['id']}/presentations/{entry_id}/deliveries",
+            json={"snapshot_id": frozen.json()["id"], "format": "pdf"},
+        )
+        delivery_grant = client.post(
+            f"/api/v1/enterprise/workspaces/{workspace['id']}/presentations/{entry_id}/deliveries/{delivery.json()['id']}/grants",
+            json={"expires_in_minutes": 30, "max_downloads": 1},
+        )
+        delivery_download = client.get(delivery_grant.json()["download_url"])
+        governance = client.get(
+            f"/api/v1/enterprise/workspaces/{workspace['id']}/presentations/{entry_id}/governance",
+            headers={"x-test-user": "member"},
+        )
+        shared_read = client.get(
+            f"/api/v1/ppt/presentation/{presentation_id}",
+            headers={"x-test-user": "member"},
+        )
 
         assert registered.status_code == 201
         assert registered.json()["title"] == "企业架构汇报"
         assert member_entries.status_code == 200
         assert member_entries.json()[0]["presentation_id"] == str(presentation_id)
-        assert member_entries.json()[0]["can_open"] is False
+        assert member_entries.json()[0]["can_open"] is True
         assert registered.json()["can_open"] is True
         assert member_cannot_register_owner_presentation.status_code == 404
+        assert submitted.json()["status"] == "pending"
+        assert self_review_denied.status_code == 409
+        assert approved.json()["status"] == "approved"
+        assert frozen.status_code == 200
+        assert frozen_update_denied.status_code == 409
+        assert delivery.status_code == 201
+        assert delivery.json()["watermark_text"] == "共享空间 · L2 · owner"
+        assert "file_path" not in delivery.json()
+        assert delivery_download.content == b"governed-general-pdf"
+        assert frozen.json()["version_no"] == 1
+        assert frozen.json()["manifest"]["scene"]["type"] == "general"
+        assert governance.json()["entry"]["status"] == "frozen"
+        assert len(governance.json()["reviews"]) == 1
+        assert len(governance.json()["snapshots"]) == 1
+        assert shared_read.status_code == 200
+        assert shared_read.json()["slides"][0]["ui"]["id"] == "slide-1"
     finally:
         asyncio.run(engine.dispose())
 

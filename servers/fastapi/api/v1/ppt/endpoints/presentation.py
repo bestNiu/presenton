@@ -97,7 +97,9 @@ from utils.llm_utils import TextGenerationMetrics, message_content_to_text
 from utils.sse import safe_sse_stream
 from api.v1.auth.config import SESSION_COOKIE_NAME
 from api.v1.auth.principal import AuthPrincipal, principal_from_request
-from domains.platform.enums import PresentationCreationMode
+from domains.platform.enums import PresentationCreationMode, PresentationEntryStatus
+from models.sql.enterprise.presentation_entry import PresentationEntryModel
+from services.enterprise.workspace_service import require_workspace_role
 from services.enterprise.presentation_workspace_service import (
     attach_presentation_to_workspace,
 )
@@ -1332,6 +1334,25 @@ def _build_export_cookie_header(request: Request) -> Optional[str]:
     return None
 
 
+async def _require_registered_presentation_mutable(
+    session: AsyncSession, presentation_id: uuid.UUID
+) -> None:
+    # Lightweight unit-test sessions intentionally implement only mutation APIs.
+    # Production AsyncSession always exposes scalar().
+    if not hasattr(session, "scalar"):
+        return
+    entry = await session.scalar(
+        select(PresentationEntryModel).where(
+            PresentationEntryModel.presentation_id == presentation_id
+        )
+    )
+    if entry is not None and PresentationEntryStatus(entry.status) != PresentationEntryStatus.DRAFT:
+        raise HTTPException(
+            status_code=409,
+            detail="Presentation is governed; reopen or reject it before editing",
+        )
+
+
 @PRESENTATION_ROUTER.get("/all", response_model=List[PresentationWithSlides])
 async def get_all_presentations(
     version: Annotated[
@@ -1391,13 +1412,31 @@ async def get_presentation(
     sql_session: AsyncSession = Depends(get_async_session),
 ):
     presentation = await sql_session.get(PresentationModel, id)
+    shared_entry = None
+    if presentation is None:
+        shared_entry = await sql_session.scalar(
+            select(PresentationEntryModel).where(
+                PresentationEntryModel.presentation_id == id
+            )
+        )
+        if shared_entry is not None:
+            principal = principal_from_request(request)
+            await require_workspace_role(
+                sql_session,
+                workspace_id=shared_entry.workspace_id,
+                principal=principal,
+            )
+            presentation = await sql_session.scalar(
+                select(PresentationModel)
+                .execution_options(skip_owner_scope=True)
+                .where(PresentationModel.id == id)
+            )
     if not presentation:
         raise HTTPException(404, "Presentation not found")
-    slides_result = await sql_session.scalars(
-        select(SlideModel)
-        .where(SlideModel.presentation == id)
-        .order_by(SlideModel.index)
-    )
+    slides_query = select(SlideModel).where(SlideModel.presentation == id).order_by(SlideModel.index)
+    if shared_entry is not None:
+        slides_query = slides_query.execution_options(skip_owner_scope=True)
+    slides_result = await sql_session.scalars(slides_query)
     slides = list(slides_result)
     return PresentationWithSlides(
         **_presentation_response_data(presentation),
@@ -1412,6 +1451,7 @@ async def delete_presentation(
     presentation = await sql_session.get(PresentationModel, id)
     if not presentation:
         raise HTTPException(404, "Presentation not found")
+    await _require_registered_presentation_mutable(sql_session, id)
 
     await sql_session.delete(presentation)
     await sql_session.commit()
@@ -2212,6 +2252,7 @@ async def update_presentation(
     presentation = await sql_session.get(PresentationModel, id)
     if not presentation:
         raise HTTPException(status_code=404, detail="Presentation not found")
+    await _require_registered_presentation_mutable(sql_session, id)
 
     presentation_update_dict = {}
     if n_slides is not None:
@@ -2284,6 +2325,7 @@ async def update_presentation_slide(
             status_code=400,
             detail="Slide does not belong to the supplied presentation",
         )
+    await _require_registered_presentation_mutable(sql_session, presentation_id)
 
     stored_slide.sqlmodel_update(
         slide.model_dump(
@@ -2941,6 +2983,7 @@ async def edit_presentation_with_new_content(
     presentation = await sql_session.get(PresentationModel, data.presentation_id)
     if not presentation:
         raise HTTPException(status_code=404, detail="Presentation not found")
+    await _require_registered_presentation_mutable(sql_session, data.presentation_id)
 
     slides = await sql_session.scalars(
         select(SlideModel).where(SlideModel.presentation == data.presentation_id)

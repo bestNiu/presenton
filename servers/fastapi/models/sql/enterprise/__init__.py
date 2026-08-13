@@ -15,6 +15,12 @@ from models.sql.enterprise.bid import (
     BidStrategyModel,
 )
 from models.sql.enterprise.presentation_entry import PresentationEntryModel
+from models.sql.enterprise.presentation_governance import (
+    PresentationDeliveryArtifactModel,
+    PresentationDownloadGrantModel,
+    PresentationReviewModel,
+    PresentationSnapshotModel,
+)
 from models.sql.enterprise.scene_definition import SceneDefinitionModel
 from models.sql.enterprise.template_publication import TemplatePublicationModel
 from models.sql.enterprise.workspace import (
@@ -39,6 +45,10 @@ __all__ = [
     "BidReviewIssueModel",
     "BidStrategyModel",
     "PresentationEntryModel",
+    "PresentationDeliveryArtifactModel",
+    "PresentationDownloadGrantModel",
+    "PresentationReviewModel",
+    "PresentationSnapshotModel",
     "SceneDefinitionModel",
     "TemplatePublicationModel",
     "WorkspaceFolderModel",

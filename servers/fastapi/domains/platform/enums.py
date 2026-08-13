@@ -39,6 +39,22 @@ class PresentationCreationMode(str, Enum):
     IMPORT = "import"
 
 
+class PresentationReviewStatus(str, Enum):
+    PENDING = "pending"
+    APPROVED = "approved"
+    REJECTED = "rejected"
+
+
+class PresentationDeliveryFormat(str, Enum):
+    PPTX = "pptx"
+    PDF = "pdf"
+
+
+class PresentationDeliveryStatus(str, Enum):
+    READY = "ready"
+    REVOKED = "revoked"
+
+
 class TemplateScopeType(str, Enum):
     ENTERPRISE = "enterprise"
     WORKSPACE = "workspace"

@@ -43,7 +43,13 @@ from api.v1.enterprise.schemas import (
     FolderCreateRequest,
     FolderResponse,
     PresentationEntryResponse,
+    PresentationGovernanceResponse,
+    PresentationDeliveryCreateRequest,
+    PresentationDeliveryArtifactResponse,
     PresentationRegisterRequest,
+    PresentationReviewDecisionRequest,
+    PresentationReviewResponse,
+    PresentationSnapshotResponse,
     SceneDefinitionResponse,
     SceneRuntimeResponse,
     TemplatePublicationCreateRequest,
@@ -60,6 +66,19 @@ from services.database import get_async_session
 from services.enterprise.presentation_workspace_service import (
     list_presentation_entries,
     register_presentation,
+)
+from services.enterprise.presentation_governance_service import (
+    decide_presentation_review,
+    freeze_presentation,
+    get_presentation_governance,
+    reopen_presentation_review,
+    submit_presentation_review,
+)
+from services.enterprise.presentation_delivery_service import (
+    consume_presentation_download_grant,
+    create_presentation_delivery,
+    issue_presentation_download_grant,
+    list_presentation_deliveries,
 )
 from services.enterprise.bid_project_service import (
     add_project_document,
@@ -705,10 +724,74 @@ async def get_presentation_entries(
     )
     return [
         PresentationEntryResponse.model_validate(entry).model_copy(
-            update={"can_open": entry.created_by == principal.user_id}
+            update={"can_open": True}
         )
         for entry in entries
     ]
+
+
+@API_V1_ENTERPRISE_ROUTER.get(
+    "/workspaces/{workspace_id}/presentations/{entry_id}/governance",
+    response_model=PresentationGovernanceResponse,
+)
+async def get_presentation_entry_governance(workspace_id: uuid.UUID, entry_id: uuid.UUID, principal: AuthPrincipal = Depends(principal_from_request), session: AsyncSession = Depends(get_async_session)):
+    return await get_presentation_governance(session, workspace_id=workspace_id, entry_id=entry_id, principal=principal)
+
+
+@API_V1_ENTERPRISE_ROUTER.post(
+    "/workspaces/{workspace_id}/presentations/{entry_id}/review/submit",
+    response_model=PresentationReviewResponse,
+)
+async def post_presentation_review_submit(workspace_id: uuid.UUID, entry_id: uuid.UUID, principal: AuthPrincipal = Depends(principal_from_request), session: AsyncSession = Depends(get_async_session)):
+    return await submit_presentation_review(session, workspace_id=workspace_id, entry_id=entry_id, principal=principal)
+
+
+@API_V1_ENTERPRISE_ROUTER.post(
+    "/workspaces/{workspace_id}/presentations/{entry_id}/review/decision",
+    response_model=PresentationReviewResponse,
+)
+async def post_presentation_review_decision(workspace_id: uuid.UUID, entry_id: uuid.UUID, body: PresentationReviewDecisionRequest, principal: AuthPrincipal = Depends(principal_from_request), session: AsyncSession = Depends(get_async_session)):
+    return await decide_presentation_review(session, workspace_id=workspace_id, entry_id=entry_id, principal=principal, **body.model_dump())
+
+
+@API_V1_ENTERPRISE_ROUTER.post(
+    "/workspaces/{workspace_id}/presentations/{entry_id}/review/reopen",
+    response_model=PresentationEntryResponse,
+)
+async def post_presentation_review_reopen(workspace_id: uuid.UUID, entry_id: uuid.UUID, principal: AuthPrincipal = Depends(principal_from_request), session: AsyncSession = Depends(get_async_session)):
+    return await reopen_presentation_review(session, workspace_id=workspace_id, entry_id=entry_id, principal=principal)
+
+
+@API_V1_ENTERPRISE_ROUTER.post(
+    "/workspaces/{workspace_id}/presentations/{entry_id}/freeze",
+    response_model=PresentationSnapshotResponse,
+)
+async def post_presentation_freeze(workspace_id: uuid.UUID, entry_id: uuid.UUID, principal: AuthPrincipal = Depends(principal_from_request), session: AsyncSession = Depends(get_async_session)):
+    return await freeze_presentation(session, workspace_id=workspace_id, entry_id=entry_id, principal=principal)
+
+
+@API_V1_ENTERPRISE_ROUTER.post("/workspaces/{workspace_id}/presentations/{entry_id}/deliveries", response_model=PresentationDeliveryArtifactResponse, status_code=status.HTTP_201_CREATED)
+async def post_presentation_delivery(request: Request, workspace_id: uuid.UUID, entry_id: uuid.UUID, body: PresentationDeliveryCreateRequest, principal: AuthPrincipal = Depends(principal_from_request), session: AsyncSession = Depends(get_async_session)):
+    return await create_presentation_delivery(session, workspace_id=workspace_id, entry_id=entry_id, principal=principal, cookie_header=request.headers.get("cookie"), **body.model_dump())
+
+
+@API_V1_ENTERPRISE_ROUTER.get("/workspaces/{workspace_id}/presentations/{entry_id}/deliveries", response_model=list[PresentationDeliveryArtifactResponse])
+async def get_presentation_deliveries(workspace_id: uuid.UUID, entry_id: uuid.UUID, principal: AuthPrincipal = Depends(principal_from_request), session: AsyncSession = Depends(get_async_session)):
+    return await list_presentation_deliveries(session, workspace_id=workspace_id, entry_id=entry_id, principal=principal)
+
+
+@API_V1_ENTERPRISE_ROUTER.post("/workspaces/{workspace_id}/presentations/{entry_id}/deliveries/{artifact_id}/grants", response_model=BidDownloadGrantResponse, status_code=status.HTTP_201_CREATED)
+async def post_presentation_download_grant(workspace_id: uuid.UUID, entry_id: uuid.UUID, artifact_id: uuid.UUID, body: BidDownloadGrantRequest, principal: AuthPrincipal = Depends(principal_from_request), session: AsyncSession = Depends(get_async_session)):
+    grant, token = await issue_presentation_download_grant(session, workspace_id=workspace_id, entry_id=entry_id, artifact_id=artifact_id, principal=principal, **body.model_dump())
+    return BidDownloadGrantResponse(grant_id=grant.id, artifact_id=grant.artifact_id, download_url=f"/api/v1/enterprise/presentations/deliveries/download/{token}", expires_at=grant.expires_at, max_downloads=grant.max_downloads)
+
+
+@API_V1_ENTERPRISE_ROUTER.get("/presentations/deliveries/download/{token}")
+async def get_presentation_delivery_download(token: str, session: AsyncSession = Depends(get_async_session)):
+    artifact, file_path = await consume_presentation_download_grant(session, token=token)
+    artifact_format = getattr(artifact.format, "value", artifact.format)
+    media_type = "application/pdf" if artifact_format == "pdf" else "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+    return FileResponse(file_path, filename=artifact.file_name, media_type=media_type)
 
 
 @API_V1_ENTERPRISE_ROUTER.get(

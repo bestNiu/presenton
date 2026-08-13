@@ -68,6 +68,7 @@ function WorkspacePage() {
   const [confidentiality, setConfidentiality] =
     useState<ConfidentialityLevel>("L2");
   const [error, setError] = useState<string | null>(null);
+  const [governancePending, setGovernancePending] = useState("");
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -136,6 +137,49 @@ function WorkspacePage() {
     activeWorkspace?.current_user_role === "owner" ||
     activeWorkspace?.current_user_role === "admin" ||
     activeWorkspace?.current_user_role === "editor";
+  const canReview =
+    activeWorkspace?.current_user_role !== "viewer" &&
+    activeWorkspace?.current_user_role !== "editor";
+  const canFreeze =
+    activeWorkspace?.current_user_role === "owner" ||
+    activeWorkspace?.current_user_role === "admin";
+
+  const runGovernanceAction = async (
+    key: string,
+    action: () => Promise<unknown>
+  ) => {
+    setGovernancePending(key);
+    setError(null);
+    try {
+      await action();
+      setPresentations(await EnterpriseApi.getPresentations(activeWorkspaceId));
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "文稿治理操作失败");
+    } finally {
+      setGovernancePending("");
+    }
+  };
+
+  const exportGovernedPresentation = async (
+    presentation: PresentationEntryResponse,
+    format: "pptx" | "pdf"
+  ) => {
+    const key = `export-${presentation.id}-${format}`;
+    setGovernancePending(key);
+    setError(null);
+    try {
+      const governance = await EnterpriseApi.getPresentationGovernance(activeWorkspaceId, presentation.id);
+      const snapshot = governance.snapshots[0];
+      if (!snapshot) throw new Error("未找到冻结快照");
+      const artifact = await EnterpriseApi.createPresentationDelivery(activeWorkspaceId, presentation.id, snapshot.id, format);
+      const grant = await EnterpriseApi.issuePresentationDownloadGrant(activeWorkspaceId, presentation.id, artifact.id);
+      window.location.assign(grant.download_url);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "受控导出失败");
+    } finally {
+      setGovernancePending("");
+    }
+  };
 
   const buildCreateHref = (entry: "topic" | "document" | "template") => {
     const params = new URLSearchParams({ entry });
@@ -517,33 +561,22 @@ function WorkspacePage() {
           ) : (
             <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
               {presentations.slice(0, 9).map((presentation) => (
-                <Link
+                <article
                   key={presentation.id}
-                  href={`/presentation?id=${encodeURIComponent(presentation.presentation_id)}&type=standard`}
-                  onClick={(event) =>
-                    !presentation.can_open && event.preventDefault()
-                  }
-                  aria-disabled={!presentation.can_open}
-                  title={
-                    presentation.can_open
-                      ? "打开演示文稿"
-                      : "当前仅可查看空间元数据，协作编辑授权将在后续切片开放"
-                  }
-                  className="flex items-center gap-3 rounded-xl border border-[#E3E4EA] bg-white p-4 transition hover:border-[#B9B2FF] hover:shadow-sm aria-disabled:cursor-not-allowed aria-disabled:opacity-60"
+                  className="rounded-xl border border-[#E3E4EA] bg-white p-4 transition hover:border-[#B9B2FF] hover:shadow-sm"
                 >
-                  <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-[#F2F1FF] text-[#635BFF]">
-                    <MonitorPlay className="h-5 w-5" />
+                  <Link href={`/presentation?id=${encodeURIComponent(presentation.presentation_id)}&type=standard`} className="flex items-center gap-3">
+                    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-[#F2F1FF] text-[#635BFF]"><MonitorPlay className="h-5 w-5" /></div>
+                    <div className="min-w-0"><p className="truncate text-sm font-semibold text-[#101828]">{presentation.title || "未命名演示文稿"}</p><p className="mt-1 text-xs text-[#667085]">{creationModeLabel[presentation.creation_mode]} · {presentation.status}</p></div>
+                  </Link>
+                  <div className="mt-3 flex flex-wrap gap-2 border-t border-[#F0F1F3] pt-3">
+                    {canCreate && presentation.status === "draft" && <button type="button" disabled={governancePending === presentation.id} onClick={() => void runGovernanceAction(presentation.id, () => EnterpriseApi.submitPresentationReview(activeWorkspaceId, presentation.id))} className="h-7 rounded-md bg-[#635BFF] px-2.5 text-[11px] text-white disabled:opacity-40">提交评审</button>}
+                    {canReview && presentation.status === "in_review" && <><button type="button" onClick={() => void runGovernanceAction(presentation.id, () => EnterpriseApi.decidePresentationReview(activeWorkspaceId, presentation.id, "reject", "请修改后重新提交"))} className="h-7 rounded-md border border-[#FDA29B] px-2.5 text-[11px] text-[#B42318]">退回</button><button type="button" onClick={() => void runGovernanceAction(presentation.id, () => EnterpriseApi.decidePresentationReview(activeWorkspaceId, presentation.id, "approve", "评审通过"))} className="h-7 rounded-md bg-[#027A48] px-2.5 text-[11px] text-white">批准</button></>}
+                    {canCreate && presentation.status === "approved" && <button type="button" onClick={() => void runGovernanceAction(presentation.id, () => EnterpriseApi.reopenPresentationReview(activeWorkspaceId, presentation.id))} className="h-7 rounded-md border border-[#D9DCE3] px-2.5 text-[11px]">重新编辑</button>}
+                    {canFreeze && presentation.status === "approved" && <button type="button" onClick={() => void runGovernanceAction(presentation.id, () => EnterpriseApi.freezePresentation(activeWorkspaceId, presentation.id))} className="h-7 rounded-md bg-[#17171B] px-2.5 text-[11px] text-white">冻结版本</button>}
+                    {presentation.status === "frozen" && <><span className="inline-flex h-7 items-center rounded-md bg-[#ECFDF3] px-2.5 text-[11px] text-[#027A48]">已形成可审计快照</span>{canFreeze && <><button type="button" disabled={governancePending.startsWith(`export-${presentation.id}`)} onClick={() => void exportGovernedPresentation(presentation, "pptx")} className="h-7 rounded-md bg-[#635BFF] px-2.5 text-[11px] text-white disabled:opacity-40">受控 PPTX</button><button type="button" disabled={governancePending.startsWith(`export-${presentation.id}`)} onClick={() => void exportGovernedPresentation(presentation, "pdf")} className="h-7 rounded-md border border-[#635BFF] px-2.5 text-[11px] text-[#4238CA] disabled:opacity-40">受控 PDF</button></>}</>}
                   </div>
-                  <div className="min-w-0">
-                    <p className="truncate text-sm font-semibold text-[#101828]">
-                      {presentation.title || "未命名演示文稿"}
-                    </p>
-                    <p className="mt-1 text-xs text-[#667085]">
-                      {creationModeLabel[presentation.creation_mode]} ·{" "}
-                      {presentation.can_open ? presentation.status : "仅元数据可见"}
-                    </p>
-                  </div>
-                </Link>
+                </article>
               ))}
             </div>
           )}

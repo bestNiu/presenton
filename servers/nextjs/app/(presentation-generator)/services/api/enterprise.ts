@@ -402,6 +402,10 @@ export interface AssetItemResponse {
     element_count?: number;
     accent?: string;
   };
+  preview_status: "structured" | "queued" | "rendering" | "ready" | "error";
+  preview_task_id: string | null;
+  preview_url: string | null;
+  preview_error: string | null;
   source_presentation_entry_id: string | null;
   source_slide_id: string | null;
   parent_asset_id: string | null;
@@ -420,6 +424,12 @@ export interface AssetPageInsertResponse {
   slide_id: string;
   slide_index: number;
   asset_id: string;
+}
+
+export interface AssetPreviewTaskResponse {
+  asset_id: string;
+  task_id: string;
+  status: string;
 }
 
 export type AssetPromotionStatus = "pending" | "approved" | "rejected" | "cancelled";
@@ -545,6 +555,18 @@ export class EnterpriseApi {
       { method: favorite ? "POST" : "DELETE", credentials: "include" }
     );
     return ApiResponseHandler.handleResponse(response, "Failed to update asset favorite");
+  }
+
+  static getAssetPreviewUrl(asset: AssetItemResponse): string | null {
+    return asset.preview_url ? getApiUrl(asset.preview_url) : null;
+  }
+
+  static async requestAssetPreview(assetId: string): Promise<AssetPreviewTaskResponse> {
+    const response = await fetch(
+      getApiUrl(`/api/v1/enterprise/assets/${encodeURIComponent(assetId)}/preview-tasks`),
+      { method: "POST", credentials: "include" }
+    );
+    return ApiResponseHandler.handleResponse(response, "Failed to render asset preview");
   }
 
   static async saveSlideAsAsset(

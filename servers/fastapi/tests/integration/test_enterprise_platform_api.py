@@ -51,6 +51,7 @@ from models.sql.enterprise import (
     WorkspaceModel,
 )
 from models.sql.presentation import PresentationModel, PresentationVersion
+from models.sql.async_task import AsyncTaskModel
 from models.sql.slide import SlideModel
 from models.sql.user import User
 from models.sql.template_v2 import TemplateV2
@@ -58,6 +59,7 @@ from services.database import get_async_session
 from services.enterprise.template_publication_service import (
     get_accessible_published_template,
 )
+import services.enterprise.asset_preview_service as asset_preview_service
 
 
 def _build_client(tmp_path):
@@ -112,6 +114,7 @@ def _build_client(tmp_path):
                 WorkspaceFolderModel.__table__,
                 SceneDefinitionModel.__table__,
                 PresentationEntryModel.__table__,
+                AsyncTaskModel.__table__,
                 AssetItemModel.__table__,
                 AssetFavoriteModel.__table__,
                 AssetPromotionRequestModel.__table__,
@@ -488,8 +491,21 @@ def test_presentation_registration_preserves_owner_and_allows_member_listing(tmp
         asyncio.run(engine.dispose())
 
 
-def test_asset_library_page_snapshot_lifecycle_and_reuse(tmp_path):
+def test_asset_library_page_snapshot_lifecycle_and_reuse(tmp_path, monkeypatch):
     client, engine, session_maker, users = _build_client(tmp_path)
+    preview_source = tmp_path / "rendered-preview.png"
+    preview_source.write_bytes(b"rendered-enterprise-asset-preview")
+
+    async def fake_render_json_to_image(_components, _width, _height):
+        return SimpleNamespace(path=str(preview_source))
+
+    monkeypatch.setenv("APP_DATA_DIRECTORY", str(tmp_path / "app-data"))
+    monkeypatch.setattr(asset_preview_service, "async_session_maker", session_maker)
+    monkeypatch.setattr(
+        asset_preview_service.EXPORT_TASK_SERVICE,
+        "render_json_to_image",
+        fake_render_json_to_image,
+    )
     presentation_id = uuid.uuid4()
     slide_id = uuid.uuid4()
 
@@ -515,7 +531,7 @@ def test_asset_library_page_snapshot_lifecycle_and_reuse(tmp_path):
                     layout="metrics",
                     index=0,
                     content={"title": "核心经营指标", "value": "42%"},
-                    ui={"id": "asset-source", "elements": []},
+                    ui={"id": "asset-source", "components": []},
                 )
             )
             await session.commit()
@@ -548,6 +564,13 @@ def test_asset_library_page_snapshot_lifecycle_and_reuse(tmp_path):
             },
         )
         asset_id = saved.json()["id"]
+        owner_thumbnail = client.get(
+            f"/api/v1/enterprise/assets/{asset_id}/thumbnail"
+        )
+        member_draft_thumbnail_denied = client.get(
+            f"/api/v1/enterprise/assets/{asset_id}/thumbnail",
+            headers={"x-test-user": "member"},
+        )
         hidden_draft = client.get(
             "/api/v1/enterprise/assets",
             params={"workspace_id": workspace["id"], "asset_type": "page"},
@@ -560,6 +583,17 @@ def test_asset_library_page_snapshot_lifecycle_and_reuse(tmp_path):
             "/api/v1/enterprise/assets",
             params={"workspace_id": workspace["id"], "asset_type": "page", "tags": "经营"},
             headers={"x-test-user": "member"},
+        )
+        member_thumbnail = client.get(
+            f"/api/v1/enterprise/assets/{asset_id}/thumbnail",
+            headers={"x-test-user": "member"},
+        )
+        outsider_thumbnail_denied = client.get(
+            f"/api/v1/enterprise/assets/{asset_id}/thumbnail",
+            headers={"x-test-user": "outsider"},
+        )
+        preview_retry = client.post(
+            f"/api/v1/enterprise/assets/{asset_id}/preview-tasks"
         )
         member_favorite = client.post(
             f"/api/v1/enterprise/assets/{asset_id}/favorite",
@@ -736,6 +770,42 @@ def test_asset_library_page_snapshot_lifecycle_and_reuse(tmp_path):
             params={"workspace_id": workspace["id"]},
             headers={"x-test-user": "outsider"},
         )
+
+        async def fail_render_json_to_image(_components, _width, _height):
+            raise RuntimeError("preview renderer unavailable")
+
+        monkeypatch.setattr(
+            asset_preview_service.EXPORT_TASK_SERVICE,
+            "render_json_to_image",
+            fail_render_json_to_image,
+        )
+        failed_preview = client.post(
+            f"/api/v1/enterprise/assets/{asset_id}/preview-tasks"
+        )
+        failed_preview_asset = next(
+            item
+            for item in client.get(
+                "/api/v1/enterprise/assets",
+                params={"workspace_id": workspace["id"]},
+            ).json()
+            if item["id"] == asset_id
+        )
+        monkeypatch.setattr(
+            asset_preview_service.EXPORT_TASK_SERVICE,
+            "render_json_to_image",
+            fake_render_json_to_image,
+        )
+        recovered_preview = client.post(
+            f"/api/v1/enterprise/assets/{asset_id}/preview-tasks"
+        )
+        recovered_preview_asset = next(
+            item
+            for item in client.get(
+                "/api/v1/enterprise/assets",
+                params={"workspace_id": workspace["id"]},
+            ).json()
+            if item["id"] == asset_id
+        )
         events = client.get(
             f"/api/v1/enterprise/workspaces/{workspace['id']}/audit-events"
         ).json()
@@ -743,9 +813,20 @@ def test_asset_library_page_snapshot_lifecycle_and_reuse(tmp_path):
         assert saved.status_code == 201
         assert saved.json()["status"] == "draft"
         assert saved.json()["payload_hash"]
+        assert saved.json()["preview_status"] == "queued"
+        assert saved.json()["preview_task_id"]
+        assert owner_thumbnail.status_code == 200
+        assert owner_thumbnail.content == b"rendered-enterprise-asset-preview"
+        assert member_draft_thumbnail_denied.status_code == 404
         assert hidden_draft.json() == []
         assert published.json()["status"] == "published"
         assert [item["id"] for item in visible_published.json()] == [asset_id]
+        assert visible_published.json()[0]["preview_status"] == "ready"
+        assert visible_published.json()[0]["preview_url"].endswith(f"/{asset_id}/thumbnail")
+        assert member_thumbnail.content == b"rendered-enterprise-asset-preview"
+        assert outsider_thumbnail_denied.status_code == 404
+        assert preview_retry.status_code == 202
+        assert preview_retry.json()["task_id"] != saved.json()["preview_task_id"]
         assert member_favorite.json() == {"asset_id": asset_id, "is_favorite": True}
         assert member_favorites.json()[0]["asset"]["id"] == asset_id
         assert member_favorites.json()[0]["is_favorite"] is True
@@ -773,9 +854,11 @@ def test_asset_library_page_snapshot_lifecycle_and_reuse(tmp_path):
         promoted_enterprise_asset = next(item for item in enterprise_assets.json() if item["id"] == enterprise_approved.json()["promoted_asset_id"])
         assert promoted_enterprise_asset["scope_type"] == "enterprise"
         assert promoted_enterprise_asset["parent_asset_id"] == asset_id
+        assert promoted_enterprise_asset["preview_status"] == "ready"
+        assert promoted_enterprise_asset["preview_url"]
         assert inserted.status_code == 201
         assert inserted.json()["slide_index"] == 1
-        assert reused_assets.json()[0]["usage_count"] == 1
+        assert next(item for item in reused_assets.json() if item["id"] == asset_id)["usage_count"] == 1
         assert analytics.status_code == 200
         assert analytics.json()["total_reuses"] == 1
         assert analytics.json()["unique_presentations"] == 1
@@ -791,10 +874,19 @@ def test_asset_library_page_snapshot_lifecycle_and_reuse(tmp_path):
         assert offline.json()["status"] == "offline"
         assert offline_insert_denied.status_code == 409
         assert outsider_list_denied.status_code == 404
+        assert failed_preview.status_code == 202
+        assert failed_preview_asset["preview_status"] == "error"
+        assert failed_preview_asset["preview_url"] is None
+        assert failed_preview_asset["preview"]["title"] == "核心经营指标"
+        assert "renderer unavailable" in failed_preview_asset["preview_error"]
+        assert recovered_preview.status_code == 202
+        assert recovered_preview_asset["preview_status"] == "ready"
+        assert recovered_preview_asset["preview_error"] is None
         assert {event["action"] for event in events} >= {
             "asset.created", "asset.publish", "asset.reused", "asset.offline",
             "asset.promotion_requested", "asset.promotion_approved",
             "asset.favorited", "asset.unfavorited",
+            "asset.preview_queued", "asset.preview_ready", "asset.preview_failed",
         }
     finally:
         asyncio.run(engine.dispose())

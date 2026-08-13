@@ -45,7 +45,8 @@ REVISION_ENTERPRISE_ASSET_LIBRARY = "g6e0c4d8f2b3"
 REVISION_ASSET_PROMOTION_GOVERNANCE = "b7f1d5e9a3c4"
 REVISION_ASSET_OPERATIONS_ANALYTICS = "c8a2e6f0b4d5"
 REVISION_ASSET_PERSONALIZATION = "d9b3f7a1c5e6"
-REVISION_HEAD = REVISION_ASSET_PERSONALIZATION
+REVISION_ASSET_ASYNC_PREVIEWS = "e0c4a8b2d6f7"
+REVISION_HEAD = REVISION_ASSET_ASYNC_PREVIEWS
 
 
 async def migrate_database_on_startup() -> None:
@@ -140,6 +141,10 @@ def _infer_revision_from_schema(
         "enterprise_audit_events",
     }
     if enterprise_tables.issubset(tables):
+        if "enterprise_asset_items" in tables:
+            asset_columns = {column["name"] for column in inspector.get_columns("enterprise_asset_items")}
+            if "preview_task_id" in asset_columns:
+                return REVISION_ASSET_ASYNC_PREVIEWS
         if "enterprise_asset_favorites" in tables:
             return REVISION_ASSET_PERSONALIZATION
         if "enterprise_asset_usage_events" in tables:

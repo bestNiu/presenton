@@ -1,7 +1,7 @@
 from datetime import date, datetime
 import uuid
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, computed_field, field_validator
 
 from domains.platform.enums import (
     AssetScopeType,
@@ -92,6 +92,9 @@ class AssetItemResponse(BaseModel):
     tags: list[str]
     payload_hash: str
     preview: dict
+    preview_status: str
+    preview_task_id: str | None
+    preview_error: str | None
     source_presentation_entry_id: uuid.UUID | None
     source_slide_id: uuid.UUID | None
     parent_asset_id: uuid.UUID | None
@@ -104,6 +107,13 @@ class AssetItemResponse(BaseModel):
     published_at: datetime | None
     created_at: datetime
     updated_at: datetime
+
+    @computed_field
+    @property
+    def preview_url(self) -> str | None:
+        if self.preview_status != "ready":
+            return None
+        return f"/api/v1/enterprise/assets/{self.id}/thumbnail"
 
 
 class AssetPageInsertRequest(BaseModel):
@@ -189,6 +199,12 @@ class AssetPersonalizedItemResponse(BaseModel):
 class AssetFavoriteResponse(BaseModel):
     asset_id: uuid.UUID
     is_favorite: bool
+
+
+class AssetPreviewTaskResponse(BaseModel):
+    asset_id: uuid.UUID
+    task_id: str
+    status: str
 
 
 class BidProjectCreateRequest(BaseModel):

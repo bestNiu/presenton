@@ -1,6 +1,6 @@
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, Response, status
 from fastapi.responses import FileResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -18,6 +18,7 @@ from api.v1.enterprise.schemas import (
     AssetBulkTransitionRequest,
     AssetFavoriteResponse,
     AssetPersonalizedItemResponse,
+    AssetPreviewTaskResponse,
     SlideAssetCreateRequest,
     AuditEventResponse,
     BidDocumentCreateRequest,
@@ -144,6 +145,11 @@ from services.enterprise.asset_personalization_service import (
     list_personalized_assets,
     set_asset_favorite,
 )
+from services.enterprise.asset_preview_service import (
+    get_asset_preview_path,
+    queue_asset_preview,
+    run_asset_preview_task,
+)
 from services.enterprise.bid_project_service import (
     add_project_document,
     confirm_project_profile,
@@ -215,12 +221,17 @@ API_V1_ENTERPRISE_ROUTER = APIRouter(
 )
 async def post_enterprise_asset(
     body: AssetCreateRequest,
+    background_tasks: BackgroundTasks,
     principal: AuthPrincipal = Depends(principal_from_request),
     session: AsyncSession = Depends(get_async_session),
 ):
-    return await create_asset(
+    asset = await create_asset(
         session, principal=principal, values=body.model_dump()
     )
+    if asset.asset_type == "page" and asset.payload.get("format") == "presentation-page-v1":
+        task = await queue_asset_preview(session, asset_id=asset.id, principal=principal)
+        background_tasks.add_task(run_asset_preview_task, asset.id, task.id)
+    return asset
 
 
 @API_V1_ENTERPRISE_ROUTER.get(
@@ -323,10 +334,11 @@ async def post_presentation_slide_asset(
     entry_id: uuid.UUID,
     slide_id: uuid.UUID,
     body: SlideAssetCreateRequest,
+    background_tasks: BackgroundTasks,
     principal: AuthPrincipal = Depends(principal_from_request),
     session: AsyncSession = Depends(get_async_session),
 ):
-    return await save_slide_as_asset(
+    asset = await save_slide_as_asset(
         session,
         principal=principal,
         workspace_id=workspace_id,
@@ -334,6 +346,35 @@ async def post_presentation_slide_asset(
         slide_id=slide_id,
         values=body.model_dump(),
     )
+    task = await queue_asset_preview(session, asset_id=asset.id, principal=principal)
+    background_tasks.add_task(run_asset_preview_task, asset.id, task.id)
+    return asset
+
+
+@API_V1_ENTERPRISE_ROUTER.post(
+    "/assets/{asset_id}/preview-tasks",
+    response_model=AssetPreviewTaskResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def post_enterprise_asset_preview_task(
+    asset_id: uuid.UUID,
+    background_tasks: BackgroundTasks,
+    principal: AuthPrincipal = Depends(principal_from_request),
+    session: AsyncSession = Depends(get_async_session),
+):
+    task = await queue_asset_preview(session, asset_id=asset_id, principal=principal)
+    background_tasks.add_task(run_asset_preview_task, asset_id, task.id)
+    return AssetPreviewTaskResponse(asset_id=asset_id, task_id=task.id, status=task.status)
+
+
+@API_V1_ENTERPRISE_ROUTER.get("/assets/{asset_id}/thumbnail")
+async def get_enterprise_asset_thumbnail(
+    asset_id: uuid.UUID,
+    principal: AuthPrincipal = Depends(principal_from_request),
+    session: AsyncSession = Depends(get_async_session),
+):
+    path = await get_asset_preview_path(session, asset_id=asset_id, principal=principal)
+    return FileResponse(path, media_type="image/png")
 
 
 @API_V1_ENTERPRISE_ROUTER.post(

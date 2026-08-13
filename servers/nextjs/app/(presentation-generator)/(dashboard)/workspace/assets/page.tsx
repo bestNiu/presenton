@@ -61,9 +61,9 @@ export default function AssetCenterPage() {
       .catch((cause) => setError(cause instanceof Error ? cause.message : "空间加载失败"));
   }, []);
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (silent = false) => {
     if (!workspaceId) return;
-    setLoading(true);
+    if (!silent) setLoading(true);
     setError(null);
     try {
       const [assetRows, mineRows, reviewRows, analyticsResult, favoriteRows] = await Promise.all([
@@ -84,11 +84,17 @@ export default function AssetCenterPage() {
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "资产加载失败");
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   }, [statusFilter, typeFilter, workspaceId]);
 
   useEffect(() => { void load(); }, [load]);
+
+  useEffect(() => {
+    if (!assets.some((asset) => ["queued", "rendering"].includes(asset.preview_status))) return;
+    const timer = window.setInterval(() => void load(true), 3000);
+    return () => window.clearInterval(timer);
+  }, [assets, load]);
 
   const visibleAssets = useMemo(() => {
     const keyword = query.trim().toLowerCase();
@@ -137,6 +143,17 @@ export default function AssetCenterPage() {
       setFavoriteAssetIds((current) => next ? [...current, asset.id] : current.filter((id) => id !== asset.id));
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "收藏状态更新失败");
+    } finally { setPending(""); }
+  };
+
+  const retryPreview = async (asset: AssetItemResponse) => {
+    setPending(`preview:${asset.id}`);
+    setError(null);
+    try {
+      await EnterpriseApi.requestAssetPreview(asset.id);
+      await load(true);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "预览图生成失败");
     } finally { setPending(""); }
   };
 
@@ -209,7 +226,11 @@ export default function AssetCenterPage() {
         {visibleAssets.length === 0 && <p className="col-span-full rounded-2xl border border-dashed border-[#D0D5DD] bg-white p-12 text-center text-sm text-[#667085]">暂无符合条件的资产，可在文稿编辑器中将当前页保存到资产库。</p>}
         {visibleAssets.map((asset) => <article key={asset.id} className="flex min-h-52 flex-col rounded-2xl border border-[#EAECF0] bg-white p-5 shadow-sm">
           <div className="mb-2 flex items-center justify-between"><button type="button" onClick={() => void toggleFavorite(asset)} className="rounded p-1 hover:bg-[#F2F4F7]" title="收藏资产"><Star className={`h-4 w-4 ${favoriteAssetIds.includes(asset.id) ? "fill-[#F5B700] text-[#F5B700]" : "text-[#98A2B3]"}`} /></button>{canManageAsset(asset) && <label className="flex items-center justify-end gap-1 text-[10px] text-[#667085]"><input type="checkbox" checked={selectedAssetIds.includes(asset.id)} onChange={(event) => setSelectedAssetIds((current) => event.target.checked ? [...current, asset.id] : current.filter((id) => id !== asset.id))} />选择治理</label>}</div>
-          <div className="mb-4 aspect-[16/9] overflow-hidden rounded-xl border border-[#EAECF0] bg-[#F8F9FC] p-3" style={{ borderTop: `4px solid ${asset.preview.accent || "#635BFF"}` }}><div className="flex h-full flex-col justify-between"><div><p className="line-clamp-2 text-sm font-semibold leading-5 text-[#101828]">{asset.preview.title || asset.name}</p>{asset.preview.subtitle && <p className="mt-1 line-clamp-2 text-[10px] leading-4 text-[#667085]">{asset.preview.subtitle}</p>}</div><div className="flex items-center justify-between text-[9px] uppercase tracking-wide text-[#98A2B3]"><span>{asset.preview.layout || asset.asset_type}</span><span>{asset.preview.element_count || 0} elements</span></div></div></div>
+          <div className="relative mb-4 aspect-[16/9] overflow-hidden rounded-xl border border-[#EAECF0] bg-[#F8F9FC]">
+            {EnterpriseApi.getAssetPreviewUrl(asset) ? <div className="h-full w-full bg-cover bg-center" role="img" aria-label={`${asset.name}预览图`} style={{ backgroundImage: `url(${EnterpriseApi.getAssetPreviewUrl(asset)})` }} /> : <div className="flex h-full flex-col justify-between p-3" style={{ borderTop: `4px solid ${asset.preview.accent || "#635BFF"}` }}><div><p className="line-clamp-2 text-sm font-semibold leading-5 text-[#101828]">{asset.preview.title || asset.name}</p>{asset.preview.subtitle && <p className="mt-1 line-clamp-2 text-[10px] leading-4 text-[#667085]">{asset.preview.subtitle}</p>}</div><div className="flex items-center justify-between text-[9px] uppercase tracking-wide text-[#98A2B3]"><span>{asset.preview.layout || asset.asset_type}</span><span>{asset.preview.element_count || 0} elements</span></div></div>}
+            {["queued", "rendering"].includes(asset.preview_status) && <span className="absolute bottom-2 right-2 inline-flex items-center gap-1 rounded-full bg-white/90 px-2 py-1 text-[10px] text-[#475467] shadow"><Loader2 className="h-3 w-3 animate-spin" />生成预览中</span>}
+            {asset.preview_status === "error" && <button type="button" disabled={pending === `preview:${asset.id}`} onClick={() => void retryPreview(asset)} title={asset.preview_error || "预览生成失败"} className="absolute bottom-2 right-2 rounded-full bg-[#FEF2F2] px-2 py-1 text-[10px] text-[#B42318] shadow disabled:opacity-50">重新生成预览</button>}
+          </div>
           <div className="flex items-start justify-between gap-3"><div className="min-w-0"><p className="text-xs font-medium text-[#635BFF]">{typeLabel[asset.asset_type] || asset.asset_type} · {asset.scope_type === "personal" ? "个人" : asset.scope_type === "workspace" ? "空间" : "企业"}</p><h2 className="mt-2 truncate text-base font-semibold">{asset.name}</h2></div><div className="flex flex-col items-end gap-1"><span className="rounded-full bg-[#F2F4F7] px-2 py-1 text-xs text-[#475467]">{statusLabel[asset.status]}</span>{asset.authorization_status === "revoked" && <span className="rounded-full bg-[#FEF2F2] px-2 py-1 text-[10px] text-[#B42318]">授权撤销</span>}{asset.expires_at && new Date(asset.expires_at).getTime() <= Date.now() && <span className="rounded-full bg-[#FEF2F2] px-2 py-1 text-[10px] text-[#B42318]">授权过期</span>}</div></div>
           <p className="mt-3 line-clamp-2 text-xs leading-5 text-[#667085]">{asset.description || "暂无说明"}</p>
           <div className="mt-3 flex flex-wrap gap-1">{asset.tags.map((tag) => <span key={tag} className="rounded bg-[#F2F1FF] px-2 py-1 text-[10px] text-[#4238CA]">{tag}</span>)}</div>

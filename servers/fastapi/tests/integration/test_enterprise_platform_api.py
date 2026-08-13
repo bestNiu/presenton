@@ -238,6 +238,9 @@ def test_storage_lifecycle_requires_admin_and_cleans_aged_orphan(tmp_path, monke
         assert denied.status_code == 403
         assert dry_run.status_code == 200
         assert dry_run.json()["candidate_count"] == 1
+        assert dry_run.json()["stored_bytes"] == len(b"unreferenced-object")
+        assert dry_run.json()["orphan_candidate_count"] == 1
+        assert dry_run.json()["revoked_candidate_count"] == 0
         assert dry_run.json()["deleted_count"] == 0
         assert orphan.exists()
 

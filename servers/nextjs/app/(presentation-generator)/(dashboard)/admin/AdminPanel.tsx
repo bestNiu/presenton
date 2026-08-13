@@ -14,6 +14,7 @@ import {
   UserPlus,
   Users,
 } from "lucide-react";
+import StorageGovernancePanel from "./StorageGovernancePanel";
 import {
   Dialog,
   DialogContent,
@@ -464,6 +465,12 @@ export default function AdminPanel({ embedded = false }: AdminPanelProps) {
             >
               API keys
             </TabsTrigger>
+            <TabsTrigger
+              value="storage"
+              className="h-9 rounded-full px-5 text-xs text-[#667085] shadow-none data-[state=active]:bg-white data-[state=active]:text-[#5146E5] data-[state=active]:shadow-sm"
+            >
+              Storage
+            </TabsTrigger>
           </TabsList>
 
           <TabsContent value="users" className="mt-6 space-y-5">
@@ -658,6 +665,9 @@ export default function AdminPanel({ embedded = false }: AdminPanelProps) {
                 })}
               </div>
             </section>
+          </TabsContent>
+          <TabsContent value="storage" className="mt-6">
+            <StorageGovernancePanel />
           </TabsContent>
           </Tabs>
         </div>

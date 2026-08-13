@@ -151,6 +151,7 @@ async def run_storage_lifecycle(
         }
         for key, (reason, _) in sorted(candidates.items())
     ]
+    protected_keys = (referenced_keys & inventory.keys()) - candidates.keys()
     deleted_keys: list[str] = []
     deleted_bytes = 0
     if execute:
@@ -170,10 +171,15 @@ async def run_storage_lifecycle(
         "mode": "execute" if execute else "dry_run",
         "backend": storage.backend,
         "scanned_count": len(stored_objects),
+        "stored_bytes": sum(item.size_bytes for item in stored_objects),
         "referenced_count": len(referenced_keys),
+        "protected_count": len(protected_keys),
+        "protected_bytes": sum(inventory[key].size_bytes for key in protected_keys),
         "missing_referenced_count": len(expected_keys - inventory.keys()),
         "candidate_count": len(candidate_rows),
         "candidate_bytes": sum(row["size_bytes"] for row in candidate_rows),
+        "orphan_candidate_count": sum(row["reason"] == "orphan" for row in candidate_rows),
+        "revoked_candidate_count": sum(row["reason"] != "orphan" for row in candidate_rows),
         "deleted_count": len(deleted_keys),
         "deleted_bytes": deleted_bytes,
         "truncated": execute and len(candidate_rows) > max_delete,

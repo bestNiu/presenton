@@ -229,11 +229,13 @@ function WorkspacePage() {
     setNotifications((current) => current ? { unread_count: 0, notifications: current.notifications.map((item) => ({ ...item, is_read: true })) } : current);
   };
 
-  const updateGovernancePolicy = async (reviewMode: "none" | "single") => {
+  const updateGovernancePolicy = async (
+    changes: Partial<WorkspaceResponse["governance_policy"]>
+  ) => {
     if (!activeWorkspace) return;
     setGovernancePending("workspace-policy");
     try {
-      const updated = await EnterpriseApi.updateWorkspaceGovernancePolicy(activeWorkspace.id, { ...activeWorkspace.governance_policy, review_mode: reviewMode });
+      const updated = await EnterpriseApi.updateWorkspaceGovernancePolicy(activeWorkspace.id, { ...activeWorkspace.governance_policy, ...changes });
       setWorkspaces((current) => current.map((item) => item.id === updated.id ? updated : item));
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "治理策略更新失败");
@@ -649,7 +651,7 @@ function WorkspacePage() {
                 {activeWorkspace?.name || "当前空间"}中的通用 PPT 创建记录。
               </p>
             </div>
-            <div className="flex items-center gap-3"><span className="text-sm text-[#667085]">{presentations.length} 份文稿</span>{canFreeze && activeWorkspace && <label className="flex items-center gap-2 text-xs text-[#667085]">审批策略<select disabled={governancePending === "workspace-policy"} value={activeWorkspace.governance_policy.review_mode} onChange={(event) => void updateGovernancePolicy(event.target.value as "none" | "single")} className="h-8 rounded-lg border border-[#D9DCE3] bg-white px-2 text-xs"><option value="single">单级审批</option><option value="none">无需审批</option></select></label>}</div>
+            <div className="flex flex-wrap items-center justify-end gap-3"><span className="text-sm text-[#667085]">{presentations.length} 份文稿</span>{canFreeze && activeWorkspace && <><label className="flex items-center gap-2 text-xs text-[#667085]">审批策略<select disabled={governancePending === "workspace-policy"} value={activeWorkspace.governance_policy.review_mode} onChange={(event) => void updateGovernancePolicy({ review_mode: event.target.value as "none" | "single" })} className="h-8 rounded-lg border border-[#D9DCE3] bg-white px-2 text-xs"><option value="single">单级审批</option><option value="none">无需审批</option></select></label><label className="flex items-center gap-2 text-xs text-[#667085]">撤销件保留<select disabled={governancePending === "workspace-policy"} value={activeWorkspace.governance_policy.revoked_delivery_retention_days || 90} onChange={(event) => void updateGovernancePolicy({ revoked_delivery_retention_days: Number(event.target.value) })} className="h-8 rounded-lg border border-[#D9DCE3] bg-white px-2 text-xs"><option value={30}>30 天</option><option value={90}>90 天</option><option value={180}>180 天</option><option value={365}>365 天</option></select></label></>}</div>
           </div>
           {presentations.length === 0 ? (
             <div className="mt-4 flex h-28 items-center justify-center rounded-2xl border border-dashed border-[#D9DCE3] bg-white text-sm text-[#667085]">

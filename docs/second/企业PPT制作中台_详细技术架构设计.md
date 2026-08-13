@@ -786,6 +786,16 @@ stateDiagram-v2
 
 生命周期作业通过 `POST /api/v1/enterprise/admin/storage/lifecycle-runs` 运行，仅平台管理员可访问。默认请求 `{ "execute": false }` 只生成 dry-run 报告；确认后使用 `{ "execute": true, "max_delete": 100 }` 分批删除。作业保护所有数据库仍引用的有效对象，只清理超过工作区保留期的已撤销交付件，以及超过孤儿宽限期的无引用对象；每次运行记录扫描量、候选量、删除量、字节数和是否截断。生产调度必须先持续运行 dry-run 并监控候选变化，再启用小批量执行。
 
+管理员页面的 Storage 页签提供容量、受保护对象、候选对象、缺失引用和候选明细。工作区管理员可以在通用工作台设置撤销交付件保留期。无人值守环境使用 `scripts/run_enterprise_storage_lifecycle.py`，脚本默认 dry-run，`--execute --max-delete 100` 才执行删除，并通过非阻塞文件锁避免同一节点重复运行。建议先配置每日 dry-run，观察至少一周后再启用每周小批量清理；多节点调度应保证任务只投递到一个 CronJob 实例。
+
+```bash
+# 每日扫描
+python scripts/run_enterprise_storage_lifecycle.py
+
+# 每周分批清理
+python scripts/run_enterprise_storage_lifecycle.py --execute --max-delete 100
+```
+
 ### 16.2 错误码分类
 
 | 范围 | 示例 |

@@ -660,10 +660,15 @@ class StorageLifecycleRunResponse(BaseModel):
     mode: str
     backend: str
     scanned_count: int
+    stored_bytes: int
     referenced_count: int
+    protected_count: int
+    protected_bytes: int
     missing_referenced_count: int
     candidate_count: int
     candidate_bytes: int
+    orphan_candidate_count: int
+    revoked_candidate_count: int
     deleted_count: int
     deleted_bytes: int
     truncated: bool

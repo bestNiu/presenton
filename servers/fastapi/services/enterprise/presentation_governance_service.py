@@ -11,11 +11,13 @@ from api.v1.auth.principal import AuthPrincipal
 from domains.platform.enums import (
     PresentationEntryStatus,
     PresentationReviewStatus,
+    PresentationQualityStatus,
     WorkspaceRole,
 )
 from models.sql.enterprise.presentation_entry import PresentationEntryModel
 from models.sql.enterprise.presentation_governance import (
     PresentationReviewModel,
+    PresentationQualityRunModel,
     PresentationSnapshotModel,
 )
 from models.sql.presentation import PresentationModel
@@ -94,7 +96,7 @@ async def submit_presentation_review(
     entry_id: uuid.UUID,
     principal: AuthPrincipal,
 ) -> PresentationReviewModel:
-    await require_workspace_role(
+    workspace, _ = await require_workspace_role(
         session,
         workspace_id=workspace_id,
         principal=principal,
@@ -103,6 +105,8 @@ async def submit_presentation_review(
     entry = await _require_entry(
         session, workspace_id=workspace_id, entry_id=entry_id
     )
+    if (workspace.governance_policy or {}).get("review_mode", "single") == "none":
+        raise HTTPException(status_code=409, detail="Workspace review is disabled")
     if PresentationEntryStatus(entry.status) != PresentationEntryStatus.DRAFT:
         raise HTTPException(status_code=409, detail="Only draft presentation can be submitted")
     slide_hash, _ = await _presentation_snapshot(session, entry)
@@ -146,7 +150,7 @@ async def decide_presentation_review(
     action: str,
     comment: str | None,
 ) -> PresentationReviewModel:
-    await require_workspace_role(
+    workspace, _ = await require_workspace_role(
         session,
         workspace_id=workspace_id,
         principal=principal,
@@ -173,6 +177,15 @@ async def decide_presentation_review(
     current_hash, _ = await _presentation_snapshot(session, entry)
     if current_hash != review.slide_snapshot_hash:
         raise HTTPException(status_code=409, detail="Presentation changed after submission")
+    if action == "approve" and (workspace.governance_policy or {}).get("quality_gate_enabled", True):
+        quality_run = await session.scalar(
+            select(PresentationQualityRunModel)
+            .where(PresentationQualityRunModel.presentation_entry_id == entry.id)
+            .order_by(PresentationQualityRunModel.created_at.desc())
+            .limit(1)
+        )
+        if quality_run is None or PresentationQualityStatus(quality_run.status) != PresentationQualityStatus.PASSED or quality_run.slide_snapshot_hash != current_hash:
+            raise HTTPException(status_code=409, detail="Latest quality check must pass before approval")
     if action == "reject" and not (comment or "").strip():
         raise HTTPException(status_code=422, detail="Rejection comment is required")
     review.status = (
@@ -211,7 +224,7 @@ async def freeze_presentation(
     entry_id: uuid.UUID,
     principal: AuthPrincipal,
 ) -> PresentationSnapshotModel:
-    await require_workspace_role(
+    workspace, _ = await require_workspace_role(
         session,
         workspace_id=workspace_id,
         principal=principal,
@@ -220,22 +233,58 @@ async def freeze_presentation(
     entry = await _require_entry(
         session, workspace_id=workspace_id, entry_id=entry_id
     )
-    if PresentationEntryStatus(entry.status) != PresentationEntryStatus.APPROVED:
-        raise HTTPException(status_code=409, detail="Presentation must be approved before freeze")
-    review = await session.scalar(
-        select(PresentationReviewModel)
-        .where(
-            PresentationReviewModel.presentation_entry_id == entry.id,
-            PresentationReviewModel.status == PresentationReviewStatus.APPROVED,
+    policy = workspace.governance_policy or {}
+    review_mode = policy.get("review_mode", "single")
+    review = None
+    if review_mode == "single":
+        if PresentationEntryStatus(entry.status) != PresentationEntryStatus.APPROVED:
+            raise HTTPException(status_code=409, detail="Presentation must be approved before freeze")
+        review = await session.scalar(
+            select(PresentationReviewModel)
+            .where(
+                PresentationReviewModel.presentation_entry_id == entry.id,
+                PresentationReviewModel.status == PresentationReviewStatus.APPROVED,
+            )
+            .order_by(PresentationReviewModel.submission_no.desc())
+            .limit(1)
         )
-        .order_by(PresentationReviewModel.submission_no.desc())
-        .limit(1)
-    )
-    if review is None:
-        raise HTTPException(status_code=409, detail="Approved review not found")
+        if review is None:
+            raise HTTPException(status_code=409, detail="Approved review not found")
+    elif PresentationEntryStatus(entry.status) != PresentationEntryStatus.DRAFT:
+        raise HTTPException(status_code=409, detail="Only draft presentation can be frozen without review")
     slide_hash, manifest = await _presentation_snapshot(session, entry)
-    if slide_hash != review.slide_snapshot_hash:
+    if review is not None and slide_hash != review.slide_snapshot_hash:
         raise HTTPException(status_code=409, detail="Approved presentation changed; reopen review")
+    if review is None:
+        submission_no = (
+            await session.scalar(
+                select(func.max(PresentationReviewModel.submission_no)).where(
+                    PresentationReviewModel.presentation_entry_id == entry.id
+                )
+            )
+            or 0
+        ) + 1
+        review = PresentationReviewModel(
+            presentation_entry_id=entry.id,
+            submission_no=submission_no,
+            slide_snapshot_hash=slide_hash,
+            status=PresentationReviewStatus.APPROVED,
+            submitted_by=principal.user_id,
+            decided_by=principal.user_id,
+            decision_comment="Workspace policy: review not required",
+            decided_at=datetime.now(timezone.utc),
+        )
+        session.add(review)
+    quality_run = None
+    if policy.get("quality_gate_enabled", True):
+        quality_run = await session.scalar(
+            select(PresentationQualityRunModel)
+            .where(PresentationQualityRunModel.presentation_entry_id == entry.id)
+            .order_by(PresentationQualityRunModel.created_at.desc())
+            .limit(1)
+        )
+        if quality_run is None or PresentationQualityStatus(quality_run.status) != PresentationQualityStatus.PASSED or quality_run.slide_snapshot_hash != slide_hash:
+            raise HTTPException(status_code=409, detail="Latest quality check must pass for the current presentation")
     version_no = (
         await session.scalar(
             select(func.max(PresentationSnapshotModel.version_no)).where(
@@ -246,9 +295,11 @@ async def freeze_presentation(
     ) + 1
     manifest["snapshot_version"] = version_no
     manifest["review_id"] = str(review.id)
+    manifest["quality_run_id"] = str(quality_run.id) if quality_run else None
     snapshot = PresentationSnapshotModel(
         presentation_entry_id=entry.id,
         review_id=review.id,
+        quality_run_id=quality_run.id if quality_run else None,
         version_no=version_no,
         manifest=manifest,
         manifest_hash=_canonical_hash(manifest),

@@ -55,6 +55,16 @@ class PresentationDeliveryStatus(str, Enum):
     REVOKED = "revoked"
 
 
+class PresentationQualityStatus(str, Enum):
+    PASSED = "passed"
+    FAILED = "failed"
+
+
+class PresentationQualitySeverity(str, Enum):
+    BLOCKING = "blocking"
+    WARNING = "warning"
+
+
 class TemplateScopeType(str, Enum):
     ENTERPRISE = "enterprise"
     WORKSPACE = "workspace"

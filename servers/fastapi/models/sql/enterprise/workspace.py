@@ -6,6 +6,7 @@ from sqlalchemy import (
     Column,
     DateTime,
     ForeignKey,
+    JSON,
     String,
     UniqueConstraint,
 )
@@ -35,6 +36,14 @@ class WorkspaceModel(SQLModel, table=True):
     )
     is_archived: bool = Field(
         default=False, sa_column=Column(Boolean, nullable=False, default=False)
+    )
+    governance_policy: dict = Field(
+        default_factory=lambda: {
+            "review_mode": "single",
+            "quality_gate_enabled": True,
+            "require_numeric_citations": False,
+        },
+        sa_column=Column(JSON, nullable=False),
     )
     created_at: datetime = Field(
         sa_column=Column(

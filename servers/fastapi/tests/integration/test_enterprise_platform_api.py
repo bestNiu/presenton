@@ -32,7 +32,10 @@ from models.sql.enterprise import (
     PresentationEntryModel,
     PresentationDeliveryArtifactModel,
     PresentationDownloadGrantModel,
+    PresentationQualityIssueModel,
+    PresentationQualityRunModel,
     PresentationReviewModel,
+    PresentationSourceCitationModel,
     PresentationSnapshotModel,
     SceneDefinitionModel,
     TemplatePublicationModel,
@@ -98,6 +101,9 @@ def _build_client(tmp_path):
                 PresentationSnapshotModel.__table__,
                 PresentationDeliveryArtifactModel.__table__,
                 PresentationDownloadGrantModel.__table__,
+                PresentationQualityRunModel.__table__,
+                PresentationQualityIssueModel.__table__,
+                PresentationSourceCitationModel.__table__,
                 AuditEventModel.__table__,
                 TemplatePublicationModel.__table__,
                 BidProjectModel.__table__,
@@ -314,6 +320,14 @@ def test_presentation_registration_preserves_owner_and_allows_member_listing(tmp
             f"/api/v1/enterprise/workspaces/{workspace['id']}/presentations/{entry_id}/review/decision",
             json={"action": "approve"},
         )
+        approval_quality_blocked = client.post(
+            f"/api/v1/enterprise/workspaces/{workspace['id']}/presentations/{entry_id}/review/decision",
+            json={"action": "approve"},
+            headers={"x-test-user": "member"},
+        )
+        quality = client.post(
+            f"/api/v1/enterprise/workspaces/{workspace['id']}/presentations/{entry_id}/quality-runs"
+        )
         approved = client.post(
             f"/api/v1/enterprise/workspaces/{workspace['id']}/presentations/{entry_id}/review/decision",
             json={"action": "approve", "comment": "内容与品牌规范检查通过"},
@@ -363,6 +377,8 @@ def test_presentation_registration_preserves_owner_and_allows_member_listing(tmp
         assert member_cannot_register_owner_presentation.status_code == 404
         assert submitted.json()["status"] == "pending"
         assert self_review_denied.status_code == 409
+        assert approval_quality_blocked.status_code == 409
+        assert quality.json()["status"] == "passed"
         assert approved.json()["status"] == "approved"
         assert frozen.status_code == 200
         assert frozen_update_denied.status_code == 409
@@ -457,6 +473,17 @@ def test_blank_creation_is_atomically_registered_in_workspace(tmp_path):
         entries = client.get(
             f"/api/v1/enterprise/workspaces/{workspace['id']}/presentations"
         )
+        entry_id = entries.json()[0]["id"]
+        no_review_policy = client.put(
+            f"/api/v1/enterprise/workspaces/{workspace['id']}/governance-policy",
+            json={"review_mode": "none", "quality_gate_enabled": True, "require_numeric_citations": False},
+        )
+        blank_quality = client.post(
+            f"/api/v1/enterprise/workspaces/{workspace['id']}/presentations/{entry_id}/quality-runs"
+        )
+        direct_freeze = client.post(
+            f"/api/v1/enterprise/workspaces/{workspace['id']}/presentations/{entry_id}/freeze"
+        )
         events = client.get(
             f"/api/v1/enterprise/workspaces/{workspace['id']}/audit-events"
         )
@@ -468,6 +495,10 @@ def test_blank_creation_is_atomically_registered_in_workspace(tmp_path):
         assert entries.json()[0]["presentation_id"] == created.json()["id"]
         assert entries.json()[0]["creation_mode"] == "blank"
         assert entries.json()[0]["scene_version"] == "1.0"
+        assert no_review_policy.json()["governance_policy"]["review_mode"] == "none"
+        assert blank_quality.json()["status"] == "passed"
+        assert direct_freeze.status_code == 200
+        assert direct_freeze.json()["review_id"]
         assert any(
             event["action"] == "presentation.registered"
             and event["event_metadata"]["creation_mode"] == "blank"
@@ -797,6 +828,18 @@ def test_bid_understanding_flow_enforces_project_access_and_strategy_gate(tmp_pa
         freeze_blocked = client.post(
             f"/api/v1/enterprise/bid/projects/{project_id}/releases/{release['id']}/freeze"
         )
+        release_presentation = client.get(
+            f"/api/v1/ppt/presentation/{release['manifest']['presentation_id']}"
+        ).json()
+        for slide in release_presentation["slides"]:
+            citation = client.post(
+                f"/api/v1/enterprise/workspaces/{workspace['id']}/presentations/{release['presentation_entry_id']}/citations",
+                json={"slide_id": slide["id"], "source_type": "bid_document", "source_id": "protocol-summary:v1", "locator": "p2"},
+            )
+            assert citation.status_code == 201
+        bid_quality = client.post(
+            f"/api/v1/enterprise/workspaces/{workspace['id']}/presentations/{release['presentation_entry_id']}/quality-runs"
+        )
         gate3_opened = client.post(
             f"/api/v1/enterprise/bid/projects/{project_id}/gates/gate_3/action",
             json={"action": "open"},
@@ -890,6 +933,7 @@ def test_bid_understanding_flow_enforces_project_access_and_strategy_gate(tmp_pa
         assert release["manifest_hash"] == expected_manifest_hash
         assert len(release["manifest"]["sources"]) == 4
         assert freeze_blocked.status_code == 409
+        assert bid_quality.json()["status"] == "passed"
         assert gate3_opened.json()["status"] == "open"
         assert gate3_passed.json()["status"] == "passed"
         assert frozen.json()["status"] == "frozen"

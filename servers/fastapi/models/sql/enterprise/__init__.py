@@ -18,7 +18,10 @@ from models.sql.enterprise.presentation_entry import PresentationEntryModel
 from models.sql.enterprise.presentation_governance import (
     PresentationDeliveryArtifactModel,
     PresentationDownloadGrantModel,
+    PresentationQualityIssueModel,
+    PresentationQualityRunModel,
     PresentationReviewModel,
+    PresentationSourceCitationModel,
     PresentationSnapshotModel,
 )
 from models.sql.enterprise.scene_definition import SceneDefinitionModel
@@ -47,7 +50,10 @@ __all__ = [
     "PresentationEntryModel",
     "PresentationDeliveryArtifactModel",
     "PresentationDownloadGrantModel",
+    "PresentationQualityIssueModel",
+    "PresentationQualityRunModel",
     "PresentationReviewModel",
+    "PresentationSourceCitationModel",
     "PresentationSnapshotModel",
     "SceneDefinitionModel",
     "TemplatePublicationModel",

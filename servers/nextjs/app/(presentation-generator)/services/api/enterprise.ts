@@ -12,6 +12,11 @@ export interface WorkspaceResponse {
   workspace_type: WorkspaceType;
   confidentiality: ConfidentialityLevel;
   is_archived: boolean;
+  governance_policy: {
+    review_mode: "none" | "single";
+    quality_gate_enabled: boolean;
+    require_numeric_citations: boolean;
+  };
   current_user_role: WorkspaceRole;
   created_at: string;
   updated_at: string;
@@ -226,6 +231,23 @@ export interface PresentationGovernanceResponse {
   }>;
 }
 
+export interface PresentationQualityRunResponse {
+  id: string;
+  presentation_entry_id: string;
+  slide_snapshot_hash: string;
+  status: "passed" | "failed";
+  blocking_count: number;
+  warning_count: number;
+  created_at: string;
+  issues: Array<{
+    id: string;
+    rule_code: string;
+    severity: "blocking" | "warning";
+    slide_index: number | null;
+    message: string;
+  }>;
+}
+
 export interface PresentationDeliveryArtifactResponse {
   id: string;
   snapshot_id: string;
@@ -375,6 +397,21 @@ export class EnterpriseApi {
   static async getPresentationGovernance(workspaceId: string, entryId: string): Promise<PresentationGovernanceResponse> {
     const response = await fetch(getApiUrl(`/api/v1/enterprise/workspaces/${encodeURIComponent(workspaceId)}/presentations/${encodeURIComponent(entryId)}/governance`), { credentials: "include", cache: "no-store" });
     return ApiResponseHandler.handleResponse(response, "Failed to load presentation governance");
+  }
+
+  static async runPresentationQuality(workspaceId: string, entryId: string): Promise<PresentationQualityRunResponse> {
+    const response = await fetch(getApiUrl(`/api/v1/enterprise/workspaces/${encodeURIComponent(workspaceId)}/presentations/${encodeURIComponent(entryId)}/quality-runs`), { method: "POST", credentials: "include" });
+    return ApiResponseHandler.handleResponse(response, "Failed to run presentation quality check");
+  }
+
+  static async getPresentationQualityReport(workspaceId: string, entryId: string): Promise<{ run: PresentationQualityRunResponse | null }> {
+    const response = await fetch(getApiUrl(`/api/v1/enterprise/workspaces/${encodeURIComponent(workspaceId)}/presentations/${encodeURIComponent(entryId)}/quality-report`), { credentials: "include", cache: "no-store" });
+    return ApiResponseHandler.handleResponse(response, "Failed to load presentation quality report");
+  }
+
+  static async updateWorkspaceGovernancePolicy(workspaceId: string, policy: WorkspaceResponse["governance_policy"]): Promise<WorkspaceResponse> {
+    const response = await fetch(getApiUrl(`/api/v1/enterprise/workspaces/${encodeURIComponent(workspaceId)}/governance-policy`), { method: "PUT", credentials: "include", headers: { "Content-Type": "application/json" }, body: JSON.stringify(policy) });
+    return ApiResponseHandler.handleResponse(response, "Failed to update workspace governance policy");
   }
 
   static async createPresentationDelivery(workspaceId: string, entryId: string, snapshotId: string, format: "pptx" | "pdf"): Promise<PresentationDeliveryArtifactResponse> {

@@ -44,6 +44,10 @@ from api.v1.enterprise.schemas import (
     FolderResponse,
     PresentationEntryResponse,
     PresentationGovernanceResponse,
+    PresentationQualityReportResponse,
+    PresentationQualityRunResponse,
+    PresentationSourceCitationCreateRequest,
+    PresentationSourceCitationResponse,
     PresentationDeliveryCreateRequest,
     PresentationDeliveryArtifactResponse,
     PresentationRegisterRequest,
@@ -58,6 +62,7 @@ from api.v1.enterprise.schemas import (
     WorkspaceMemberResponse,
     WorkspaceMemberUpsertRequest,
     WorkspaceResponse,
+    WorkspaceGovernancePolicyRequest,
 )
 from domains.platform.enums import BidGateType, TemplatePublicationStatus, WorkspaceRole
 from models.sql.enterprise.audit_event import AuditEventModel
@@ -73,6 +78,12 @@ from services.enterprise.presentation_governance_service import (
     get_presentation_governance,
     reopen_presentation_review,
     submit_presentation_review,
+)
+from services.enterprise.presentation_quality_service import (
+    create_source_citation,
+    latest_quality_report,
+    list_source_citations,
+    run_quality_check,
 )
 from services.enterprise.presentation_delivery_service import (
     consume_presentation_download_grant,
@@ -135,6 +146,7 @@ from services.enterprise.workspace_service import (
     list_workspaces,
     remove_member,
     require_workspace_role,
+    update_workspace_governance_policy,
 )
 
 
@@ -518,6 +530,7 @@ def _workspace_response(workspace, role: WorkspaceRole) -> WorkspaceResponse:
         workspace_type=workspace.workspace_type,
         confidentiality=workspace.confidentiality,
         is_archived=workspace.is_archived,
+        governance_policy=workspace.governance_policy,
         current_user_role=WorkspaceRole(role),
         created_at=workspace.created_at,
         updated_at=workspace.updated_at,
@@ -577,6 +590,15 @@ async def get_workspace(
     workspace, membership = await require_workspace_role(
         session, workspace_id=workspace_id, principal=principal
     )
+    return _workspace_response(workspace, membership.role)
+
+
+@API_V1_ENTERPRISE_ROUTER.put(
+    "/workspaces/{workspace_id}/governance-policy", response_model=WorkspaceResponse
+)
+async def put_workspace_governance_policy(workspace_id: uuid.UUID, body: WorkspaceGovernancePolicyRequest, principal: AuthPrincipal = Depends(principal_from_request), session: AsyncSession = Depends(get_async_session)):
+    workspace = await update_workspace_governance_policy(session, workspace_id=workspace_id, principal=principal, policy=body.model_dump())
+    _, membership = await require_workspace_role(session, workspace_id=workspace_id, principal=principal)
     return _workspace_response(workspace, membership.role)
 
 
@@ -736,6 +758,43 @@ async def get_presentation_entries(
 )
 async def get_presentation_entry_governance(workspace_id: uuid.UUID, entry_id: uuid.UUID, principal: AuthPrincipal = Depends(principal_from_request), session: AsyncSession = Depends(get_async_session)):
     return await get_presentation_governance(session, workspace_id=workspace_id, entry_id=entry_id, principal=principal)
+
+
+@API_V1_ENTERPRISE_ROUTER.post(
+    "/workspaces/{workspace_id}/presentations/{entry_id}/quality-runs",
+    response_model=PresentationQualityRunResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def post_presentation_quality_run(workspace_id: uuid.UUID, entry_id: uuid.UUID, principal: AuthPrincipal = Depends(principal_from_request), session: AsyncSession = Depends(get_async_session)):
+    run, issues = await run_quality_check(session, workspace_id=workspace_id, entry_id=entry_id, principal=principal)
+    return PresentationQualityRunResponse.model_validate(run).model_copy(update={"issues": issues})
+
+
+@API_V1_ENTERPRISE_ROUTER.get(
+    "/workspaces/{workspace_id}/presentations/{entry_id}/quality-report",
+    response_model=PresentationQualityReportResponse,
+)
+async def get_presentation_quality_report(workspace_id: uuid.UUID, entry_id: uuid.UUID, principal: AuthPrincipal = Depends(principal_from_request), session: AsyncSession = Depends(get_async_session)):
+    run, issues = await latest_quality_report(session, workspace_id=workspace_id, entry_id=entry_id, principal=principal)
+    response = None if run is None else PresentationQualityRunResponse.model_validate(run).model_copy(update={"issues": issues})
+    return PresentationQualityReportResponse(run=response)
+
+
+@API_V1_ENTERPRISE_ROUTER.post(
+    "/workspaces/{workspace_id}/presentations/{entry_id}/citations",
+    response_model=PresentationSourceCitationResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def post_presentation_source_citation(workspace_id: uuid.UUID, entry_id: uuid.UUID, body: PresentationSourceCitationCreateRequest, principal: AuthPrincipal = Depends(principal_from_request), session: AsyncSession = Depends(get_async_session)):
+    return await create_source_citation(session, workspace_id=workspace_id, entry_id=entry_id, principal=principal, values=body.model_dump())
+
+
+@API_V1_ENTERPRISE_ROUTER.get(
+    "/workspaces/{workspace_id}/presentations/{entry_id}/citations",
+    response_model=list[PresentationSourceCitationResponse],
+)
+async def get_presentation_source_citations(workspace_id: uuid.UUID, entry_id: uuid.UUID, principal: AuthPrincipal = Depends(principal_from_request), session: AsyncSession = Depends(get_async_session)):
+    return await list_source_citations(session, workspace_id=workspace_id, entry_id=entry_id, principal=principal)
 
 
 @API_V1_ENTERPRISE_ROUTER.post(

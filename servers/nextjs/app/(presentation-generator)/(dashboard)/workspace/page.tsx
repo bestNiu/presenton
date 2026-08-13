@@ -23,6 +23,7 @@ import {
   EnterpriseApi,
   type ConfidentialityLevel,
   type PresentationEntryResponse,
+  type PresentationQualityRunResponse,
   type SceneDefinitionResponse,
   type TemplatePublicationResponse,
   type WorkspaceResponse,
@@ -57,6 +58,7 @@ function WorkspacePage() {
   const [scenes, setScenes] = useState<SceneDefinitionResponse[]>([]);
   const [presentations, setPresentations] =
     useState<PresentationEntryResponse[]>([]);
+  const [qualityReports, setQualityReports] = useState<Record<string, PresentationQualityRunResponse | null>>({});
   const [publishedTemplates, setPublishedTemplates] =
     useState<TemplatePublicationResponse[]>([]);
   const [activeWorkspaceId, setActiveWorkspaceId] = useState("");
@@ -106,6 +108,13 @@ function WorkspacePage() {
         if (active) {
           setPresentations(presentationRows);
           setPublishedTemplates(templateRows);
+          void Promise.all(presentationRows.map((item) => EnterpriseApi.getPresentationQualityReport(activeWorkspaceId, item.id)))
+            .then((reports) => {
+              if (active) setQualityReports(Object.fromEntries(presentationRows.map((item, index) => [item.id, reports[index].run])));
+            })
+            .catch(() => {
+              if (active) setQualityReports({});
+            });
         }
       })
       .catch((loadError) => {
@@ -155,6 +164,33 @@ function WorkspacePage() {
       setPresentations(await EnterpriseApi.getPresentations(activeWorkspaceId));
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "文稿治理操作失败");
+    } finally {
+      setGovernancePending("");
+    }
+  };
+
+  const runQualityCheck = async (presentation: PresentationEntryResponse) => {
+    const key = `quality-${presentation.id}`;
+    setGovernancePending(key);
+    setError(null);
+    try {
+      const report = await EnterpriseApi.runPresentationQuality(activeWorkspaceId, presentation.id);
+      setQualityReports((current) => ({ ...current, [presentation.id]: report }));
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "质量检查失败");
+    } finally {
+      setGovernancePending("");
+    }
+  };
+
+  const updateGovernancePolicy = async (reviewMode: "none" | "single") => {
+    if (!activeWorkspace) return;
+    setGovernancePending("workspace-policy");
+    try {
+      const updated = await EnterpriseApi.updateWorkspaceGovernancePolicy(activeWorkspace.id, { ...activeWorkspace.governance_policy, review_mode: reviewMode });
+      setWorkspaces((current) => current.map((item) => item.id === updated.id ? updated : item));
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "治理策略更新失败");
     } finally {
       setGovernancePending("");
     }
@@ -552,7 +588,7 @@ function WorkspacePage() {
                 {activeWorkspace?.name || "当前空间"}中的通用 PPT 创建记录。
               </p>
             </div>
-            <span className="text-sm text-[#667085]">{presentations.length} 份文稿</span>
+            <div className="flex items-center gap-3"><span className="text-sm text-[#667085]">{presentations.length} 份文稿</span>{canFreeze && activeWorkspace && <label className="flex items-center gap-2 text-xs text-[#667085]">审批策略<select disabled={governancePending === "workspace-policy"} value={activeWorkspace.governance_policy.review_mode} onChange={(event) => void updateGovernancePolicy(event.target.value as "none" | "single")} className="h-8 rounded-lg border border-[#D9DCE3] bg-white px-2 text-xs"><option value="single">单级审批</option><option value="none">无需审批</option></select></label>}</div>
           </div>
           {presentations.length === 0 ? (
             <div className="mt-4 flex h-28 items-center justify-center rounded-2xl border border-dashed border-[#D9DCE3] bg-white text-sm text-[#667085]">
@@ -570,12 +606,14 @@ function WorkspacePage() {
                     <div className="min-w-0"><p className="truncate text-sm font-semibold text-[#101828]">{presentation.title || "未命名演示文稿"}</p><p className="mt-1 text-xs text-[#667085]">{creationModeLabel[presentation.creation_mode]} · {presentation.status}</p></div>
                   </Link>
                   <div className="mt-3 flex flex-wrap gap-2 border-t border-[#F0F1F3] pt-3">
-                    {canCreate && presentation.status === "draft" && <button type="button" disabled={governancePending === presentation.id} onClick={() => void runGovernanceAction(presentation.id, () => EnterpriseApi.submitPresentationReview(activeWorkspaceId, presentation.id))} className="h-7 rounded-md bg-[#635BFF] px-2.5 text-[11px] text-white disabled:opacity-40">提交评审</button>}
+                    {canCreate && presentation.status !== "frozen" && <button type="button" disabled={governancePending === `quality-${presentation.id}`} onClick={() => void runQualityCheck(presentation)} className="h-7 rounded-md border border-[#087BCB] px-2.5 text-[11px] text-[#087BCB] disabled:opacity-40">质量检查</button>}
+                    {canCreate && presentation.status === "draft" && activeWorkspace?.governance_policy.review_mode === "single" && <button type="button" disabled={governancePending === presentation.id} onClick={() => void runGovernanceAction(presentation.id, () => EnterpriseApi.submitPresentationReview(activeWorkspaceId, presentation.id))} className="h-7 rounded-md bg-[#635BFF] px-2.5 text-[11px] text-white disabled:opacity-40">提交评审</button>}
                     {canReview && presentation.status === "in_review" && <><button type="button" onClick={() => void runGovernanceAction(presentation.id, () => EnterpriseApi.decidePresentationReview(activeWorkspaceId, presentation.id, "reject", "请修改后重新提交"))} className="h-7 rounded-md border border-[#FDA29B] px-2.5 text-[11px] text-[#B42318]">退回</button><button type="button" onClick={() => void runGovernanceAction(presentation.id, () => EnterpriseApi.decidePresentationReview(activeWorkspaceId, presentation.id, "approve", "评审通过"))} className="h-7 rounded-md bg-[#027A48] px-2.5 text-[11px] text-white">批准</button></>}
                     {canCreate && presentation.status === "approved" && <button type="button" onClick={() => void runGovernanceAction(presentation.id, () => EnterpriseApi.reopenPresentationReview(activeWorkspaceId, presentation.id))} className="h-7 rounded-md border border-[#D9DCE3] px-2.5 text-[11px]">重新编辑</button>}
-                    {canFreeze && presentation.status === "approved" && <button type="button" onClick={() => void runGovernanceAction(presentation.id, () => EnterpriseApi.freezePresentation(activeWorkspaceId, presentation.id))} className="h-7 rounded-md bg-[#17171B] px-2.5 text-[11px] text-white">冻结版本</button>}
+                    {canFreeze && (presentation.status === "approved" || (presentation.status === "draft" && activeWorkspace?.governance_policy.review_mode === "none")) && <button type="button" disabled={qualityReports[presentation.id]?.status !== "passed"} onClick={() => void runGovernanceAction(presentation.id, () => EnterpriseApi.freezePresentation(activeWorkspaceId, presentation.id))} className="h-7 rounded-md bg-[#17171B] px-2.5 text-[11px] text-white disabled:opacity-40">冻结版本</button>}
                     {presentation.status === "frozen" && <><span className="inline-flex h-7 items-center rounded-md bg-[#ECFDF3] px-2.5 text-[11px] text-[#027A48]">已形成可审计快照</span>{canFreeze && <><button type="button" disabled={governancePending.startsWith(`export-${presentation.id}`)} onClick={() => void exportGovernedPresentation(presentation, "pptx")} className="h-7 rounded-md bg-[#635BFF] px-2.5 text-[11px] text-white disabled:opacity-40">受控 PPTX</button><button type="button" disabled={governancePending.startsWith(`export-${presentation.id}`)} onClick={() => void exportGovernedPresentation(presentation, "pdf")} className="h-7 rounded-md border border-[#635BFF] px-2.5 text-[11px] text-[#4238CA] disabled:opacity-40">受控 PDF</button></>}</>}
                   </div>
+                  {qualityReports[presentation.id] && <div className={`mt-2 rounded-lg px-2.5 py-2 text-[11px] ${qualityReports[presentation.id]?.status === "passed" ? "bg-[#ECFDF3] text-[#027A48]" : "bg-[#FEF2F2] text-[#B42318]"}`}>质量检查：{qualityReports[presentation.id]?.status === "passed" ? "通过" : `${qualityReports[presentation.id]?.blocking_count} 个阻断问题`}{qualityReports[presentation.id]?.issues.slice(0, 2).map((issue) => <span key={issue.id} className="ml-2">· 第{(issue.slide_index ?? 0) + 1}页 {issue.message}</span>)}</div>}
                 </article>
               ))}
             </div>

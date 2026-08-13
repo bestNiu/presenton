@@ -23,6 +23,8 @@ from domains.platform.enums import (
     PresentationEntryStatus,
     PresentationDeliveryFormat,
     PresentationDeliveryStatus,
+    PresentationQualitySeverity,
+    PresentationQualityStatus,
     PresentationReviewStatus,
     SceneStatus,
     TemplatePublicationStatus,
@@ -386,9 +388,16 @@ class WorkspaceResponse(BaseModel):
     workspace_type: WorkspaceType
     confidentiality: ConfidentialityLevel
     is_archived: bool
+    governance_policy: dict
     current_user_role: WorkspaceRole
     created_at: datetime
     updated_at: datetime
+
+
+class WorkspaceGovernancePolicyRequest(BaseModel):
+    review_mode: str = Field(default="single", pattern="^(none|single)$")
+    quality_gate_enabled: bool = True
+    require_numeric_citations: bool = False
 
 
 class WorkspaceMemberUpsertRequest(BaseModel):
@@ -486,6 +495,7 @@ class PresentationSnapshotResponse(BaseModel):
     id: uuid.UUID
     presentation_entry_id: uuid.UUID
     review_id: uuid.UUID
+    quality_run_id: uuid.UUID | None
     version_no: int
     manifest: dict
     manifest_hash: str
@@ -517,6 +527,62 @@ class PresentationDeliveryArtifactResponse(BaseModel):
     sha256: str
     size_bytes: int
     status: PresentationDeliveryStatus
+    created_by: uuid.UUID | None
+    created_at: datetime
+
+
+class PresentationQualityIssueResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: uuid.UUID
+    quality_run_id: uuid.UUID
+    rule_code: str
+    severity: PresentationQualitySeverity
+    slide_id: uuid.UUID | None
+    slide_index: int | None
+    element_ref: str | None
+    message: str
+    details: dict
+
+
+class PresentationQualityRunResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: uuid.UUID
+    presentation_entry_id: uuid.UUID
+    slide_snapshot_hash: str
+    status: PresentationQualityStatus
+    blocking_count: int
+    warning_count: int
+    policy_snapshot: dict
+    created_by: uuid.UUID | None
+    created_at: datetime
+    issues: list[PresentationQualityIssueResponse] = Field(default_factory=list)
+
+
+class PresentationQualityReportResponse(BaseModel):
+    run: PresentationQualityRunResponse | None
+
+
+class PresentationSourceCitationCreateRequest(BaseModel):
+    slide_id: uuid.UUID | None = None
+    element_ref: str | None = Field(default=None, max_length=500)
+    source_type: str = Field(min_length=1, max_length=64)
+    source_id: str = Field(min_length=1, max_length=500)
+    source_version: str | None = Field(default=None, max_length=100)
+    locator: str | None = Field(default=None, max_length=500)
+    excerpt: str | None = Field(default=None, max_length=2000)
+
+
+class PresentationSourceCitationResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: uuid.UUID
+    presentation_entry_id: uuid.UUID
+    slide_id: uuid.UUID | None
+    element_ref: str | None
+    source_type: str
+    source_id: str
+    source_version: str | None
+    locator: str | None
+    excerpt: str | None
     created_by: uuid.UUID | None
     created_at: datetime
 

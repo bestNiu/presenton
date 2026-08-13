@@ -8,6 +8,8 @@ from domains.platform.enums import (
     PresentationDeliveryFormat,
     PresentationDeliveryStatus,
     PresentationReviewStatus,
+    PresentationQualitySeverity,
+    PresentationQualityStatus,
 )
 from utils.datetime_utils import get_current_utc_datetime
 
@@ -39,6 +41,7 @@ class PresentationSnapshotModel(SQLModel, table=True):
     id: uuid.UUID = Field(primary_key=True, default_factory=uuid.uuid4)
     presentation_entry_id: uuid.UUID = Field(sa_column=Column(ForeignKey("enterprise_presentation_entries.id", ondelete="CASCADE"), nullable=False, index=True))
     review_id: uuid.UUID = Field(sa_column=Column(ForeignKey("enterprise_presentation_reviews.id", ondelete="RESTRICT"), nullable=False, index=True))
+    quality_run_id: uuid.UUID | None = Field(default=None, sa_column=Column(ForeignKey("enterprise_presentation_quality_runs.id", ondelete="RESTRICT"), index=True))
     version_no: int = Field(sa_column=Column(Integer, nullable=False))
     manifest: dict = Field(default_factory=dict, sa_column=Column(JSON, nullable=False))
     manifest_hash: str = Field(sa_column=Column(String(64), nullable=False, index=True))
@@ -76,3 +79,47 @@ class PresentationDownloadGrantModel(SQLModel, table=True):
     created_by: uuid.UUID | None = Field(default=None, sa_column=Column(ForeignKey("user.id", ondelete="SET NULL")))
     created_at: datetime = Field(sa_column=Column(DateTime(timezone=True), default=get_current_utc_datetime))
     last_downloaded_at: datetime | None = Field(default=None, sa_column=Column(DateTime(timezone=True)))
+
+
+class PresentationQualityRunModel(SQLModel, table=True):
+    __tablename__ = "enterprise_presentation_quality_runs"
+
+    id: uuid.UUID = Field(primary_key=True, default_factory=uuid.uuid4)
+    presentation_entry_id: uuid.UUID = Field(sa_column=Column(ForeignKey("enterprise_presentation_entries.id", ondelete="CASCADE"), nullable=False, index=True))
+    slide_snapshot_hash: str = Field(sa_column=Column(String(64), nullable=False, index=True))
+    status: PresentationQualityStatus = Field(sa_column=Column(String(32), nullable=False, index=True))
+    blocking_count: int = Field(default=0, sa_column=Column(Integer, nullable=False))
+    warning_count: int = Field(default=0, sa_column=Column(Integer, nullable=False))
+    policy_snapshot: dict = Field(default_factory=dict, sa_column=Column(JSON, nullable=False))
+    created_by: uuid.UUID | None = Field(default=None, sa_column=Column(ForeignKey("user.id", ondelete="SET NULL"), index=True))
+    created_at: datetime = Field(sa_column=Column(DateTime(timezone=True), default=get_current_utc_datetime, index=True))
+
+
+class PresentationQualityIssueModel(SQLModel, table=True):
+    __tablename__ = "enterprise_presentation_quality_issues"
+
+    id: uuid.UUID = Field(primary_key=True, default_factory=uuid.uuid4)
+    quality_run_id: uuid.UUID = Field(sa_column=Column(ForeignKey("enterprise_presentation_quality_runs.id", ondelete="CASCADE"), nullable=False, index=True))
+    rule_code: str = Field(sa_column=Column(String(64), nullable=False, index=True))
+    severity: PresentationQualitySeverity = Field(sa_column=Column(String(32), nullable=False, index=True))
+    slide_id: uuid.UUID | None = Field(default=None, sa_column=Column(ForeignKey("slides.id", ondelete="SET NULL"), index=True))
+    slide_index: int | None = Field(default=None, sa_column=Column(Integer))
+    element_ref: str | None = Field(default=None, sa_column=Column(String(500)))
+    message: str = Field(sa_column=Column(String(1000), nullable=False))
+    details: dict = Field(default_factory=dict, sa_column=Column(JSON, nullable=False))
+
+
+class PresentationSourceCitationModel(SQLModel, table=True):
+    __tablename__ = "enterprise_presentation_source_citations"
+
+    id: uuid.UUID = Field(primary_key=True, default_factory=uuid.uuid4)
+    presentation_entry_id: uuid.UUID = Field(sa_column=Column(ForeignKey("enterprise_presentation_entries.id", ondelete="CASCADE"), nullable=False, index=True))
+    slide_id: uuid.UUID | None = Field(default=None, sa_column=Column(ForeignKey("slides.id", ondelete="CASCADE"), index=True))
+    element_ref: str | None = Field(default=None, sa_column=Column(String(500)))
+    source_type: str = Field(sa_column=Column(String(64), nullable=False, index=True))
+    source_id: str = Field(sa_column=Column(String(500), nullable=False, index=True))
+    source_version: str | None = Field(default=None, sa_column=Column(String(100)))
+    locator: str | None = Field(default=None, sa_column=Column(String(500)))
+    excerpt: str | None = Field(default=None, sa_column=Column(String(2000)))
+    created_by: uuid.UUID | None = Field(default=None, sa_column=Column(ForeignKey("user.id", ondelete="SET NULL"), index=True))
+    created_at: datetime = Field(sa_column=Column(DateTime(timezone=True), default=get_current_utc_datetime))

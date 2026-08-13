@@ -54,6 +54,35 @@ async def require_workspace_role(
     return workspace, membership
 
 
+async def update_workspace_governance_policy(
+    session: AsyncSession,
+    *,
+    workspace_id: uuid.UUID,
+    principal: AuthPrincipal,
+    policy: dict,
+) -> WorkspaceModel:
+    workspace, _ = await require_workspace_role(
+        session,
+        workspace_id=workspace_id,
+        principal=principal,
+        required_role=WorkspaceRole.ADMIN,
+    )
+    workspace.governance_policy = dict(policy)
+    session.add(workspace)
+    record_audit_event(
+        session,
+        actor_id=principal.user_id,
+        workspace_id=workspace_id,
+        action="workspace.governance_policy_updated",
+        resource_type="workspace",
+        resource_id=workspace.id,
+        metadata={"policy": workspace.governance_policy},
+    )
+    await session.commit()
+    await session.refresh(workspace)
+    return workspace
+
+
 async def list_workspaces(
     session: AsyncSession, principal: AuthPrincipal
 ) -> list[tuple[WorkspaceModel, WorkspaceRole]]:

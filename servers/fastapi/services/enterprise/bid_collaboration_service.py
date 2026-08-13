@@ -157,10 +157,21 @@ async def gate_blockers(session: AsyncSession, project_id: uuid.UUID, gate_type:
         if undecided: blockers.append(f"仍有 {undecided} 个承诺未完成审批")
     else:
         from models.sql.enterprise.bid import BidPresentationReleaseModel
+        from models.sql.enterprise.presentation_governance import PresentationQualityRunModel
+        from models.sql.enterprise.presentation_entry import PresentationEntryModel
+        from domains.platform.enums import PresentationQualityStatus
+        from services.enterprise.presentation_governance_service import _presentation_snapshot
         gate2 = await session.scalar(select(BidReviewGateModel).where(BidReviewGateModel.project_id == project_id, BidReviewGateModel.gate_type == BidGateType.GATE_2))
         if gate2 is None or BidGateStatus(gate2.status) != BidGateStatus.PASSED: blockers.append("Gate 2 尚未通过")
-        releases = await session.scalar(select(func.count(BidPresentationReleaseModel.id)).where(BidPresentationReleaseModel.project_id == project_id, BidPresentationReleaseModel.status == "draft"))
-        if not releases: blockers.append("尚未生成待演练的竞标摘要版本")
+        release = await session.scalar(select(BidPresentationReleaseModel).where(BidPresentationReleaseModel.project_id == project_id, BidPresentationReleaseModel.status == "draft").order_by(BidPresentationReleaseModel.version_no.desc()).limit(1))
+        if release is None:
+            blockers.append("尚未生成待演练的竞标摘要版本")
+        else:
+            quality_run = await session.scalar(select(PresentationQualityRunModel).where(PresentationQualityRunModel.presentation_entry_id == release.presentation_entry_id).order_by(PresentationQualityRunModel.created_at.desc()).limit(1))
+            entry = await session.get(PresentationEntryModel, release.presentation_entry_id)
+            live_hash = (await _presentation_snapshot(session, entry))[0] if entry else None
+            if quality_run is None or PresentationQualityStatus(quality_run.status) != PresentationQualityStatus.PASSED or quality_run.slide_snapshot_hash != live_hash:
+                blockers.append("当前组装版本尚未通过统一质量检查")
     gate = await session.scalar(select(BidReviewGateModel).where(BidReviewGateModel.project_id == project_id, BidReviewGateModel.gate_type == gate_type))
     if gate:
         open_issues = await session.scalar(select(func.count(BidReviewIssueModel.id)).where(BidReviewIssueModel.gate_id == gate.id, BidReviewIssueModel.status == BidIssueStatus.OPEN, BidReviewIssueModel.severity == "blocking"))

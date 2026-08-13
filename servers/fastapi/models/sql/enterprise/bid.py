@@ -355,6 +355,7 @@ class BidDeliveryArtifactModel(SQLModel, table=True):
     format: BidDeliveryFormat = Field(sa_column=Column(String(16), nullable=False, index=True))
     watermark_text: str = Field(sa_column=Column(String(300), nullable=False))
     file_path: str = Field(sa_column=Column(String(2000), nullable=False))
+    object_key: str | None = Field(default=None, sa_column=Column(String(1000), index=True))
     file_name: str = Field(sa_column=Column(String(500), nullable=False))
     sha256: str = Field(sa_column=Column(String(64), nullable=False, index=True))
     size_bytes: int = Field(sa_column=Column(Integer, nullable=False))

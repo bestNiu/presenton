@@ -763,6 +763,23 @@ stateDiagram-v2
 - 错误返回稳定 `code/message/details/trace_id`；
 - 禁止将对象存储真实路径作为稳定公共 API。
 
+### 8.6 企业对象存储运行配置（已落地）
+
+企业资产预览、通用 PPT 交付件和竞标交付件统一通过 `EnterpriseObjectStorage` 存取。业务表仅保存 object key、SHA-256 与文件大小；浏览器仍访问受控下载接口，不接触服务器路径、桶地址或长期凭据。历史绝对路径记录保留只读兼容，新生成文件不再写入绝对路径。
+
+| 环境变量 | 默认值 | 说明 |
+| --- | --- | --- |
+| `ENTERPRISE_OBJECT_STORAGE_BACKEND` | `local` | `local` 或 `s3`；MinIO 使用 `s3` |
+| `ENTERPRISE_OBJECT_STORAGE_LOCAL_ROOT` | `${APP_DATA_DIRECTORY}/enterprise-objects` | 本地开发、单机试点的持久化目录 |
+| `ENTERPRISE_OBJECT_STORAGE_BUCKET` | 无 | S3/MinIO 私有桶名称，`s3` 模式必填 |
+| `ENTERPRISE_OBJECT_STORAGE_ENDPOINT_URL` | AWS 默认端点 | MinIO 或内部 S3 兼容端点 |
+| `ENTERPRISE_OBJECT_STORAGE_REGION` | SDK 默认值 | 对象存储区域 |
+| `ENTERPRISE_OBJECT_STORAGE_ACCESS_KEY` | SDK 凭据链 | 访问密钥；生产环境优先使用工作负载身份或密钥注入 |
+| `ENTERPRISE_OBJECT_STORAGE_SECRET_KEY` | SDK 凭据链 | 密钥，不写入仓库和数据库 |
+| `ENTERPRISE_OBJECT_STORAGE_ADDRESSING_STYLE` | `path` | MinIO 通常使用 `path`，AWS 可配置为 `virtual` |
+
+本地写入采用临时文件加原子替换；S3 写入携带 SHA-256 元数据。下载授权消费前校验对象大小和摘要，S3 内容由后端流式转发，因此桶必须保持私有。正式切换 MinIO 时只变更运行配置，不改变业务 API 和数据库引用方式。
+
 ### 16.2 错误码分类
 
 | 范围 | 示例 |

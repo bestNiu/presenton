@@ -212,6 +212,8 @@ async def decide_promotion_request(
             payload_hash=source.payload_hash,
             preview=copy.deepcopy(source.preview),
             preview_image_path=source.preview_image_path if source.preview_status == "ready" else None,
+            preview_object_key=source.preview_object_key if source.preview_status == "ready" else None,
+            preview_sha256=source.preview_sha256 if source.preview_status == "ready" else None,
             preview_status=source.preview_status if source.preview_status in {"ready", "error"} else "structured",
             preview_error=source.preview_error if source.preview_status == "error" else None,
             source_presentation_entry_id=source.source_presentation_entry_id,

@@ -33,6 +33,8 @@ class AssetItemModel(SQLModel, table=True):
     payload_hash: str = Field(sa_column=Column(String(64), nullable=False, index=True))
     preview: dict = Field(default_factory=dict, sa_column=Column(JSON, nullable=False))
     preview_image_path: str | None = Field(default=None, sa_column=Column(String(2000)))
+    preview_object_key: str | None = Field(default=None, sa_column=Column(String(1000), index=True))
+    preview_sha256: str | None = Field(default=None, sa_column=Column(String(64)))
     preview_status: str = Field(default="structured", sa_column=Column(String(32), nullable=False, index=True))
     preview_task_id: str | None = Field(default=None, sa_column=Column(ForeignKey("async_tasks.id", ondelete="SET NULL"), index=True))
     preview_error: str | None = Field(default=None, sa_column=Column(String(1000)))

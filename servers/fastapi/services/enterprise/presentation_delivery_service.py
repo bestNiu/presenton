@@ -23,11 +23,14 @@ from models.sql.presentation import PresentationModel
 from models.sql.slide import SlideModel
 from services.enterprise.audit_service import record_audit_event
 from services.enterprise.bid_delivery_service import (
-    _file_sha256,
     _token_hash,
     _watermarked_ui,
 )
 from services.enterprise.workspace_service import require_workspace_role
+from services.enterprise.object_storage_service import (
+    StoredObjectLocation,
+    get_enterprise_object_storage,
+)
 from utils.export_utils import export_presentation
 
 
@@ -88,20 +91,40 @@ async def create_presentation_delivery(
     session.add(derived)
     session.add_all(slides)
     await session.commit()
+    artifact = PresentationDeliveryArtifactModel(
+        snapshot_id=snapshot.id,
+        derived_presentation_id=derived.id,
+        format=format,
+        watermark_text=watermark,
+        file_path="pending",
+        file_name=f"{derived.title}.{PresentationDeliveryFormat(format).value}",
+        sha256="",
+        size_bytes=0,
+        created_by=principal.user_id,
+    )
     try:
         exported = await export_presentation(derived.id, derived.title, PresentationDeliveryFormat(format).value, cookie_header=cookie_header)
+        file_path = os.path.realpath(exported.path)
+        if not os.path.isfile(file_path):
+            raise HTTPException(status_code=500, detail="Exported delivery file is missing")
+        artifact.file_name = os.path.basename(file_path)
+        stored = await get_enterprise_object_storage().put_file(
+            file_path,
+            f"presentation-deliveries/{workspace_id}/{entry_id}/{artifact.id}.{PresentationDeliveryFormat(format).value}",
+            content_type=(
+                "application/pdf"
+                if PresentationDeliveryFormat(format).value == "pdf"
+                else "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+            ),
+        )
     except Exception:
         await session.delete(derived)
         await session.commit()
         raise
-    file_path = os.path.realpath(exported.path)
-    if not os.path.isfile(file_path):
-        raise HTTPException(status_code=500, detail="Exported delivery file is missing")
-    artifact = PresentationDeliveryArtifactModel(
-        snapshot_id=snapshot.id, derived_presentation_id=derived.id, format=format,
-        watermark_text=watermark, file_path=file_path, file_name=os.path.basename(file_path),
-        sha256=_file_sha256(file_path), size_bytes=os.path.getsize(file_path), created_by=principal.user_id,
-    )
+    artifact.object_key = stored.object_key
+    artifact.file_path = stored.object_key
+    artifact.sha256 = stored.sha256
+    artifact.size_bytes = stored.size_bytes
     session.add(artifact)
     record_audit_event(session, actor_id=principal.user_id, workspace_id=workspace_id, action="presentation.delivery_exported", resource_type="presentation_delivery_artifact", resource_id=artifact.id, metadata={"snapshot_id": str(snapshot.id), "format": PresentationDeliveryFormat(format).value, "sha256": artifact.sha256})
     await session.commit()
@@ -133,7 +156,7 @@ async def issue_presentation_download_grant(session: AsyncSession, *, workspace_
     return grant, token
 
 
-async def consume_presentation_download_grant(session: AsyncSession, *, token: str) -> tuple[PresentationDeliveryArtifactModel, str]:
+async def consume_presentation_download_grant(session: AsyncSession, *, token: str) -> tuple[PresentationDeliveryArtifactModel, StoredObjectLocation]:
     grant = await session.scalar(select(PresentationDownloadGrantModel).where(PresentationDownloadGrantModel.token_hash == _token_hash(token)))
     if grant is None:
         raise HTTPException(status_code=404, detail="Download grant not found")
@@ -143,12 +166,18 @@ async def consume_presentation_download_grant(session: AsyncSession, *, token: s
     artifact = await session.get(PresentationDeliveryArtifactModel, grant.artifact_id)
     if artifact is None or PresentationDeliveryStatus(artifact.status) != PresentationDeliveryStatus.READY:
         raise HTTPException(status_code=410, detail="Presentation delivery is unavailable")
-    file_path = os.path.realpath(artifact.file_path)
-    if not os.path.isfile(file_path) or _file_sha256(file_path) != artifact.sha256:
-        raise HTTPException(status_code=409, detail="Presentation delivery integrity check failed")
+    location = StoredObjectLocation(object_key=artifact.object_key, legacy_path=artifact.file_path)
+    try:
+        await get_enterprise_object_storage().verify(
+            location,
+            expected_sha256=artifact.sha256,
+            expected_size=artifact.size_bytes,
+        )
+    except HTTPException as exc:
+        raise HTTPException(status_code=409, detail="Presentation delivery integrity check failed") from exc
     grant.download_count += 1
     grant.last_downloaded_at = datetime.now(timezone.utc)
     session.add(grant)
     record_audit_event(session, actor_id=None, action="presentation.delivery_downloaded", resource_type="presentation_delivery_artifact", resource_id=artifact.id, metadata={"grant_id": str(grant.id), "download_count": grant.download_count})
     await session.commit()
-    return artifact, file_path
+    return artifact, location

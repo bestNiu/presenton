@@ -1,6 +1,4 @@
 import os
-from pathlib import Path
-import shutil
 import uuid
 
 from fastapi import HTTPException
@@ -13,6 +11,10 @@ from models.sql.enterprise.asset_item import AssetItemModel
 from services.database import async_session_maker
 from services.enterprise.asset_library_service import _require_asset_access
 from services.enterprise.audit_service import record_audit_event
+from services.enterprise.object_storage_service import (
+    StoredObjectLocation,
+    get_enterprise_object_storage,
+)
 from services.export_task_service import EXPORT_TASK_SERVICE
 from utils.get_env import get_app_data_directory_env
 
@@ -85,15 +87,14 @@ async def run_asset_preview_task(asset_id: uuid.UUID, task_id: str) -> None:
                 result = await EXPORT_TASK_SERVICE.render_json_to_image(components, 1280, 720)
             else:
                 raise HTTPException(status_code=422, detail="Asset snapshot has no renderable HTML or UI components")
-            app_data = get_app_data_directory_env()
-            if not app_data:
-                raise RuntimeError("APP_DATA_DIRECTORY is required for asset previews")
-            destination_dir = Path(app_data) / "asset-previews"
-            destination_dir.mkdir(parents=True, exist_ok=True)
-            destination = destination_dir / f"{asset.id}-{asset.payload_hash[:12]}.png"
-            shutil.copyfile(result.path, destination)
-            os.chmod(destination, 0o644)
-            asset.preview_image_path = str(destination)
+            stored = await get_enterprise_object_storage().put_file(
+                result.path,
+                f"asset-previews/{asset.id}/{asset.payload_hash[:12]}.png",
+                content_type="image/png",
+            )
+            asset.preview_object_key = stored.object_key
+            asset.preview_sha256 = stored.sha256
+            asset.preview_image_path = None
             asset.preview_status = "ready"
             asset.preview_error = None
             task.status = AsyncTaskStatus.COMPLETED
@@ -128,21 +129,31 @@ async def run_asset_preview_task(asset_id: uuid.UUID, task_id: str) -> None:
         await session.commit()
 
 
-async def get_asset_preview_path(
+async def get_asset_preview_location(
     session: AsyncSession,
     *,
     asset_id: uuid.UUID,
     principal: AuthPrincipal,
-) -> str:
+) -> StoredObjectLocation:
     asset = await _require_asset_access(session, asset_id=asset_id, principal=principal)
-    path = asset.preview_image_path
-    if asset.preview_status != "ready" or not path or not os.path.isfile(path):
+    location = StoredObjectLocation(
+        object_key=asset.preview_object_key,
+        legacy_path=asset.preview_image_path,
+    )
+    if asset.preview_status != "ready" or not (location.object_key or location.legacy_path):
         raise HTTPException(status_code=404, detail="Asset preview not found")
-    app_data = get_app_data_directory_env()
-    if not app_data:
+    if not location.object_key:
+        app_data = get_app_data_directory_env()
+        if not app_data:
+            raise HTTPException(status_code=404, detail="Asset preview not found")
+        preview_root = os.path.realpath(os.path.join(app_data, "asset-previews"))
+        legacy_path = os.path.realpath(location.legacy_path or "")
+        if os.path.commonpath([preview_root, legacy_path]) != preview_root:
+            raise HTTPException(status_code=404, detail="Asset preview not found")
+    try:
+        await get_enterprise_object_storage().verify(
+            location, expected_sha256=asset.preview_sha256
+        )
+    except HTTPException as exc:
         raise HTTPException(status_code=404, detail="Asset preview not found")
-    preview_root = os.path.realpath(os.path.join(app_data, "asset-previews"))
-    real_path = os.path.realpath(path)
-    if os.path.commonpath([preview_root, real_path]) != preview_root:
-        raise HTTPException(status_code=404, detail="Asset preview not found")
-    return real_path
+    return location

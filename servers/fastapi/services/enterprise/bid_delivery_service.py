@@ -25,15 +25,11 @@ from models.sql.presentation import PresentationModel
 from models.sql.slide import SlideModel
 from services.enterprise.audit_service import record_audit_event
 from services.enterprise.bid_project_service import require_project_role
+from services.enterprise.object_storage_service import (
+    StoredObjectLocation,
+    get_enterprise_object_storage,
+)
 from utils.export_utils import export_presentation
-
-
-def _file_sha256(path: str) -> str:
-    digest = hashlib.sha256()
-    with open(path, "rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
 
 
 def _token_hash(token: str) -> str:
@@ -130,6 +126,17 @@ async def create_delivery_artifact(
     session.add_all(slides)
     await session.commit()
 
+    artifact = BidDeliveryArtifactModel(
+        release_id=release.id,
+        derived_presentation_id=derived.id,
+        format=format,
+        watermark_text=effective_watermark,
+        file_path="pending",
+        file_name=f"{derived.title}.{BidDeliveryFormat(format).value}",
+        sha256="",
+        size_bytes=0,
+        created_by=principal.user_id,
+    )
     try:
         exported = await export_presentation(
             derived.id,
@@ -137,25 +144,27 @@ async def create_delivery_artifact(
             BidDeliveryFormat(format).value,
             cookie_header=cookie_header,
         )
+        file_path = os.path.realpath(exported.path)
+        if not os.path.isfile(file_path):
+            raise HTTPException(status_code=500, detail="Exported delivery file is missing")
+        artifact.file_name = os.path.basename(file_path)
+        stored = await get_enterprise_object_storage().put_file(
+            file_path,
+            f"bid-deliveries/{project.workspace_id}/{project_id}/{artifact.id}.{BidDeliveryFormat(format).value}",
+            content_type=(
+                "application/pdf"
+                if BidDeliveryFormat(format).value == "pdf"
+                else "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+            ),
+        )
     except Exception:
         await session.delete(derived)
         await session.commit()
         raise
-
-    file_path = os.path.realpath(exported.path)
-    if not os.path.isfile(file_path):
-        raise HTTPException(status_code=500, detail="Exported delivery file is missing")
-    artifact = BidDeliveryArtifactModel(
-        release_id=release.id,
-        derived_presentation_id=derived.id,
-        format=format,
-        watermark_text=effective_watermark,
-        file_path=file_path,
-        file_name=os.path.basename(file_path),
-        sha256=_file_sha256(file_path),
-        size_bytes=os.path.getsize(file_path),
-        created_by=principal.user_id,
-    )
+    artifact.object_key = stored.object_key
+    artifact.file_path = stored.object_key
+    artifact.sha256 = stored.sha256
+    artifact.size_bytes = stored.size_bytes
     session.add(artifact)
     record_audit_event(
         session,
@@ -254,7 +263,7 @@ async def issue_download_grant(
 
 async def consume_download_grant(
     session: AsyncSession, *, token: str
-) -> tuple[BidDeliveryArtifactModel, str]:
+) -> tuple[BidDeliveryArtifactModel, StoredObjectLocation]:
     grant = await session.scalar(
         select(BidDownloadGrantModel).where(
             BidDownloadGrantModel.token_hash == _token_hash(token)
@@ -272,9 +281,15 @@ async def consume_download_grant(
     artifact = await session.get(BidDeliveryArtifactModel, grant.artifact_id)
     if artifact is None or BidDeliveryStatus(artifact.status) != BidDeliveryStatus.READY:
         raise HTTPException(status_code=410, detail="Delivery artifact is unavailable")
-    file_path = os.path.realpath(artifact.file_path)
-    if not os.path.isfile(file_path) or _file_sha256(file_path) != artifact.sha256:
-        raise HTTPException(status_code=409, detail="Delivery artifact integrity check failed")
+    location = StoredObjectLocation(object_key=artifact.object_key, legacy_path=artifact.file_path)
+    try:
+        await get_enterprise_object_storage().verify(
+            location,
+            expected_sha256=artifact.sha256,
+            expected_size=artifact.size_bytes,
+        )
+    except HTTPException as exc:
+        raise HTTPException(status_code=409, detail="Delivery artifact integrity check failed") from exc
     grant.download_count += 1
     grant.last_downloaded_at = datetime.now(timezone.utc)
     session.add(grant)
@@ -292,7 +307,7 @@ async def consume_download_grant(
         },
     )
     await session.commit()
-    return artifact, file_path
+    return artifact, location
 
 
 async def archive_release(

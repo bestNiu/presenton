@@ -1,7 +1,6 @@
 import uuid
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, Response, status
-from fastapi.responses import FileResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -159,10 +158,11 @@ from services.enterprise.asset_personalization_service import (
     set_asset_favorite,
 )
 from services.enterprise.asset_preview_service import (
-    get_asset_preview_path,
+    get_asset_preview_location,
     queue_asset_preview,
     run_asset_preview_task,
 )
+from services.enterprise.object_storage_service import get_enterprise_object_storage
 from services.enterprise.asset_discovery_service import (
     decide_asset_duplicate,
     find_similar_assets,
@@ -519,8 +519,10 @@ async def get_enterprise_asset_thumbnail(
     principal: AuthPrincipal = Depends(principal_from_request),
     session: AsyncSession = Depends(get_async_session),
 ):
-    path = await get_asset_preview_path(session, asset_id=asset_id, principal=principal)
-    return FileResponse(path, media_type="image/png")
+    location = await get_asset_preview_location(session, asset_id=asset_id, principal=principal)
+    return await get_enterprise_object_storage().download_response(
+        location, filename=None, media_type="image/png"
+    )
 
 
 @API_V1_ENTERPRISE_ROUTER.post(
@@ -731,10 +733,12 @@ async def post_bid_download_grant(project_id: uuid.UUID, artifact_id: uuid.UUID,
 
 @API_V1_ENTERPRISE_ROUTER.get("/bid/deliveries/download/{token}")
 async def get_bid_delivery_download(token: str, session: AsyncSession = Depends(get_async_session)):
-    artifact, file_path = await consume_download_grant(session, token=token)
+    artifact, location = await consume_download_grant(session, token=token)
     artifact_format = getattr(artifact.format, "value", artifact.format)
     media_type = "application/pdf" if artifact_format == "pdf" else "application/vnd.openxmlformats-officedocument.presentationml.presentation"
-    return FileResponse(file_path, filename=artifact.file_name, media_type=media_type)
+    return await get_enterprise_object_storage().download_response(
+        location, filename=artifact.file_name, media_type=media_type
+    )
 
 
 def _collaboration_response(rows: dict) -> dict:
@@ -1442,10 +1446,12 @@ async def post_presentation_download_grant(workspace_id: uuid.UUID, entry_id: uu
 
 @API_V1_ENTERPRISE_ROUTER.get("/presentations/deliveries/download/{token}")
 async def get_presentation_delivery_download(token: str, session: AsyncSession = Depends(get_async_session)):
-    artifact, file_path = await consume_presentation_download_grant(session, token=token)
+    artifact, location = await consume_presentation_download_grant(session, token=token)
     artifact_format = getattr(artifact.format, "value", artifact.format)
     media_type = "application/pdf" if artifact_format == "pdf" else "application/vnd.openxmlformats-officedocument.presentationml.presentation"
-    return FileResponse(file_path, filename=artifact.file_name, media_type=media_type)
+    return await get_enterprise_object_storage().download_response(
+        location, filename=artifact.file_name, media_type=media_type
+    )
 
 
 @API_V1_ENTERPRISE_ROUTER.get(

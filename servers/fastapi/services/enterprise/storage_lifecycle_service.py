@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from api.v1.auth.principal import AuthPrincipal
 from domains.platform.enums import AuditResult, BidDeliveryStatus, PresentationDeliveryStatus
 from models.sql.enterprise.asset_item import AssetItemModel
+from models.sql.enterprise.document import EnterpriseDocumentModel
 from models.sql.enterprise.bid import (
     BidDeliveryArtifactModel,
     BidPresentationReleaseModel,
@@ -67,6 +68,15 @@ async def _perform_storage_lifecycle(
             )
         ).all()
     )
+    document_keys = set(
+        (
+            await session.scalars(
+                select(EnterpriseDocumentModel.object_key).where(
+                    EnterpriseDocumentModel.object_key.is_not(None)
+                )
+            )
+        ).all()
+    )
     presentation_rows = (
         await session.execute(
             select(PresentationDeliveryArtifactModel, WorkspaceModel)
@@ -101,9 +111,11 @@ async def _perform_storage_lifecycle(
     ).all()
 
     referenced_keys = set(asset_keys)
+    referenced_keys.update(document_keys)
     referenced_keys.update(artifact.object_key for artifact, _ in presentation_rows)
     referenced_keys.update(artifact.object_key for artifact, _ in bid_rows)
     expected_keys = set(asset_keys)
+    expected_keys.update(document_keys)
     expected_keys.update(
         artifact.object_key
         for artifact, _ in presentation_rows

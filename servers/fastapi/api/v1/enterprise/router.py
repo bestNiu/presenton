@@ -1,6 +1,18 @@
 import uuid
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, Response, status
+from fastapi import (
+    APIRouter,
+    BackgroundTasks,
+    Depends,
+    File,
+    Form,
+    HTTPException,
+    Query,
+    Request,
+    Response,
+    UploadFile,
+    status,
+)
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -65,6 +77,11 @@ from api.v1.enterprise.schemas import (
     EnterpriseNotificationListResponse,
     EnterpriseNotificationReadAllResponse,
     EnterpriseNotificationResponse,
+    EnterpriseDocumentDetailResponse,
+    EnterpriseDocumentParseTaskResponse,
+    EnterpriseDocumentResponse,
+    EnterpriseKnowledgeSearchItemResponse,
+    EnterpriseKnowledgeSearchRequest,
     PresentationEntryResponse,
     PresentationCommentCreateRequest,
     PresentationCommentReplyCreateRequest,
@@ -138,6 +155,15 @@ from services.enterprise.notification_service import (
     mark_notification_read,
     refresh_due_notifications,
 )
+from services.enterprise.document_service import (
+    get_document_download_location,
+    get_enterprise_document,
+    list_enterprise_documents,
+    retry_document_parse,
+    run_document_parse_task,
+    upload_enterprise_document,
+)
+from services.enterprise.knowledge_service import search_enterprise_knowledge
 from services.enterprise.asset_library_service import (
     create_asset,
     bulk_transition_assets,
@@ -269,6 +295,134 @@ async def get_storage_lifecycle_runs(
 ):
     return await list_storage_lifecycle_runs(
         session, principal=principal, limit=limit
+    )
+
+
+@API_V1_ENTERPRISE_ROUTER.post(
+    "/documents",
+    response_model=EnterpriseDocumentResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def post_enterprise_document(
+    background_tasks: BackgroundTasks,
+    file: UploadFile = File(...),
+    scope_type: str = Form(...),
+    workspace_id: uuid.UUID | None = Form(default=None),
+    project_id: uuid.UUID | None = Form(default=None),
+    logical_name: str | None = Form(default=None),
+    category: str = Form(default="general"),
+    authorization_status: str = Form(default="internal"),
+    confidentiality: str = Form(default="L2"),
+    principal: AuthPrincipal = Depends(principal_from_request),
+    session: AsyncSession = Depends(get_async_session),
+):
+    document, task = await upload_enterprise_document(
+        session,
+        principal=principal,
+        file=file,
+        scope_type=scope_type,
+        workspace_id=workspace_id,
+        project_id=project_id,
+        logical_name=logical_name,
+        category=category,
+        authorization_status=authorization_status,
+        confidentiality=confidentiality,
+    )
+    background_tasks.add_task(run_document_parse_task, document.id, task.id)
+    return document
+
+
+@API_V1_ENTERPRISE_ROUTER.get(
+    "/documents",
+    response_model=list[EnterpriseDocumentResponse],
+)
+async def get_enterprise_documents(
+    scope_type: str = Query(...),
+    workspace_id: uuid.UUID | None = Query(default=None),
+    project_id: uuid.UUID | None = Query(default=None),
+    include_versions: bool = Query(default=False),
+    principal: AuthPrincipal = Depends(principal_from_request),
+    session: AsyncSession = Depends(get_async_session),
+):
+    return await list_enterprise_documents(
+        session,
+        principal=principal,
+        scope_type=scope_type,
+        workspace_id=workspace_id,
+        project_id=project_id,
+        include_versions=include_versions,
+    )
+
+
+@API_V1_ENTERPRISE_ROUTER.get(
+    "/documents/{document_id}",
+    response_model=EnterpriseDocumentDetailResponse,
+)
+async def get_enterprise_document_detail(
+    document_id: uuid.UUID,
+    principal: AuthPrincipal = Depends(principal_from_request),
+    session: AsyncSession = Depends(get_async_session),
+):
+    return await get_enterprise_document(
+        session, document_id=document_id, principal=principal
+    )
+
+
+@API_V1_ENTERPRISE_ROUTER.get("/documents/{document_id}/download")
+async def download_enterprise_document(
+    document_id: uuid.UUID,
+    principal: AuthPrincipal = Depends(principal_from_request),
+    session: AsyncSession = Depends(get_async_session),
+):
+    document, location = await get_document_download_location(
+        session, document_id=document_id, principal=principal
+    )
+    return await get_enterprise_object_storage().download_response(
+        location, filename=document.file_name, media_type=document.mime_type
+    )
+
+
+@API_V1_ENTERPRISE_ROUTER.post(
+    "/documents/{document_id}/parse-tasks",
+    response_model=EnterpriseDocumentParseTaskResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def post_enterprise_document_parse_task(
+    document_id: uuid.UUID,
+    background_tasks: BackgroundTasks,
+    principal: AuthPrincipal = Depends(principal_from_request),
+    session: AsyncSession = Depends(get_async_session),
+):
+    document, task = await retry_document_parse(
+        session, document_id=document_id, principal=principal
+    )
+    background_tasks.add_task(run_document_parse_task, document.id, task.id)
+    return EnterpriseDocumentParseTaskResponse(
+        document_id=document.id,
+        task_id=task.id,
+        status=task.status.value if hasattr(task.status, "value") else task.status,
+    )
+
+
+@API_V1_ENTERPRISE_ROUTER.post(
+    "/knowledge/search",
+    response_model=list[EnterpriseKnowledgeSearchItemResponse],
+)
+async def post_enterprise_knowledge_search(
+    body: EnterpriseKnowledgeSearchRequest,
+    principal: AuthPrincipal = Depends(principal_from_request),
+    session: AsyncSession = Depends(get_async_session),
+):
+    return await search_enterprise_knowledge(
+        session,
+        principal=principal,
+        query=body.query,
+        scope_type=body.scope_type,
+        workspace_id=body.workspace_id,
+        project_id=body.project_id,
+        categories=body.categories,
+        latest_only=body.latest_only,
+        limit=body.limit,
     )
 
 

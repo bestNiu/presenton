@@ -1,3 +1,4 @@
+from datetime import datetime, timezone
 import re
 import uuid
 
@@ -12,6 +13,7 @@ from domains.platform.enums import (
     WorkspaceRole,
 )
 from models.sql.enterprise.presentation_entry import PresentationEntryModel
+from models.sql.enterprise.document_chunk import EnterpriseDocumentChunkModel
 from models.sql.enterprise.presentation_governance import (
     PresentationQualityIssueModel,
     PresentationQualityRunModel,
@@ -19,6 +21,7 @@ from models.sql.enterprise.presentation_governance import (
 )
 from models.sql.slide import SlideModel
 from services.enterprise.audit_service import record_audit_event
+from services.enterprise.document_service import get_enterprise_document
 from services.enterprise.presentation_governance_service import _presentation_snapshot
 from services.enterprise.workspace_service import require_workspace_role
 
@@ -28,6 +31,9 @@ PLACEHOLDER_PATTERN = re.compile(
     re.IGNORECASE,
 )
 NUMBER_PATTERN = re.compile(r"(?<![A-Za-z])\d+(?:\.\d+)?(?:%|％|万|亿|年|月|日|天|例|家|个)?")
+DOCUMENT_LOCATOR_PATTERN = re.compile(
+    r"^lines:(?P<start>\d+)-(?P<end>\d+)#chunk=(?P<chunk>\d+)$"
+)
 
 
 def _walk(value: object, path: str = ""):
@@ -141,6 +147,68 @@ async def create_source_citation(session: AsyncSession, *, workspace_id: uuid.UU
         slide = await session.scalar(select(SlideModel).execution_options(skip_owner_scope=True).where(SlideModel.id == slide_id, SlideModel.presentation == entry.presentation_id))
         if slide is None:
             raise HTTPException(status_code=404, detail="Slide not found")
+    if values.get("source_type") == "enterprise_document":
+        try:
+            document_id = uuid.UUID(values.get("source_id", ""))
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(
+                status_code=422, detail="Invalid enterprise document citation"
+            ) from exc
+        document = await get_enterprise_document(
+            session, document_id=document_id, principal=principal
+        )
+        if document.scope_type != "enterprise" and document.workspace_id != workspace_id:
+            raise HTTPException(
+                status_code=422,
+                detail="Enterprise document belongs to another workspace",
+            )
+        if (
+            document.parse_status != "ready"
+            or document.authorization_status == "revoked"
+            or document.status in {"archived", "revoked"}
+            or (
+                document.expires_at is not None
+                and (
+                    document.expires_at
+                    if document.expires_at.tzinfo
+                    else document.expires_at.replace(tzinfo=timezone.utc)
+                )
+                <= datetime.now(timezone.utc)
+            )
+        ):
+            raise HTTPException(
+                status_code=409, detail="Enterprise document cannot be cited"
+            )
+        if values.get("source_version") != str(document.version_no):
+            raise HTTPException(
+                status_code=409, detail="Enterprise document citation version changed"
+            )
+        locator_match = DOCUMENT_LOCATOR_PATTERN.fullmatch(values.get("locator") or "")
+        if locator_match is None:
+            raise HTTPException(
+                status_code=422, detail="Invalid enterprise document locator"
+            )
+        chunk = await session.scalar(
+            select(EnterpriseDocumentChunkModel).where(
+                EnterpriseDocumentChunkModel.document_id == document.id,
+                EnterpriseDocumentChunkModel.chunk_index
+                == int(locator_match.group("chunk")),
+            )
+        )
+        if (
+            chunk is None
+            or chunk.start_line != int(locator_match.group("start"))
+            or chunk.end_line != int(locator_match.group("end"))
+        ):
+            raise HTTPException(
+                status_code=409, detail="Enterprise document citation locator changed"
+            )
+        excerpt = (values.get("excerpt") or "").strip()
+        excerpt_body = excerpt.strip("…").strip()
+        if not excerpt_body or excerpt_body not in chunk.content:
+            raise HTTPException(
+                status_code=422, detail="Enterprise document citation excerpt is invalid"
+            )
     citation = PresentationSourceCitationModel(presentation_entry_id=entry.id, created_by=principal.user_id, **values)
     session.add(citation)
     record_audit_event(session, actor_id=principal.user_id, workspace_id=workspace_id, action="presentation.citation_created", resource_type="presentation_source_citation", resource_id=citation.id, metadata={"entry_id": str(entry.id), "source_type": citation.source_type, "source_id": citation.source_id})

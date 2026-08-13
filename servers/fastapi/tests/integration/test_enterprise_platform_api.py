@@ -24,6 +24,8 @@ from models.sql.enterprise import (
     AssetUsageEventModel,
     AuditEventModel,
     EnterpriseNotificationModel,
+    EnterpriseDocumentModel,
+    EnterpriseDocumentChunkModel,
     BidDeliveryArtifactModel,
     BidDownloadGrantModel,
     BidProjectDocumentModel,
@@ -64,6 +66,7 @@ from services.enterprise.template_publication_service import (
     get_accessible_published_template,
 )
 import services.enterprise.asset_preview_service as asset_preview_service
+import services.enterprise.document_service as document_service
 import services.enterprise.storage_lifecycle_service as storage_lifecycle_service
 
 
@@ -120,6 +123,8 @@ def _build_client(tmp_path):
                 SceneDefinitionModel.__table__,
                 PresentationEntryModel.__table__,
                 AsyncTaskModel.__table__,
+                EnterpriseDocumentModel.__table__,
+                EnterpriseDocumentChunkModel.__table__,
                 AssetItemModel.__table__,
                 AssetFavoriteModel.__table__,
                 AssetPromotionRequestModel.__table__,
@@ -339,6 +344,256 @@ def test_team_membership_enforces_roles_and_hides_workspace_from_outsider(tmp_pa
         assert member_list.json()[0]["current_user_role"] == "viewer"
         assert denied_folder.status_code == 404
         assert outsider.status_code == 404
+    finally:
+        asyncio.run(engine.dispose())
+
+
+def test_enterprise_document_upload_versions_parse_access_and_storage_protection(
+    tmp_path, monkeypatch
+):
+    client, engine, session_maker, users = _build_client(tmp_path)
+    storage_root = tmp_path / "enterprise-objects"
+    monkeypatch.setenv("ENTERPRISE_OBJECT_STORAGE_BACKEND", "local")
+    monkeypatch.setenv("ENTERPRISE_OBJECT_STORAGE_LOCAL_ROOT", str(storage_root))
+    monkeypatch.setenv("ENTERPRISE_OBJECT_STORAGE_ORPHAN_GRACE_DAYS", "1")
+    monkeypatch.setattr(document_service, "async_session_maker", session_maker)
+
+    class FakeDocumentsLoader:
+        def __init__(self, file_paths):
+            self.file_paths = file_paths
+            self.documents = []
+
+        async def load_documents(self, **_):
+            self.documents = ["# 企业介绍\n可信、可追溯的产品能力。"]
+
+    monkeypatch.setattr(document_service, "DocumentsLoader", FakeDocumentsLoader)
+    try:
+        workspace = client.post(
+            "/api/v1/enterprise/workspaces",
+            json={"name": "企业资料空间", "workspace_type": "team"},
+        ).json()
+        client.put(
+            f"/api/v1/enterprise/workspaces/{workspace['id']}/members/{users['member'].id}",
+            json={"user_id": str(users["member"].id), "role": "viewer"},
+        )
+        form = {
+            "scope_type": "workspace",
+            "workspace_id": workspace["id"],
+            "logical_name": "企业介绍",
+            "category": "公司资料",
+            "confidentiality": "L2",
+        }
+        first = client.post(
+            "/api/v1/enterprise/documents",
+            data=form,
+            files={"file": ("company.md", b"first version", "text/markdown")},
+        )
+        duplicate = client.post(
+            "/api/v1/enterprise/documents",
+            data={**form, "logical_name": "另一个名称"},
+            files={"file": ("duplicate.md", b"first version", "text/markdown")},
+        )
+        second = client.post(
+            "/api/v1/enterprise/documents",
+            data=form,
+            files={"file": ("company.md", b"second version", "text/markdown")},
+        )
+        owner_cannot_publish_enterprise = client.post(
+            "/api/v1/enterprise/documents",
+            data={"scope_type": "enterprise", "logical_name": "集团标准"},
+            files={"file": ("standard.txt", b"enterprise standard", "text/plain")},
+        )
+        enterprise_document = client.post(
+            "/api/v1/enterprise/documents",
+            data={"scope_type": "enterprise", "logical_name": "集团标准"},
+            files={"file": ("standard.txt", b"enterprise standard", "text/plain")},
+            headers={"x-test-user": "admin"},
+        )
+
+        assert first.status_code == 201, first.text
+        assert first.json()["version_no"] == 1
+        assert first.json()["parse_status"] == "queued"
+        assert duplicate.status_code == 409
+        assert duplicate.json()["detail"]["document_id"] == first.json()["id"]
+        assert second.status_code == 201, second.text
+        assert second.json()["version_no"] == 2
+        assert second.json()["supersedes_document_id"] == first.json()["id"]
+        assert owner_cannot_publish_enterprise.status_code == 403
+        assert enterprise_document.status_code == 201
+        enterprise_list = client.get(
+            "/api/v1/enterprise/documents",
+            params={"scope_type": "enterprise"},
+        )
+        assert [item["id"] for item in enterprise_list.json()] == [
+            enterprise_document.json()["id"]
+        ]
+
+        latest = client.get(
+            "/api/v1/enterprise/documents",
+            params={"scope_type": "workspace", "workspace_id": workspace["id"]},
+        )
+        versions = client.get(
+            "/api/v1/enterprise/documents",
+            params={
+                "scope_type": "workspace",
+                "workspace_id": workspace["id"],
+                "include_versions": True,
+            },
+        )
+        detail = client.get(
+            f"/api/v1/enterprise/documents/{second.json()['id']}",
+            headers={"x-test-user": "member"},
+        )
+        downloaded = client.get(
+            f"/api/v1/enterprise/documents/{second.json()['id']}/download",
+            headers={"x-test-user": "member"},
+        )
+        viewer_upload = client.post(
+            "/api/v1/enterprise/documents",
+            data=form,
+            files={"file": ("denied.md", b"denied", "text/markdown")},
+            headers={"x-test-user": "member"},
+        )
+        outsider = client.get(
+            "/api/v1/enterprise/documents",
+            params={"scope_type": "workspace", "workspace_id": workspace["id"]},
+            headers={"x-test-user": "outsider"},
+        )
+        retried = client.post(
+            f"/api/v1/enterprise/documents/{second.json()['id']}/parse-tasks"
+        )
+        searched = client.post(
+            "/api/v1/enterprise/knowledge/search",
+            json={
+                "query": "产品能力",
+                "scope_type": "workspace",
+                "workspace_id": workspace["id"],
+            },
+            headers={"x-test-user": "member"},
+        )
+        searched_versions = client.post(
+            "/api/v1/enterprise/knowledge/search",
+            json={
+                "query": "产品能力",
+                "scope_type": "workspace",
+                "workspace_id": workspace["id"],
+                "latest_only": False,
+            },
+        )
+        category_filtered = client.post(
+            "/api/v1/enterprise/knowledge/search",
+            json={
+                "query": "产品能力",
+                "scope_type": "workspace",
+                "workspace_id": workspace["id"],
+                "categories": ["不存在"],
+            },
+        )
+        outsider_search = client.post(
+            "/api/v1/enterprise/knowledge/search",
+            json={
+                "query": "产品能力",
+                "scope_type": "workspace",
+                "workspace_id": workspace["id"],
+            },
+            headers={"x-test-user": "outsider"},
+        )
+
+        assert [item["id"] for item in latest.json()] == [second.json()["id"]]
+        assert len(versions.json()) == 2
+        assert detail.status_code == 200
+        assert detail.json()["parse_status"] == "ready"
+        assert detail.json()["extracted_text"].startswith("# 企业介绍")
+        assert detail.json()["extracted_metadata"]["heading_count"] == 1
+        assert downloaded.content == b"second version"
+        assert viewer_upload.status_code == 404
+        assert outsider.status_code == 404
+        assert retried.status_code == 202
+        assert retried.json()["document_id"] == second.json()["id"]
+        assert retried.json()["status"] == "pending"
+        assert searched.status_code == 200
+        assert len(searched.json()) == 1
+        assert searched.json()[0]["document_id"] == second.json()["id"]
+        assert searched.json()[0]["heading"] == "企业介绍"
+        assert searched.json()[0]["locator"]["start_line"] == 1
+        assert searched.json()[0]["citation"] == {
+            "source_type": "enterprise_document",
+            "source_id": second.json()["id"],
+            "source_version": "2",
+            "locator": "lines:1-2#chunk=0",
+            "excerpt": "可信、可追溯的产品能力。",
+        }
+        assert len(searched_versions.json()) == 2
+        assert category_filtered.json() == []
+        assert outsider_search.status_code == 404
+
+        presentation_id = uuid.uuid4()
+        slide_id = uuid.uuid4()
+
+        async def seed_citation_target():
+            async with session_maker() as session:
+                session.add(
+                    PresentationModel(
+                        id=presentation_id,
+                        owner_id=users["owner"].id,
+                        version=PresentationVersion.V2_STANDARD,
+                        content="knowledge-backed presentation",
+                        n_slides=1,
+                        language="Chinese",
+                        title="知识引用演示",
+                    )
+                )
+                session.add(
+                    SlideModel(
+                        id=slide_id,
+                        owner_id=users["owner"].id,
+                        presentation=presentation_id,
+                        layout_group="general",
+                        layout="general-1",
+                        index=0,
+                        content={"title": "企业能力"},
+                        ui={"id": "slide-knowledge", "elements": []},
+                    )
+                )
+                await session.commit()
+
+        asyncio.run(seed_citation_target())
+        entry = client.post(
+            "/api/v1/enterprise/presentations",
+            json={
+                "workspace_id": workspace["id"],
+                "presentation_id": str(presentation_id),
+                "scene_type": "general",
+            },
+        ).json()
+        citation_payload = {
+            **searched.json()[0]["citation"],
+            "slide_id": str(slide_id),
+        }
+        citation = client.post(
+            f"/api/v1/enterprise/workspaces/{workspace['id']}/presentations/{entry['id']}/citations",
+            json=citation_payload,
+        )
+        tampered_citation = client.post(
+            f"/api/v1/enterprise/workspaces/{workspace['id']}/presentations/{entry['id']}/citations",
+            json={**citation_payload, "excerpt": "资料中不存在的内容"},
+        )
+
+        assert citation.status_code == 201, citation.text
+        assert citation.json()["source_id"] == second.json()["id"]
+        assert tampered_citation.status_code == 422
+
+        for path in storage_root.rglob("*.md"):
+            aged = (datetime.now(timezone.utc) - timedelta(days=2)).timestamp()
+            os.utime(path, (aged, aged))
+        lifecycle = client.post(
+            "/api/v1/enterprise/admin/storage/lifecycle-runs",
+            json={"execute": False},
+            headers={"x-test-user": "admin"},
+        )
+        assert lifecycle.status_code == 200
+        assert lifecycle.json()["candidate_count"] == 0
+        assert lifecycle.json()["protected_count"] == 3
     finally:
         asyncio.run(engine.dispose())
 

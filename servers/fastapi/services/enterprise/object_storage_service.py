@@ -204,6 +204,21 @@ class EnterpriseObjectStorage:
         await asyncio.to_thread(self._s3_client().delete_object, Bucket=bucket, Key=key)
         return True
 
+    async def download_to_file(self, object_key: str, destination_path: str) -> None:
+        key = _normalize_object_key(object_key)
+        destination = Path(destination_path).resolve()
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        if self.backend == "local":
+            source = self._local_path(key)
+            if not source.is_file():
+                raise FileNotFoundError(key)
+            await asyncio.to_thread(shutil.copyfile, source, destination)
+            return
+        bucket, _ = self._s3_settings()
+        await asyncio.to_thread(
+            self._s3_client().download_file, bucket, key, str(destination)
+        )
+
     async def verify(
         self,
         location: StoredObjectLocation,

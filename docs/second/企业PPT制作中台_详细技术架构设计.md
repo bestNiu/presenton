@@ -497,6 +497,26 @@ sequenceDiagram
 - 模型输出仍须经过 schema、来源和业务规则校验；
 - 建立包含恶意文档指令的安全评测集。
 
+### 11.5 企业文档中心首批落地（T28）
+
+首批实现采用 `enterprise_documents` 单表版本行：`version_group_id + version_no` 表示逻辑文档版本链，`is_latest + supersedes_document_id` 支持默认只读最新版本和按需查看历史版本。该实现保持 API 语义上的 Document/DocumentVersion 分离，待后续引入字段级元数据、引用定位和切片索引时，可在不改变文档 ID 与版本组契约的前提下拆表。
+
+文档支持 `enterprise/workspace/project` 三种作用域。企业级写入仅允许平台管理员；空间级写入要求 editor，项目级写入要求 contributor；读取分别复用空间和竞标项目 ACL。项目作用域是竞标工作台的扩展能力，企业级与空间级作用域服务于通用 PPT 工作台，解析和存储链路不包含竞标专属逻辑。
+
+上传 API 为 `POST /api/v1/enterprise/documents`，通过 multipart 同时提交文件和治理元数据。服务端流式计算 SHA-256，并在同一作用域内拦截完全重复内容；同一 `logical_name` 的新内容自动形成下一版本。原文件写入私有企业对象存储，数据库只保存 object key、摘要和大小；下载必须经过 ACL 与完整性校验。上传上限由 `ENTERPRISE_DOCUMENT_MAX_UPLOAD_MB` 控制，默认 100 MB。
+
+上传成功后创建 `enterprise.document-parse` 异步任务，复用 `DocumentsLoader + LiteParse/Office/OCR` 解析链路，状态按 `queued → parsing → ready/error` 流转。首批保存完整提取文本与字符数、行数、标题数等解析元数据；失败通过 `POST /api/v1/enterprise/documents/{id}/parse-tasks` 重试。上传、解析成功、解析失败和人工重试均写入审计事件。后续切片与检索任务只消费 `ready` 版本，不直接读取上传临时文件。
+
+存储生命周期扫描已将全部企业文档 object key 纳入受保护引用集合，因此即使对象超过孤儿宽限期，也不会被误清理。授权状态为 `revoked` 或业务状态为 `archived/revoked` 的文档禁止下载；物理保留期与销毁审批在后续治理批次扩展。
+
+### 11.6 ACL 知识检索与可信引用落地（T29）
+
+解析任务在保存全文的同一事务中生成 `enterprise_document_chunks`。切片保存文档版本 ID、顺序号、标题、正文、SHA-256、字符数、起止行号和结构化 locator；重新解析时先替换该版本的旧切片，避免新旧解析结果混用。切片最大字符数由 `ENTERPRISE_DOCUMENT_CHUNK_MAX_CHARACTERS` 控制，默认 1200，运行时限制在 200—5000。
+
+`POST /api/v1/enterprise/knowledge/search` 接收查询词、`enterprise/workspace/project` 作用域、可选分类、是否包含历史版本和返回数量。服务端必须先复用文档作用域 ACL，再从 `ready`、未撤销、未过期的版本中召回；默认只搜索最新版本。首批索引标记为 `lexical-v1`，使用中英文词项、中文二元词、标题和文档元数据加权排序，保证 SQLite 试点与 PostgreSQL 部署行为一致。候选召回上限为 5000 个切片，后续数据量增长后由 BM25/向量 adapter 替换候选召回，不改变权限过滤与响应契约。
+
+每条结果同时返回展示字段和标准 citation：`source_type/source_id/source_version/locator/excerpt`。它可以直接提交到已有演示文稿 citation API。写入 `enterprise_document` 类型引用时，服务端再次检查调用者权限、目标工作区、文档状态、精确版本、切片序号、行号和摘录内容，防止客户端伪造引用或把已撤销资料注入 PPT。质量门禁继续消费统一的 `PresentationSourceCitation`，无需区分引用来自通用工作台还是竞标工作台。
+
 ---
 
 ## 12. AI 编排架构

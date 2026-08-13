@@ -48,6 +48,10 @@ def test_local_object_storage_round_trip_and_integrity(tmp_path, monkeypatch):
     assert root in response_path.resolve().parents
     assert response_path.read_bytes() == source.read_bytes()
 
+    materialized = tmp_path / "materialized" / "delivery.pdf"
+    asyncio.run(storage.download_to_file(stored.object_key, str(materialized)))
+    assert materialized.read_bytes() == source.read_bytes()
+
     response_path.write_bytes(b"tampered")
     with pytest.raises(HTTPException) as exc_info:
         asyncio.run(

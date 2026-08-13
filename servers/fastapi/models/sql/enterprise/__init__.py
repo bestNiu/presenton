@@ -3,6 +3,8 @@ from models.sql.enterprise.asset_item import AssetItemModel
 from models.sql.enterprise.asset_favorite import AssetFavoriteModel
 from models.sql.enterprise.asset_promotion import AssetPromotionRequestModel
 from models.sql.enterprise.asset_usage import AssetUsageEventModel
+from models.sql.enterprise.document import EnterpriseDocumentModel
+from models.sql.enterprise.document_chunk import EnterpriseDocumentChunkModel
 from models.sql.enterprise.bid import (
     BidDeliveryArtifactModel,
     BidDownloadGrantModel,
@@ -46,6 +48,8 @@ __all__ = [
     "AssetFavoriteModel",
     "AssetPromotionRequestModel",
     "AssetUsageEventModel",
+    "EnterpriseDocumentModel",
+    "EnterpriseDocumentChunkModel",
     "BidDeliveryArtifactModel",
     "BidDownloadGrantModel",
     "BidCommitmentModel",

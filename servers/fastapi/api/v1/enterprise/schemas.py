@@ -68,6 +68,79 @@ class AssetMetadataRequest(BaseModel):
         return normalized
 
 
+class EnterpriseDocumentResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    version_group_id: uuid.UUID
+    version_no: int
+    is_latest: bool
+    supersedes_document_id: uuid.UUID | None
+    duplicate_of_document_id: uuid.UUID | None
+    workspace_id: uuid.UUID | None
+    project_id: uuid.UUID | None
+    created_by: uuid.UUID | None
+    scope_type: str
+    logical_name: str
+    category: str
+    file_name: str
+    mime_type: str
+    sha256: str
+    size_bytes: int
+    authorization_status: str
+    confidentiality: str
+    status: str
+    parse_status: str
+    parse_task_id: str | None
+    parse_error: str | None
+    extracted_metadata: dict
+    expires_at: datetime | None
+    created_at: datetime
+    updated_at: datetime
+
+
+class EnterpriseDocumentDetailResponse(EnterpriseDocumentResponse):
+    extracted_text: str | None
+
+
+class EnterpriseDocumentParseTaskResponse(BaseModel):
+    document_id: uuid.UUID
+    task_id: str
+    status: str
+
+
+class EnterpriseKnowledgeSearchRequest(BaseModel):
+    query: str = Field(min_length=1, max_length=500)
+    scope_type: str = Field(pattern="^(enterprise|workspace|project)$")
+    workspace_id: uuid.UUID | None = None
+    project_id: uuid.UUID | None = None
+    categories: list[str] = Field(default_factory=list, max_length=20)
+    latest_only: bool = True
+    limit: int = Field(default=10, ge=1, le=50)
+
+
+class EnterpriseKnowledgeCitationResponse(BaseModel):
+    source_type: str
+    source_id: str
+    source_version: str
+    locator: str
+    excerpt: str
+
+
+class EnterpriseKnowledgeSearchItemResponse(BaseModel):
+    chunk_id: uuid.UUID
+    document_id: uuid.UUID
+    document_version: int
+    logical_name: str
+    category: str
+    heading: str | None
+    excerpt: str
+    locator: dict
+    score: float
+    matched_terms: list[str]
+    citation: EnterpriseKnowledgeCitationResponse
+
+
 class AssetCreateRequest(AssetMetadataRequest):
     workspace_id: uuid.UUID | None = None
     asset_type: str = Field(pattern="^(page|chart|image|logo|copy|component)$")

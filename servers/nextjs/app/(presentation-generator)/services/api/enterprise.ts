@@ -210,6 +210,7 @@ export interface BidDeliveryArtifactResponse {
   size_bytes: number;
   status: "ready" | "revoked";
   created_at: string;
+  revoked_at: string | null;
 }
 
 export interface BidDownloadGrantResponse {
@@ -348,6 +349,7 @@ export interface PresentationDeliveryArtifactResponse {
   sha256: string;
   size_bytes: number;
   status: "ready" | "revoked";
+  revoked_at: string | null;
 }
 
 export interface TemplatePublicationResponse {
@@ -1005,6 +1007,11 @@ export class EnterpriseApi {
     return { ...grant, download_url: getApiUrl(grant.download_url) };
   }
 
+  static async revokePresentationDelivery(workspaceId: string, entryId: string, artifactId: string): Promise<PresentationDeliveryArtifactResponse> {
+    const response = await fetch(getApiUrl(`/api/v1/enterprise/workspaces/${encodeURIComponent(workspaceId)}/presentations/${encodeURIComponent(entryId)}/deliveries/${encodeURIComponent(artifactId)}/revoke`), { method: "POST", credentials: "include" });
+    return ApiResponseHandler.handleResponse(response, "Failed to revoke governed delivery");
+  }
+
   static async getPublishedTemplates(
     workspaceId: string
   ): Promise<TemplatePublicationResponse[]> {
@@ -1299,5 +1306,10 @@ export class EnterpriseApi {
     const response = await fetch(getApiUrl(`/api/v1/enterprise/bid/projects/${encodeURIComponent(projectId)}/deliveries/${encodeURIComponent(artifactId)}/grants`), { method: "POST", credentials: "include", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ expires_in_minutes: 30, max_downloads: 1 }) });
     const grant = await ApiResponseHandler.handleResponse(response, "Failed to authorize delivery download") as BidDownloadGrantResponse;
     return { ...grant, download_url: getApiUrl(grant.download_url) };
+  }
+
+  static async revokeBidDelivery(projectId: string, artifactId: string): Promise<BidDeliveryArtifactResponse> {
+    const response = await fetch(getApiUrl(`/api/v1/enterprise/bid/projects/${encodeURIComponent(projectId)}/deliveries/${encodeURIComponent(artifactId)}/revoke`), { method: "POST", credentials: "include" });
+    return ApiResponseHandler.handleResponse(response, "Failed to revoke delivery artifact");
   }
 }

@@ -428,6 +428,20 @@ def test_presentation_registration_preserves_owner_and_allows_member_listing(tmp
             json={"expires_in_minutes": 30, "max_downloads": 1},
         )
         delivery_download = client.get(delivery_grant.json()["download_url"])
+        revocable_delivery_grant = client.post(
+            f"/api/v1/enterprise/workspaces/{workspace['id']}/presentations/{entry_id}/deliveries/{delivery.json()['id']}/grants",
+            json={"expires_in_minutes": 30, "max_downloads": 1},
+        )
+        revoked_delivery = client.post(
+            f"/api/v1/enterprise/workspaces/{workspace['id']}/presentations/{entry_id}/deliveries/{delivery.json()['id']}/revoke"
+        )
+        revoked_delivery_download = client.get(
+            revocable_delivery_grant.json()["download_url"]
+        )
+        revoked_delivery_grant_denied = client.post(
+            f"/api/v1/enterprise/workspaces/{workspace['id']}/presentations/{entry_id}/deliveries/{delivery.json()['id']}/grants",
+            json={"expires_in_minutes": 30, "max_downloads": 1},
+        )
         governance = client.get(
             f"/api/v1/enterprise/workspaces/{workspace['id']}/presentations/{entry_id}/governance",
             headers={"x-test-user": "member"},
@@ -478,6 +492,10 @@ def test_presentation_registration_preserves_owner_and_allows_member_listing(tmp
         assert delivery.json()["watermark_text"] == "共享空间 · L2 · owner"
         assert "file_path" not in delivery.json()
         assert delivery_download.content == b"governed-general-pdf"
+        assert revoked_delivery.json()["status"] == "revoked"
+        assert revoked_delivery.json()["revoked_at"]
+        assert revoked_delivery_download.status_code == 404
+        assert revoked_delivery_grant_denied.status_code == 409
         assert frozen.json()["version_no"] == 1
         assert frozen.json()["manifest"]["scene"]["type"] == "general"
         assert governance.json()["entry"]["status"] == "frozen"
@@ -1545,6 +1563,18 @@ def test_bid_understanding_flow_enforces_project_access_and_strategy_gate(tmp_pa
         archived = client.post(
             f"/api/v1/enterprise/bid/projects/{project_id}/releases/{release['id']}/archive"
         )
+        revocable_grant = client.post(
+            f"/api/v1/enterprise/bid/projects/{project_id}/deliveries/{delivery.json()['id']}/grants",
+            json={"expires_in_minutes": 30, "max_downloads": 1},
+        )
+        revoked_delivery = client.post(
+            f"/api/v1/enterprise/bid/projects/{project_id}/deliveries/{delivery.json()['id']}/revoke"
+        )
+        revoked_download = client.get(revocable_grant.json()["download_url"])
+        revoked_grant_denied = client.post(
+            f"/api/v1/enterprise/bid/projects/{project_id}/deliveries/{delivery.json()['id']}/grants",
+            json={"expires_in_minutes": 30, "max_downloads": 1},
+        )
         reopened_profile = client.put(
             f"/api/v1/enterprise/bid/projects/{project_id}/profile",
             json={
@@ -1611,6 +1641,10 @@ def test_bid_understanding_flow_enforces_project_access_and_strategy_gate(tmp_pa
         assert downloaded.content == b"watermarked-pptx-delivery"
         assert exhausted.status_code == 410
         assert archived.json()["status"] == "archived"
+        assert revoked_delivery.json()["status"] == "revoked"
+        assert revoked_delivery.json()["revoked_at"]
+        assert revoked_download.status_code == 404
+        assert revoked_grant_denied.status_code == 409
         assert reopened_profile.status_code == 200
         assert reopened_dashboard.json()["strategy"]["version_no"] == 2
         assert reopened_dashboard.json()["strategy"]["status"] == "draft"

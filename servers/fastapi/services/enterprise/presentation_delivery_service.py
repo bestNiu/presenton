@@ -147,6 +147,8 @@ async def issue_presentation_download_grant(session: AsyncSession, *, workspace_
     entry = await session.get(PresentationEntryModel, entry_id)
     if artifact is None or snapshot is None or entry is None or entry.workspace_id != workspace_id or snapshot.presentation_entry_id != entry.id:
         raise HTTPException(status_code=404, detail="Presentation delivery not found")
+    if PresentationDeliveryStatus(artifact.status) != PresentationDeliveryStatus.READY:
+        raise HTTPException(status_code=409, detail="Presentation delivery is not available")
     token = secrets.token_urlsafe(32)
     grant = PresentationDownloadGrantModel(artifact_id=artifact.id, token_hash=_token_hash(token), expires_at=datetime.now(timezone.utc) + timedelta(minutes=expires_in_minutes), max_downloads=max_downloads, created_by=principal.user_id)
     session.add(grant)
@@ -158,7 +160,7 @@ async def issue_presentation_download_grant(session: AsyncSession, *, workspace_
 
 async def consume_presentation_download_grant(session: AsyncSession, *, token: str) -> tuple[PresentationDeliveryArtifactModel, StoredObjectLocation]:
     grant = await session.scalar(select(PresentationDownloadGrantModel).where(PresentationDownloadGrantModel.token_hash == _token_hash(token)))
-    if grant is None:
+    if grant is None or grant.revoked_at is not None:
         raise HTTPException(status_code=404, detail="Download grant not found")
     expires_at = grant.expires_at if grant.expires_at.tzinfo else grant.expires_at.replace(tzinfo=timezone.utc)
     if expires_at <= datetime.now(timezone.utc) or grant.download_count >= grant.max_downloads:
@@ -181,3 +183,61 @@ async def consume_presentation_download_grant(session: AsyncSession, *, token: s
     record_audit_event(session, actor_id=None, action="presentation.delivery_downloaded", resource_type="presentation_delivery_artifact", resource_id=artifact.id, metadata={"grant_id": str(grant.id), "download_count": grant.download_count})
     await session.commit()
     return artifact, location
+
+
+async def revoke_presentation_delivery(
+    session: AsyncSession,
+    *,
+    workspace_id: uuid.UUID,
+    entry_id: uuid.UUID,
+    artifact_id: uuid.UUID,
+    principal: AuthPrincipal,
+) -> PresentationDeliveryArtifactModel:
+    await require_workspace_role(
+        session,
+        workspace_id=workspace_id,
+        principal=principal,
+        required_role=WorkspaceRole.ADMIN,
+    )
+    artifact = await session.get(PresentationDeliveryArtifactModel, artifact_id)
+    snapshot = await session.get(PresentationSnapshotModel, artifact.snapshot_id) if artifact else None
+    entry = await session.get(PresentationEntryModel, entry_id)
+    if (
+        artifact is None
+        or snapshot is None
+        or entry is None
+        or entry.workspace_id != workspace_id
+        or snapshot.presentation_entry_id != entry.id
+    ):
+        raise HTTPException(status_code=404, detail="Presentation delivery not found")
+    if PresentationDeliveryStatus(artifact.status) == PresentationDeliveryStatus.REVOKED:
+        return artifact
+    revoked_at = datetime.now(timezone.utc)
+    artifact.status = PresentationDeliveryStatus.REVOKED
+    artifact.revoked_at = revoked_at
+    grants = list(
+        (
+            await session.scalars(
+                select(PresentationDownloadGrantModel).where(
+                    PresentationDownloadGrantModel.artifact_id == artifact.id,
+                    PresentationDownloadGrantModel.revoked_at.is_(None),
+                )
+            )
+        ).all()
+    )
+    for grant in grants:
+        grant.revoked_at = revoked_at
+        session.add(grant)
+    session.add(artifact)
+    record_audit_event(
+        session,
+        actor_id=principal.user_id,
+        workspace_id=workspace_id,
+        action="presentation.delivery_revoked",
+        resource_type="presentation_delivery_artifact",
+        resource_id=artifact.id,
+        metadata={"revoked_grant_count": len(grants), "object_retained": True},
+    )
+    await session.commit()
+    await session.refresh(artifact)
+    return artifact

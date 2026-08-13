@@ -310,6 +310,56 @@ async def consume_download_grant(
     return artifact, location
 
 
+async def revoke_delivery_artifact(
+    session: AsyncSession,
+    *,
+    project_id: uuid.UUID,
+    artifact_id: uuid.UUID,
+    principal: AuthPrincipal,
+) -> BidDeliveryArtifactModel:
+    project, _ = await require_project_role(
+        session,
+        project_id=project_id,
+        principal=principal,
+        required_role=BidProjectRole.BID_MANAGER,
+    )
+    artifact = await session.get(BidDeliveryArtifactModel, artifact_id)
+    release = await session.get(BidPresentationReleaseModel, artifact.release_id) if artifact else None
+    if artifact is None or release is None or release.project_id != project_id:
+        raise HTTPException(status_code=404, detail="Delivery artifact not found")
+    if BidDeliveryStatus(artifact.status) == BidDeliveryStatus.REVOKED:
+        return artifact
+    revoked_at = datetime.now(timezone.utc)
+    artifact.status = BidDeliveryStatus.REVOKED
+    artifact.revoked_at = revoked_at
+    grants = list(
+        (
+            await session.scalars(
+                select(BidDownloadGrantModel).where(
+                    BidDownloadGrantModel.artifact_id == artifact.id,
+                    BidDownloadGrantModel.revoked_at.is_(None),
+                )
+            )
+        ).all()
+    )
+    for grant in grants:
+        grant.revoked_at = revoked_at
+        session.add(grant)
+    session.add(artifact)
+    record_audit_event(
+        session,
+        actor_id=principal.user_id,
+        workspace_id=project.workspace_id,
+        action="bid.delivery_revoked",
+        resource_type="bid_delivery_artifact",
+        resource_id=artifact.id,
+        metadata={"revoked_grant_count": len(grants), "object_retained": True},
+    )
+    await session.commit()
+    await session.refresh(artifact)
+    return artifact
+
+
 async def archive_release(
     session: AsyncSession,
     *,

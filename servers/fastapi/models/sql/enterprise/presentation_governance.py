@@ -68,6 +68,7 @@ class PresentationDeliveryArtifactModel(SQLModel, table=True):
     status: PresentationDeliveryStatus = Field(default=PresentationDeliveryStatus.READY, sa_column=Column(String(32), nullable=False, index=True))
     created_by: uuid.UUID | None = Field(default=None, sa_column=Column(ForeignKey("user.id", ondelete="SET NULL")))
     created_at: datetime = Field(sa_column=Column(DateTime(timezone=True), default=get_current_utc_datetime))
+    revoked_at: datetime | None = Field(default=None, sa_column=Column(DateTime(timezone=True), index=True))
 
 
 class PresentationDownloadGrantModel(SQLModel, table=True):
@@ -82,6 +83,7 @@ class PresentationDownloadGrantModel(SQLModel, table=True):
     created_by: uuid.UUID | None = Field(default=None, sa_column=Column(ForeignKey("user.id", ondelete="SET NULL")))
     created_at: datetime = Field(sa_column=Column(DateTime(timezone=True), default=get_current_utc_datetime))
     last_downloaded_at: datetime | None = Field(default=None, sa_column=Column(DateTime(timezone=True)))
+    revoked_at: datetime | None = Field(default=None, sa_column=Column(DateTime(timezone=True), index=True))
 
 
 class PresentationQualityRunModel(SQLModel, table=True):

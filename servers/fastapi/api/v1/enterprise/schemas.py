@@ -884,6 +884,7 @@ class PresentationDeliveryArtifactResponse(BaseModel):
     status: PresentationDeliveryStatus
     created_by: uuid.UUID | None
     created_at: datetime
+    revoked_at: datetime | None
 
 
 class PresentationQualityIssueResponse(BaseModel):

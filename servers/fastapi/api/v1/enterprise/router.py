@@ -127,6 +127,7 @@ from services.enterprise.presentation_delivery_service import (
     create_presentation_delivery,
     issue_presentation_download_grant,
     list_presentation_deliveries,
+    revoke_presentation_delivery,
 )
 from services.enterprise.notification_service import (
     list_notifications,
@@ -204,6 +205,7 @@ from services.enterprise.bid_delivery_service import (
     create_delivery_artifact,
     issue_download_grant,
     list_delivery_artifacts,
+    revoke_delivery_artifact,
 )
 from services.enterprise.scene_service import list_active_scenes
 from services.enterprise.scene_registry_service import resolve_scene_runtime
@@ -729,6 +731,11 @@ async def get_bid_deliveries(project_id: uuid.UUID, release_id: uuid.UUID, princ
 async def post_bid_download_grant(project_id: uuid.UUID, artifact_id: uuid.UUID, body: BidDownloadGrantRequest, principal: AuthPrincipal = Depends(principal_from_request), session: AsyncSession = Depends(get_async_session)):
     grant, token = await issue_download_grant(session, project_id=project_id, artifact_id=artifact_id, principal=principal, **body.model_dump())
     return BidDownloadGrantResponse(grant_id=grant.id, artifact_id=grant.artifact_id, download_url=f"/api/v1/enterprise/bid/deliveries/download/{token}", expires_at=grant.expires_at, max_downloads=grant.max_downloads)
+
+
+@API_V1_ENTERPRISE_ROUTER.post("/bid/projects/{project_id}/deliveries/{artifact_id}/revoke", response_model=BidDeliveryArtifactResponse)
+async def post_bid_delivery_revoke(project_id: uuid.UUID, artifact_id: uuid.UUID, principal: AuthPrincipal = Depends(principal_from_request), session: AsyncSession = Depends(get_async_session)):
+    return await revoke_delivery_artifact(session, project_id=project_id, artifact_id=artifact_id, principal=principal)
 
 
 @API_V1_ENTERPRISE_ROUTER.get("/bid/deliveries/download/{token}")
@@ -1442,6 +1449,11 @@ async def get_presentation_deliveries(workspace_id: uuid.UUID, entry_id: uuid.UU
 async def post_presentation_download_grant(workspace_id: uuid.UUID, entry_id: uuid.UUID, artifact_id: uuid.UUID, body: BidDownloadGrantRequest, principal: AuthPrincipal = Depends(principal_from_request), session: AsyncSession = Depends(get_async_session)):
     grant, token = await issue_presentation_download_grant(session, workspace_id=workspace_id, entry_id=entry_id, artifact_id=artifact_id, principal=principal, **body.model_dump())
     return BidDownloadGrantResponse(grant_id=grant.id, artifact_id=grant.artifact_id, download_url=f"/api/v1/enterprise/presentations/deliveries/download/{token}", expires_at=grant.expires_at, max_downloads=grant.max_downloads)
+
+
+@API_V1_ENTERPRISE_ROUTER.post("/workspaces/{workspace_id}/presentations/{entry_id}/deliveries/{artifact_id}/revoke", response_model=PresentationDeliveryArtifactResponse)
+async def post_presentation_delivery_revoke(workspace_id: uuid.UUID, entry_id: uuid.UUID, artifact_id: uuid.UUID, principal: AuthPrincipal = Depends(principal_from_request), session: AsyncSession = Depends(get_async_session)):
+    return await revoke_presentation_delivery(session, workspace_id=workspace_id, entry_id=entry_id, artifact_id=artifact_id, principal=principal)
 
 
 @API_V1_ENTERPRISE_ROUTER.get("/presentations/deliveries/download/{token}")

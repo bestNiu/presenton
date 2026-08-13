@@ -8,6 +8,8 @@ from types import SimpleNamespace
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.testclient import TestClient
+import pytest
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from api.v1.auth.principal import AuthPrincipal, principal_from_request
@@ -46,6 +48,7 @@ from models.sql.enterprise import (
     PresentationSourceCitationModel,
     PresentationSnapshotModel,
     SceneDefinitionModel,
+    StorageLifecycleRunModel,
     TemplatePublicationModel,
     WorkspaceFolderModel,
     WorkspaceMemberModel,
@@ -61,6 +64,7 @@ from services.enterprise.template_publication_service import (
     get_accessible_published_template,
 )
 import services.enterprise.asset_preview_service as asset_preview_service
+import services.enterprise.storage_lifecycle_service as storage_lifecycle_service
 
 
 def _build_client(tmp_path):
@@ -131,6 +135,7 @@ def _build_client(tmp_path):
                 PresentationSourceCitationModel.__table__,
                 EnterpriseNotificationModel.__table__,
                 AuditEventModel.__table__,
+                StorageLifecycleRunModel.__table__,
                 TemplatePublicationModel.__table__,
                 BidProjectModel.__table__,
                 BidProjectMemberModel.__table__,
@@ -215,7 +220,7 @@ def test_personal_workspace_is_idempotent_and_isolated(tmp_path):
 
 
 def test_storage_lifecycle_requires_admin_and_cleans_aged_orphan(tmp_path, monkeypatch):
-    client, engine, _, _ = _build_client(tmp_path)
+    client, engine, session_maker, _ = _build_client(tmp_path)
     storage_root = tmp_path / "enterprise-objects"
     orphan = storage_root / "orphaned" / "old.bin"
     orphan.parent.mkdir(parents=True)
@@ -249,10 +254,55 @@ def test_storage_lifecycle_requires_admin_and_cleans_aged_orphan(tmp_path, monke
             json={"execute": True, "max_delete": 10},
             headers={"x-test-user": "admin"},
         )
+        history = client.get(
+            "/api/v1/enterprise/admin/storage/lifecycle-runs",
+            headers={"x-test-user": "admin"},
+        )
 
         assert executed.json()["deleted_count"] == 1
         assert executed.json()["deleted_bytes"] == len(b"unreferenced-object")
         assert not orphan.exists()
+        assert history.status_code == 200
+        assert [item["mode"] for item in history.json()] == ["execute", "dry_run"]
+        assert history.json()[0]["health"] == "healthy"
+        assert history.json()[1]["health"] == "warning"
+        assert history.json()[0]["deleted_count"] == 1
+
+        class FailingStorage:
+            backend = "local"
+
+            async def list_objects(self):
+                raise RuntimeError("storage inventory unavailable")
+
+        monkeypatch.setattr(
+            storage_lifecycle_service,
+            "get_enterprise_object_storage",
+            lambda: FailingStorage(),
+        )
+        with pytest.raises(RuntimeError, match="storage inventory unavailable"):
+            client.post(
+                "/api/v1/enterprise/admin/storage/lifecycle-runs",
+                json={"execute": False},
+                headers={"x-test-user": "admin"},
+            )
+        failed_history = client.get(
+            "/api/v1/enterprise/admin/storage/lifecycle-runs",
+            headers={"x-test-user": "admin"},
+        ).json()
+
+        async def count_health_alerts():
+            async with session_maker() as session:
+                return await session.scalar(
+                    select(func.count(EnterpriseNotificationModel.id)).where(
+                        EnterpriseNotificationModel.notification_type
+                        == "storage.lifecycle_health_alert"
+                    )
+                )
+
+        assert failed_history[0]["status"] == "failed"
+        assert failed_history[0]["health"] == "critical"
+        assert "inventory unavailable" in failed_history[0]["failure_detail"]
+        assert asyncio.run(count_health_alerts()) == 1
     finally:
         asyncio.run(engine.dispose())
 

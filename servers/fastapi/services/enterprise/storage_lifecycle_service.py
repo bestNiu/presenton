@@ -1,13 +1,12 @@
 from datetime import datetime, timedelta, timezone
 import os
-import uuid
 
 from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.v1.auth.principal import AuthPrincipal
-from domains.platform.enums import BidDeliveryStatus, PresentationDeliveryStatus
+from domains.platform.enums import AuditResult, BidDeliveryStatus, PresentationDeliveryStatus
 from models.sql.enterprise.asset_item import AssetItemModel
 from models.sql.enterprise.bid import (
     BidDeliveryArtifactModel,
@@ -19,8 +18,11 @@ from models.sql.enterprise.presentation_governance import (
     PresentationDeliveryArtifactModel,
     PresentationSnapshotModel,
 )
+from models.sql.enterprise.storage_lifecycle import StorageLifecycleRunModel
 from models.sql.enterprise.workspace import WorkspaceModel
+from models.sql.user import User
 from services.enterprise.audit_service import record_audit_event
+from services.enterprise.notification_service import queue_notifications
 from services.enterprise.object_storage_service import get_enterprise_object_storage
 
 
@@ -36,17 +38,15 @@ def _retention_days(workspace: WorkspaceModel) -> int:
     return max(1, min(int(configured), 3650))
 
 
-async def run_storage_lifecycle(
+async def _perform_storage_lifecycle(
     session: AsyncSession,
     *,
-    principal: AuthPrincipal,
     execute: bool,
     max_delete: int,
+    run_id,
+    started_at: datetime,
 ) -> dict:
-    if not principal.is_admin:
-        raise HTTPException(status_code=403, detail="Platform administrator required")
-
-    now = datetime.now(timezone.utc)
+    now = started_at
     orphan_grace_days = max(
         1,
         min(
@@ -165,7 +165,6 @@ async def run_storage_lifecycle(
                     artifact.purged_at = now
                     session.add(artifact)
 
-    run_id = uuid.uuid4()
     report = {
         "run_id": run_id,
         "mode": "execute" if execute else "dry_run",
@@ -187,13 +186,166 @@ async def run_storage_lifecycle(
         "started_at": now,
         "completed_at": datetime.now(timezone.utc),
     }
-    record_audit_event(
-        session,
-        actor_id=principal.user_id,
-        action="storage.lifecycle_executed" if execute else "storage.lifecycle_scanned",
-        resource_type="storage_lifecycle_run",
-        resource_id=run_id,
-        metadata={key: value for key, value in report.items() if key not in {"candidates", "run_id", "started_at", "completed_at"}},
-    )
-    await session.commit()
     return report
+
+
+def _health_from_report(report: dict) -> str:
+    if report["missing_referenced_count"] > 0:
+        return "critical"
+    remaining_candidates = report["candidate_count"] - report["deleted_count"]
+    if remaining_candidates > 0 or report["truncated"]:
+        return "warning"
+    return "healthy"
+
+
+def _apply_report(run: StorageLifecycleRunModel, report: dict) -> None:
+    for field in (
+        "backend",
+        "scanned_count",
+        "stored_bytes",
+        "protected_count",
+        "protected_bytes",
+        "missing_referenced_count",
+        "candidate_count",
+        "candidate_bytes",
+        "orphan_candidate_count",
+        "revoked_candidate_count",
+        "deleted_count",
+        "deleted_bytes",
+        "truncated",
+        "completed_at",
+    ):
+        setattr(run, field, report[field])
+    run.candidate_sample = [
+        {
+            **candidate,
+            "last_modified": candidate["last_modified"].isoformat(),
+        }
+        for candidate in report["candidates"]
+    ]
+    run.status = "completed"
+    run.health = _health_from_report(report)
+
+
+async def _queue_health_alert(
+    session: AsyncSession,
+    *,
+    run: StorageLifecycleRunModel,
+    detail: str,
+) -> None:
+    admin_ids = set(
+        (
+            await session.scalars(
+                select(User.id).where(
+                    User.is_superuser.is_(True), User.is_active.is_(True)
+                )
+            )
+        ).all()
+    )
+    queue_notifications(
+        session,
+        recipient_ids=admin_ids,
+        actor_id=None,
+        workspace_id=None,
+        notification_type="storage.lifecycle_health_alert",
+        title="企业对象存储生命周期异常",
+        body=detail[:1000],
+        resource_type="storage_lifecycle_run",
+        resource_id=run.id,
+        action_url="/admin",
+        metadata={"health": run.health, "status": run.status, "mode": run.mode},
+    )
+
+
+async def run_storage_lifecycle(
+    session: AsyncSession,
+    *,
+    principal: AuthPrincipal,
+    execute: bool,
+    max_delete: int,
+    source: str = "api",
+) -> dict:
+    if not principal.is_admin:
+        raise HTTPException(status_code=403, detail="Platform administrator required")
+    if source not in {"api", "cli"}:
+        raise ValueError("Storage lifecycle source must be api or cli")
+
+    run = StorageLifecycleRunModel(
+        triggered_by=principal.user_id,
+        source=source,
+        mode="execute" if execute else "dry_run",
+        status="running",
+        health="unknown",
+    )
+    session.add(run)
+    await session.commit()
+    try:
+        report = await _perform_storage_lifecycle(
+            session,
+            execute=execute,
+            max_delete=max_delete,
+            run_id=run.id,
+            started_at=_aware(run.started_at),
+        )
+        _apply_report(run, report)
+        session.add(run)
+        if run.health == "critical":
+            await _queue_health_alert(
+                session,
+                run=run,
+                detail=f"检测到 {run.missing_referenced_count} 个数据库引用对象缺失，请立即检查存储完整性。",
+            )
+        record_audit_event(
+            session,
+            actor_id=principal.user_id,
+            action="storage.lifecycle_executed" if execute else "storage.lifecycle_scanned",
+            resource_type="storage_lifecycle_run",
+            resource_id=run.id,
+            metadata={key: value for key, value in report.items() if key not in {"candidates", "run_id", "started_at", "completed_at"}},
+        )
+        await session.commit()
+        return report
+    except Exception as exc:
+        await session.rollback()
+        failed_run = await session.get(StorageLifecycleRunModel, run.id)
+        if failed_run is not None:
+            failed_run.status = "failed"
+            failed_run.health = "critical"
+            failed_run.failure_detail = str(getattr(exc, "detail", exc))[:2000]
+            failed_run.completed_at = datetime.now(timezone.utc)
+            session.add(failed_run)
+            await _queue_health_alert(
+                session,
+                run=failed_run,
+                detail=f"生命周期作业执行失败：{failed_run.failure_detail}",
+            )
+            record_audit_event(
+                session,
+                actor_id=principal.user_id,
+                action="storage.lifecycle_failed",
+                resource_type="storage_lifecycle_run",
+                resource_id=failed_run.id,
+                result=AuditResult.FAILED,
+                metadata={"mode": failed_run.mode, "source": source, "detail": failed_run.failure_detail},
+            )
+            await session.commit()
+        raise
+
+
+async def list_storage_lifecycle_runs(
+    session: AsyncSession,
+    *,
+    principal: AuthPrincipal,
+    limit: int,
+) -> list[StorageLifecycleRunModel]:
+    if not principal.is_admin:
+        raise HTTPException(status_code=403, detail="Platform administrator required")
+    return list(
+        (
+            await session.scalars(
+                select(StorageLifecycleRunModel)
+                .order_by(StorageLifecycleRunModel.started_at.desc())
+                .limit(limit)
+            )
+        ).all()
+    )

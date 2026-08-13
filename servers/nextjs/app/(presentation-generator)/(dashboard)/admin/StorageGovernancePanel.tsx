@@ -1,7 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
+  Activity,
   AlertTriangle,
   Database,
   HardDrive,
@@ -44,6 +45,24 @@ type LifecycleReport = {
   completed_at: string;
 };
 
+type LifecycleHistory = {
+  id: string;
+  source: "api" | "cli";
+  mode: "dry_run" | "execute";
+  backend: "local" | "s3" | null;
+  status: "running" | "completed" | "failed";
+  health: "unknown" | "healthy" | "warning" | "critical";
+  stored_bytes: number;
+  missing_referenced_count: number;
+  candidate_count: number;
+  candidate_bytes: number;
+  deleted_count: number;
+  deleted_bytes: number;
+  failure_detail: string | null;
+  started_at: string;
+  completed_at: string | null;
+};
+
 function formatBytes(value: number) {
   if (value < 1024) return `${value} B`;
   if (value < 1024 ** 2) return `${(value / 1024).toFixed(1)} KB`;
@@ -66,8 +85,27 @@ async function responseDetail(response: Response) {
 
 export default function StorageGovernancePanel() {
   const [report, setReport] = useState<LifecycleReport | null>(null);
+  const [history, setHistory] = useState<LifecycleHistory[]>([]);
   const [busy, setBusy] = useState<"scan" | "execute" | null>(null);
   const [maxDelete, setMaxDelete] = useState(100);
+
+  const loadHistory = useCallback(async () => {
+    const response = await fetch(
+      getApiUrl("/api/v1/enterprise/admin/storage/lifecycle-runs?limit=30"),
+      { credentials: "include", cache: "no-store" }
+    );
+    if (!response.ok) throw new Error(await responseDetail(response));
+    setHistory((await response.json()) as LifecycleHistory[]);
+  }, []);
+
+  useEffect(() => {
+    void loadHistory().catch((error) =>
+      notify.error(
+        "Could not load storage history",
+        error instanceof Error ? error.message : "Please try again."
+      )
+    );
+  }, [loadHistory]);
 
   const run = async (execute: boolean) => {
     if (
@@ -92,6 +130,7 @@ export default function StorageGovernancePanel() {
       if (!response.ok) throw new Error(await responseDetail(response));
       const next = (await response.json()) as LifecycleReport;
       setReport(next);
+      await loadHistory();
       if (execute) {
         notify.success(
           "Storage cleanup completed",
@@ -221,6 +260,46 @@ export default function StorageGovernancePanel() {
           </section>
         </>
       )}
+
+      <section className="overflow-hidden rounded-[12px] border border-[#EDEEEF] bg-white">
+        <div className="flex items-center justify-between border-b border-[#EDEEEF] px-6 py-4">
+          <div className="flex items-center gap-3">
+            <div className="flex h-9 w-9 items-center justify-center rounded-full bg-[#F4F3FF]">
+              <Activity className="h-4 w-4 text-[#5146E5]" />
+            </div>
+            <div>
+              <h3 className="text-sm font-semibold text-[#101323]">Run history and health</h3>
+              <p className="mt-0.5 text-xs text-[#667085]">Latest 30 API and scheduled CLI runs.</p>
+            </div>
+          </div>
+          <button type="button" onClick={() => void loadHistory()} className="inline-flex h-9 items-center gap-2 rounded-full border border-[#EDEEEF] px-3 text-xs text-[#667085]">
+            <ScanSearch className="h-3.5 w-3.5" /> Refresh
+          </button>
+        </div>
+        <div className="divide-y divide-[#EDEEEF]">
+          {history.length === 0 && <p className="px-6 py-10 text-center text-sm text-[#667085]">No persisted runs yet.</p>}
+          {history.map((run) => {
+            const healthClass = run.health === "healthy" ? "bg-[#ECFDF3] text-[#027A48]" : run.health === "warning" ? "bg-[#FFFAEB] text-[#B54708]" : run.health === "critical" ? "bg-[#FEF3F2] text-[#B42318]" : "bg-[#F2F4F7] text-[#667085]";
+            return (
+              <div key={run.id} className="grid gap-3 px-6 py-4 sm:grid-cols-[150px_110px_1fr_auto] sm:items-center">
+                <div>
+                  <p className="text-xs font-semibold text-[#344054]">{new Date(run.started_at).toLocaleString()}</p>
+                  <p className="mt-1 text-[11px] uppercase text-[#98A2B3]">{run.source} · {run.backend || "pending"}</p>
+                </div>
+                <div className="flex gap-2">
+                  <span className={`rounded-full px-2 py-1 text-[10px] font-semibold uppercase ${healthClass}`}>{run.health}</span>
+                  <span className="rounded-full bg-[#F2F4F7] px-2 py-1 text-[10px] uppercase text-[#667085]">{run.mode}</span>
+                </div>
+                <div>
+                  <p className="text-xs text-[#344054]">{formatBytes(run.stored_bytes)} stored · {run.candidate_count} eligible · {run.deleted_count} deleted</p>
+                  <p className={`mt-1 truncate text-[11px] ${run.failure_detail ? "text-[#B42318]" : "text-[#98A2B3]"}`}>{run.failure_detail || `${run.missing_referenced_count} missing references · ${formatBytes(run.candidate_bytes)} candidate capacity`}</p>
+                </div>
+                <span className="text-[11px] font-semibold uppercase text-[#667085]">{run.status}</span>
+              </div>
+            );
+          })}
+        </div>
+      </section>
     </section>
   );
 }

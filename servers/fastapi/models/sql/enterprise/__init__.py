@@ -32,6 +32,7 @@ from models.sql.enterprise.presentation_governance import (
     PresentationSnapshotModel,
 )
 from models.sql.enterprise.scene_definition import SceneDefinitionModel
+from models.sql.enterprise.storage_lifecycle import StorageLifecycleRunModel
 from models.sql.enterprise.template_publication import TemplatePublicationModel
 from models.sql.enterprise.workspace import (
     WorkspaceFolderModel,
@@ -70,6 +71,7 @@ __all__ = [
     "PresentationSourceCitationModel",
     "PresentationSnapshotModel",
     "SceneDefinitionModel",
+    "StorageLifecycleRunModel",
     "TemplatePublicationModel",
     "WorkspaceFolderModel",
     "WorkspaceMemberModel",

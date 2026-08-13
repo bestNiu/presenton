@@ -59,6 +59,7 @@ from models.sql.enterprise import (
     PresentationSourceCitationModel,
     PresentationSnapshotModel,
     SceneDefinitionModel,
+    StorageLifecycleRunModel,
     TemplatePublicationModel,
     WorkspaceFolderModel,
     WorkspaceMemberModel,

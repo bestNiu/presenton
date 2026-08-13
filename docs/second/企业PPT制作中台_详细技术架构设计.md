@@ -796,6 +796,8 @@ python scripts/run_enterprise_storage_lifecycle.py
 python scripts/run_enterprise_storage_lifecycle.py --execute --max-delete 100
 ```
 
+每次生命周期任务在扫描对象存储前先创建 `enterprise_storage_lifecycle_runs` 记录，并在结束时收口为 `completed` 或 `failed`，避免底层存储异常时只留下应用日志。健康度分为 `healthy`、`warning` 和 `critical`：存在未清理候选为 warning，数据库期望对象缺失或任务失败为 critical，执行清理且无剩余候选为 healthy。最近 30 次 API/CLI 运行会显示在管理员 Storage 页签；critical 和 failed 运行会向所有启用的平台管理员生成站内告警，并保留失败原因和审计事件，后续邮件、Webhook 或企业消息渠道可直接消费该稳定事件源。
+
 ### 16.2 错误码分类
 
 | 范围 | 示例 |

@@ -53,6 +53,7 @@ async def run(*, execute: bool, max_delete: int) -> dict:
             principal=principal,
             execute=execute,
             max_delete=max_delete,
+            source="cli",
         )
 
 

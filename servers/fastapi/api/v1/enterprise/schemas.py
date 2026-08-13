@@ -677,6 +677,33 @@ class StorageLifecycleRunResponse(BaseModel):
     completed_at: datetime
 
 
+class StorageLifecycleHistoryResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: uuid.UUID
+    triggered_by: uuid.UUID | None
+    source: str
+    mode: str
+    backend: str | None
+    status: str
+    health: str
+    scanned_count: int
+    stored_bytes: int
+    protected_count: int
+    protected_bytes: int
+    missing_referenced_count: int
+    candidate_count: int
+    candidate_bytes: int
+    orphan_candidate_count: int
+    revoked_candidate_count: int
+    deleted_count: int
+    deleted_bytes: int
+    truncated: bool
+    candidate_sample: list[dict]
+    failure_detail: str | None
+    started_at: datetime
+    completed_at: datetime | None
+
+
 class WorkspaceMemberUpsertRequest(BaseModel):
     user_id: uuid.UUID
     role: WorkspaceRole

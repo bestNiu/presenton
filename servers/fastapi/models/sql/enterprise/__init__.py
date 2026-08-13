@@ -5,6 +5,7 @@ from models.sql.enterprise.asset_promotion import AssetPromotionRequestModel
 from models.sql.enterprise.asset_usage import AssetUsageEventModel
 from models.sql.enterprise.document import EnterpriseDocumentModel
 from models.sql.enterprise.document_chunk import EnterpriseDocumentChunkModel
+from models.sql.enterprise.knowledge_outline import EnterpriseKnowledgeOutlineModel
 from models.sql.enterprise.bid import (
     BidDeliveryArtifactModel,
     BidDownloadGrantModel,
@@ -50,6 +51,7 @@ __all__ = [
     "AssetUsageEventModel",
     "EnterpriseDocumentModel",
     "EnterpriseDocumentChunkModel",
+    "EnterpriseKnowledgeOutlineModel",
     "BidDeliveryArtifactModel",
     "BidDownloadGrantModel",
     "BidCommitmentModel",

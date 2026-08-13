@@ -354,6 +354,13 @@ function WorkspacePage() {
               <Library className="h-4 w-4" />
               资产中心
             </Link>
+            <Link
+              href={`/workspace/documents?workspace_id=${encodeURIComponent(activeWorkspaceId)}`}
+              className="inline-flex items-center gap-2 rounded-lg border border-[#D9DCE3] bg-white px-3 py-2 text-sm font-medium text-[#344054] hover:bg-[#F8F9FC]"
+            >
+              <FileText className="h-4 w-4" />
+              文档中心
+            </Link>
             </>
           )}
           <button

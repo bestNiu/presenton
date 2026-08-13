@@ -243,6 +243,75 @@ export interface PresentationEntryResponse {
   updated_at: string;
 }
 
+export interface EnterpriseDocumentResponse {
+  id: string;
+  version_group_id: string;
+  version_no: number;
+  is_latest: boolean;
+  supersedes_document_id: string | null;
+  workspace_id: string | null;
+  project_id: string | null;
+  scope_type: "enterprise" | "workspace" | "project";
+  logical_name: string;
+  category: string;
+  file_name: string;
+  mime_type: string;
+  sha256: string;
+  size_bytes: number;
+  authorization_status: "internal" | "authorized" | "revoked";
+  confidentiality: ConfidentialityLevel;
+  status: string;
+  parse_status: "queued" | "parsing" | "ready" | "error";
+  parse_task_id: string | null;
+  parse_error: string | null;
+  extracted_metadata: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface EnterpriseKnowledgeSearchItemResponse {
+  chunk_id: string;
+  document_id: string;
+  document_version: number;
+  logical_name: string;
+  category: string;
+  heading: string | null;
+  excerpt: string;
+  locator: Record<string, unknown>;
+  score: number;
+  retrieval_mode: "lexical" | "hybrid";
+  score_components: { lexical: number; semantic: number };
+  matched_terms: string[];
+  citation: {
+    source_type: string;
+    source_id: string;
+    source_version: string;
+    locator: string;
+    excerpt: string;
+  };
+}
+
+export interface EnterpriseKnowledgeOutlineResponse {
+  id: string;
+  workspace_id: string | null;
+  project_id: string | null;
+  presentation_entry_id: string | null;
+  scope_type: "enterprise" | "workspace" | "project";
+  topic: string;
+  audience: string | null;
+  language: string;
+  n_slides: number;
+  status: "queued" | "generating" | "ready" | "error";
+  task_id: string | null;
+  query: string;
+  document_ids: string[];
+  context_manifest: Array<Record<string, unknown>>;
+  outline: { slides?: Array<{ content: string; citation_refs: string[] }> };
+  error: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface PresentationGovernanceResponse {
   entry: PresentationEntryResponse;
   reviews: Array<{
@@ -547,6 +616,55 @@ export class EnterpriseApi {
       response,
       "Failed to load workspaces"
     );
+  }
+
+  static async getDocuments(workspaceId: string, includeVersions = false): Promise<EnterpriseDocumentResponse[]> {
+    const params = new URLSearchParams({ scope_type: "workspace", workspace_id: workspaceId });
+    if (includeVersions) params.set("include_versions", "true");
+    const response = await fetch(getApiUrl(`/api/v1/enterprise/documents?${params.toString()}`), { credentials: "include", cache: "no-store" });
+    return ApiResponseHandler.handleResponse(response, "Failed to load enterprise documents");
+  }
+
+  static async uploadDocument(workspaceId: string, file: File, input: { logicalName: string; category: string; confidentiality: ConfidentialityLevel }): Promise<EnterpriseDocumentResponse> {
+    const data = new FormData();
+    data.set("file", file);
+    data.set("scope_type", "workspace");
+    data.set("workspace_id", workspaceId);
+    data.set("logical_name", input.logicalName);
+    data.set("category", input.category);
+    data.set("confidentiality", input.confidentiality);
+    const response = await fetch(getApiUrl("/api/v1/enterprise/documents"), { method: "POST", credentials: "include", body: data });
+    return ApiResponseHandler.handleResponse(response, "Failed to upload enterprise document");
+  }
+
+  static async retryDocumentParse(documentId: string): Promise<{ document_id: string; task_id: string; status: string }> {
+    const response = await fetch(getApiUrl(`/api/v1/enterprise/documents/${encodeURIComponent(documentId)}/parse-tasks`), { method: "POST", credentials: "include" });
+    return ApiResponseHandler.handleResponse(response, "Failed to retry document parsing");
+  }
+
+  static async searchKnowledge(workspaceId: string, query: string, documentIds: string[] = []): Promise<EnterpriseKnowledgeSearchItemResponse[]> {
+    const response = await fetch(getApiUrl("/api/v1/enterprise/knowledge/search"), { method: "POST", credentials: "include", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ query, scope_type: "workspace", workspace_id: workspaceId, document_ids: documentIds, retrieval_mode: "hybrid", latest_only: true, limit: 20 }) });
+    return ApiResponseHandler.handleResponse(response, "Failed to search enterprise knowledge");
+  }
+
+  static async createKnowledgeOutline(workspaceId: string, input: { topic: string; query?: string; audience?: string; nSlides: number; documentIds: string[] }): Promise<EnterpriseKnowledgeOutlineResponse> {
+    const response = await fetch(getApiUrl("/api/v1/enterprise/knowledge/outlines"), { method: "POST", credentials: "include", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ topic: input.topic, query: input.query || input.topic, audience: input.audience || undefined, n_slides: input.nSlides, document_ids: input.documentIds, scope_type: "workspace", workspace_id: workspaceId, language: "Chinese" }) });
+    return ApiResponseHandler.handleResponse(response, "Failed to create knowledge outline");
+  }
+
+  static async getKnowledgeOutline(outlineId: string): Promise<EnterpriseKnowledgeOutlineResponse> {
+    const response = await fetch(getApiUrl(`/api/v1/enterprise/knowledge/outlines/${encodeURIComponent(outlineId)}`), { credentials: "include", cache: "no-store" });
+    return ApiResponseHandler.handleResponse(response, "Failed to load knowledge outline");
+  }
+
+  static async applyKnowledgeOutline(outlineId: string, workspaceId: string, entryId: string): Promise<EnterpriseKnowledgeOutlineResponse> {
+    const response = await fetch(getApiUrl(`/api/v1/enterprise/knowledge/outlines/${encodeURIComponent(outlineId)}/workspaces/${encodeURIComponent(workspaceId)}/presentations/${encodeURIComponent(entryId)}/apply`), { method: "POST", credentials: "include" });
+    return ApiResponseHandler.handleResponse(response, "Failed to apply knowledge outline");
+  }
+
+  static async materializeKnowledgeCitations(outlineId: string, workspaceId: string, entryId: string): Promise<unknown[]> {
+    const response = await fetch(getApiUrl(`/api/v1/enterprise/knowledge/outlines/${encodeURIComponent(outlineId)}/workspaces/${encodeURIComponent(workspaceId)}/presentations/${encodeURIComponent(entryId)}/citations`), { method: "POST", credentials: "include" });
+    return ApiResponseHandler.handleResponse(response, "Failed to materialize knowledge citations");
   }
 
   static async getAssets(

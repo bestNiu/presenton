@@ -14,6 +14,7 @@ from domains.platform.enums import (
 )
 from models.sql.enterprise.presentation_entry import PresentationEntryModel
 from models.sql.enterprise.document_chunk import EnterpriseDocumentChunkModel
+from models.sql.enterprise.document import EnterpriseDocumentModel
 from models.sql.enterprise.presentation_governance import (
     PresentationQualityIssueModel,
     PresentationQualityRunModel,
@@ -101,8 +102,56 @@ async def run_quality_check(
     slide_hash, _ = await _presentation_snapshot(session, entry)
     slides = list((await session.scalars(select(SlideModel).execution_options(skip_owner_scope=True).where(SlideModel.presentation == entry.presentation_id).order_by(SlideModel.index))).all())
     citations = list((await session.scalars(select(PresentationSourceCitationModel).where(PresentationSourceCitationModel.presentation_entry_id == entry.id))).all())
-    cited_slide_ids = {item.slide_id for item in citations if item.slide_id is not None}
+    cited_slide_ids = {
+        item.slide_id
+        for item in citations
+        if item.slide_id is not None and item.source_type != "enterprise_document"
+    }
     raw_issues: list[dict] = []
+    for citation in citations:
+        if citation.source_type != "enterprise_document" or citation.slide_id is None:
+            continue
+        try:
+            document_id = uuid.UUID(citation.source_id)
+        except (TypeError, ValueError):
+            document_id = None
+        document = (
+            await session.get(EnterpriseDocumentModel, document_id)
+            if document_id is not None
+            else None
+        )
+        valid = (
+            document is not None
+            and document.parse_status == "ready"
+            and document.authorization_status != "revoked"
+            and document.status not in {"archived", "revoked"}
+            and str(document.version_no) == citation.source_version
+            and (
+                document.expires_at is None
+                or (
+                    document.expires_at
+                    if document.expires_at.tzinfo
+                    else document.expires_at.replace(tzinfo=timezone.utc)
+                )
+                > datetime.now(timezone.utc)
+            )
+        )
+        if valid:
+            cited_slide_ids.add(citation.slide_id)
+        else:
+            raw_issues.append(
+                {
+                    "rule_code": "citation_source_invalid",
+                    "severity": PresentationQualitySeverity.BLOCKING,
+                    "slide_id": citation.slide_id,
+                    "message": "页面引用的企业资料已失效、撤销或版本不一致",
+                    "details": {
+                        "citation_id": str(citation.id),
+                        "source_id": citation.source_id,
+                        "source_version": citation.source_version,
+                    },
+                }
+            )
     if not slides:
         raw_issues.append({"rule_code": "presentation_empty", "severity": PresentationQualitySeverity.BLOCKING, "message": "演示文稿没有页面", "details": {}})
     for slide in slides:

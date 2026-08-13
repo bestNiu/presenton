@@ -517,6 +517,16 @@ sequenceDiagram
 
 每条结果同时返回展示字段和标准 citation：`source_type/source_id/source_version/locator/excerpt`。它可以直接提交到已有演示文稿 citation API。写入 `enterprise_document` 类型引用时，服务端再次检查调用者权限、目标工作区、文档状态、精确版本、切片序号、行号和摘录内容，防止客户端伪造引用或把已撤销资料注入 PPT。质量门禁继续消费统一的 `PresentationSourceCitation`，无需区分引用来自通用工作台还是竞标工作台。
 
+### 11.7 知识驱动生成与检索质量闭环（T30—T33）
+
+知识大纲使用 `enterprise_knowledge_outlines` 固化任务输入、作用域、资料版本、上下文 manifest、Prompt/schema 版本、带引用大纲及错误状态。`KnowledgeContextBuilder` 在文档 ACL 过滤之后按相关度和字符预算选择切片，并用不可伪造的 `K1/K2...` 临时引用编号组装模型上下文；模型只能生成展示内容，服务端根据实际切片重新绑定每页 `citation_refs`。异步任务状态为 `queued → generating → ready/error`，完整结果通过 `/knowledge/outlines/{id}` 查询。
+
+带引用大纲可应用到既有企业 Presentation，应用时只把兼容的 `slides[].content` 写入现有大纲内核，来源 manifest 保留在企业知识大纲表，避免侵入上游 Presentation schema。页面生成完成后，引用物化接口按页面顺序生成 `PresentationSourceCitation`，并在重复调用时保持幂等。质量检查只把当前仍为 ready、未撤销、未过期且版本一致的企业资料引用视为有效；失效引用产生 blocking issue。
+
+通用工作台新增 `/workspace/documents`，支持空间资料上传、解析状态轮询、版本展示、失败重试、限定资料检索、带引用大纲生成、目标文稿选择与应用。该页面是通用能力入口，竞标项目继续通过 project scope 复用相同后端，不把竞标字段引入文档与检索核心。
+
+首批 hybrid 排序以词法覆盖、标题/文档元数据权重和字符三元组相似度组合，返回 lexical/semantic 分数组成，便于调参和问题定位。管理员评测接口接收脱敏黄金集排序结果，计算 Hit Rate、Recall@K 与 MRR。三元组相似度是无外部模型依赖的试点基线；生产数据量和黄金集稳定后，可将 semantic 分量替换为 embedding adapter，并继续复用 ACL、过滤、引用与评测契约。
+
 ---
 
 ## 12. AI 编排架构

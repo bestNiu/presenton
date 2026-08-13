@@ -82,6 +82,10 @@ from api.v1.enterprise.schemas import (
     EnterpriseDocumentResponse,
     EnterpriseKnowledgeSearchItemResponse,
     EnterpriseKnowledgeSearchRequest,
+    EnterpriseKnowledgeOutlineCreateRequest,
+    EnterpriseKnowledgeOutlineResponse,
+    EnterpriseKnowledgeEvaluationRequest,
+    EnterpriseKnowledgeEvaluationResponse,
     PresentationEntryResponse,
     PresentationCommentCreateRequest,
     PresentationCommentReplyCreateRequest,
@@ -164,6 +168,14 @@ from services.enterprise.document_service import (
     upload_enterprise_document,
 )
 from services.enterprise.knowledge_service import search_enterprise_knowledge
+from services.enterprise.knowledge_outline_service import (
+    apply_knowledge_outline_to_presentation,
+    create_knowledge_outline,
+    get_knowledge_outline,
+    materialize_knowledge_outline_citations,
+    run_knowledge_outline_task,
+)
+from services.enterprise.knowledge_evaluation_service import evaluate_ranked_results
 from services.enterprise.asset_library_service import (
     create_asset,
     bulk_transition_assets,
@@ -423,6 +435,95 @@ async def post_enterprise_knowledge_search(
         categories=body.categories,
         latest_only=body.latest_only,
         limit=body.limit,
+        document_ids=body.document_ids,
+        retrieval_mode=body.retrieval_mode,
+    )
+
+
+@API_V1_ENTERPRISE_ROUTER.post(
+    "/knowledge/outlines",
+    response_model=EnterpriseKnowledgeOutlineResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def post_enterprise_knowledge_outline(
+    body: EnterpriseKnowledgeOutlineCreateRequest,
+    background_tasks: BackgroundTasks,
+    principal: AuthPrincipal = Depends(principal_from_request),
+    session: AsyncSession = Depends(get_async_session),
+):
+    outline, task = await create_knowledge_outline(
+        session, principal=principal, values=body.model_dump()
+    )
+    background_tasks.add_task(run_knowledge_outline_task, outline.id, task.id)
+    return outline
+
+
+@API_V1_ENTERPRISE_ROUTER.get(
+    "/knowledge/outlines/{outline_id}",
+    response_model=EnterpriseKnowledgeOutlineResponse,
+)
+async def get_enterprise_knowledge_outline(
+    outline_id: uuid.UUID,
+    principal: AuthPrincipal = Depends(principal_from_request),
+    session: AsyncSession = Depends(get_async_session),
+):
+    return await get_knowledge_outline(
+        session, principal=principal, outline_id=outline_id
+    )
+
+
+@API_V1_ENTERPRISE_ROUTER.post(
+    "/knowledge/outlines/{outline_id}/workspaces/{workspace_id}/presentations/{entry_id}/apply",
+    response_model=EnterpriseKnowledgeOutlineResponse,
+)
+async def post_apply_enterprise_knowledge_outline(
+    outline_id: uuid.UUID,
+    workspace_id: uuid.UUID,
+    entry_id: uuid.UUID,
+    principal: AuthPrincipal = Depends(principal_from_request),
+    session: AsyncSession = Depends(get_async_session),
+):
+    return await apply_knowledge_outline_to_presentation(
+        session,
+        principal=principal,
+        outline_id=outline_id,
+        workspace_id=workspace_id,
+        entry_id=entry_id,
+    )
+
+
+@API_V1_ENTERPRISE_ROUTER.post(
+    "/knowledge/outlines/{outline_id}/workspaces/{workspace_id}/presentations/{entry_id}/citations",
+    response_model=list[PresentationSourceCitationResponse],
+)
+async def post_materialize_enterprise_knowledge_citations(
+    outline_id: uuid.UUID,
+    workspace_id: uuid.UUID,
+    entry_id: uuid.UUID,
+    principal: AuthPrincipal = Depends(principal_from_request),
+    session: AsyncSession = Depends(get_async_session),
+):
+    return await materialize_knowledge_outline_citations(
+        session,
+        principal=principal,
+        outline_id=outline_id,
+        workspace_id=workspace_id,
+        entry_id=entry_id,
+    )
+
+
+@API_V1_ENTERPRISE_ROUTER.post(
+    "/knowledge/evaluations",
+    response_model=EnterpriseKnowledgeEvaluationResponse,
+)
+async def post_enterprise_knowledge_evaluation(
+    body: EnterpriseKnowledgeEvaluationRequest,
+    principal: AuthPrincipal = Depends(principal_from_request),
+):
+    if not principal.is_admin:
+        raise HTTPException(status_code=403, detail="Platform administrator required")
+    return evaluate_ranked_results(
+        [item.model_dump() for item in body.cases], k=body.k
     )
 
 

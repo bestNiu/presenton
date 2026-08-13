@@ -117,6 +117,8 @@ class EnterpriseKnowledgeSearchRequest(BaseModel):
     categories: list[str] = Field(default_factory=list, max_length=20)
     latest_only: bool = True
     limit: int = Field(default=10, ge=1, le=50)
+    document_ids: list[uuid.UUID] = Field(default_factory=list, max_length=100)
+    retrieval_mode: str = Field(default="hybrid", pattern="^(lexical|hybrid)$")
 
 
 class EnterpriseKnowledgeCitationResponse(BaseModel):
@@ -137,8 +139,69 @@ class EnterpriseKnowledgeSearchItemResponse(BaseModel):
     excerpt: str
     locator: dict
     score: float
+    retrieval_mode: str
+    score_components: dict[str, float]
     matched_terms: list[str]
     citation: EnterpriseKnowledgeCitationResponse
+
+
+class EnterpriseKnowledgeOutlineCreateRequest(BaseModel):
+    topic: str = Field(min_length=1, max_length=500)
+    query: str | None = Field(default=None, max_length=500)
+    scope_type: str = Field(pattern="^(enterprise|workspace|project)$")
+    workspace_id: uuid.UUID | None = None
+    project_id: uuid.UUID | None = None
+    document_ids: list[uuid.UUID] = Field(default_factory=list, max_length=100)
+    audience: str | None = Field(default=None, max_length=300)
+    language: str = Field(default="Chinese", min_length=1, max_length=64)
+    n_slides: int = Field(default=8, ge=1, le=30)
+    instructions: str | None = Field(default=None, max_length=2000)
+
+
+class EnterpriseKnowledgeOutlineResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    workspace_id: uuid.UUID | None
+    project_id: uuid.UUID | None
+    presentation_entry_id: uuid.UUID | None
+    created_by: uuid.UUID | None
+    scope_type: str
+    topic: str
+    audience: str | None
+    language: str
+    n_slides: int
+    status: str
+    task_id: str | None
+    query: str
+    document_ids: list
+    context_manifest: list
+    outline: dict
+    prompt_version: str
+    schema_version: str
+    error: str | None
+    created_at: datetime
+    updated_at: datetime
+
+
+class EnterpriseKnowledgeEvaluationCase(BaseModel):
+    case_id: str = Field(min_length=1, max_length=100)
+    expected_document_ids: list[str] = Field(min_length=1, max_length=20)
+    ranked_document_ids: list[str] = Field(default_factory=list, max_length=100)
+
+
+class EnterpriseKnowledgeEvaluationRequest(BaseModel):
+    cases: list[EnterpriseKnowledgeEvaluationCase] = Field(min_length=1, max_length=500)
+    k: int = Field(default=10, ge=1, le=50)
+
+
+class EnterpriseKnowledgeEvaluationResponse(BaseModel):
+    case_count: int
+    k: int
+    hit_rate: float
+    recall_at_k: float
+    mean_reciprocal_rank: float
+    cases: list[dict]
 
 
 class AssetCreateRequest(AssetMetadataRequest):

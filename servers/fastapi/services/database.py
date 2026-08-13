@@ -37,6 +37,7 @@ from models.sql.enterprise import (
     EnterpriseNotificationModel,
     EnterpriseDocumentModel,
     EnterpriseDocumentChunkModel,
+    EnterpriseKnowledgeOutlineModel,
     BidDeliveryArtifactModel,
     BidDownloadGrantModel,
     BidProjectDocumentModel,

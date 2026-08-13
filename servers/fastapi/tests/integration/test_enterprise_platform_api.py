@@ -26,6 +26,7 @@ from models.sql.enterprise import (
     EnterpriseNotificationModel,
     EnterpriseDocumentModel,
     EnterpriseDocumentChunkModel,
+    EnterpriseKnowledgeOutlineModel,
     BidDeliveryArtifactModel,
     BidDownloadGrantModel,
     BidProjectDocumentModel,
@@ -67,6 +68,7 @@ from services.enterprise.template_publication_service import (
 )
 import services.enterprise.asset_preview_service as asset_preview_service
 import services.enterprise.document_service as document_service
+import services.enterprise.knowledge_outline_service as knowledge_outline_service
 import services.enterprise.storage_lifecycle_service as storage_lifecycle_service
 
 
@@ -125,6 +127,7 @@ def _build_client(tmp_path):
                 AsyncTaskModel.__table__,
                 EnterpriseDocumentModel.__table__,
                 EnterpriseDocumentChunkModel.__table__,
+                EnterpriseKnowledgeOutlineModel.__table__,
                 AssetItemModel.__table__,
                 AssetFavoriteModel.__table__,
                 AssetPromotionRequestModel.__table__,
@@ -357,6 +360,9 @@ def test_enterprise_document_upload_versions_parse_access_and_storage_protection
     monkeypatch.setenv("ENTERPRISE_OBJECT_STORAGE_LOCAL_ROOT", str(storage_root))
     monkeypatch.setenv("ENTERPRISE_OBJECT_STORAGE_ORPHAN_GRACE_DAYS", "1")
     monkeypatch.setattr(document_service, "async_session_maker", session_maker)
+    monkeypatch.setattr(
+        knowledge_outline_service, "async_session_maker", session_maker
+    )
 
     class FakeDocumentsLoader:
         def __init__(self, file_paths):
@@ -367,6 +373,23 @@ def test_enterprise_document_upload_versions_parse_access_and_storage_protection
             self.documents = ["# 企业介绍\n可信、可追溯的产品能力。"]
 
     monkeypatch.setattr(document_service, "DocumentsLoader", FakeDocumentsLoader)
+
+    async def fake_generate_outline(*_args, **_kwargs):
+        yield json.dumps(
+            {
+                "slides": [
+                    {"content": "# 企业能力\n可信产品能力"},
+                    {"content": "# 交付经验\n可追溯的交付体系"},
+                ]
+            },
+            ensure_ascii=False,
+        )
+
+    monkeypatch.setattr(
+        knowledge_outline_service,
+        "generate_ppt_outline",
+        fake_generate_outline,
+    )
     try:
         workspace = client.post(
             "/api/v1/enterprise/workspaces",
@@ -582,6 +605,74 @@ def test_enterprise_document_upload_versions_parse_access_and_storage_protection
         assert citation.status_code == 201, citation.text
         assert citation.json()["source_id"] == second.json()["id"]
         assert tampered_citation.status_code == 422
+
+        outline_created = client.post(
+            "/api/v1/enterprise/knowledge/outlines",
+            json={
+                "topic": "企业能力汇报",
+                "query": "产品能力",
+                "scope_type": "workspace",
+                "workspace_id": workspace["id"],
+                "document_ids": [second.json()["id"]],
+                "audience": "管理层",
+                "n_slides": 2,
+            },
+        )
+        assert outline_created.status_code == 202, outline_created.text
+        outline = client.get(
+            f"/api/v1/enterprise/knowledge/outlines/{outline_created.json()['id']}"
+        )
+        assert outline.status_code == 200
+        assert outline.json()["status"] == "ready"
+        assert len(outline.json()["context_manifest"]) == 1
+        assert outline.json()["outline"]["slides"][0]["citation_refs"] == ["K1"]
+
+        applied = client.post(
+            f"/api/v1/enterprise/knowledge/outlines/{outline.json()['id']}/workspaces/{workspace['id']}/presentations/{entry['id']}/apply"
+        )
+        materialized = client.post(
+            f"/api/v1/enterprise/knowledge/outlines/{outline.json()['id']}/workspaces/{workspace['id']}/presentations/{entry['id']}/citations"
+        )
+        materialized_again = client.post(
+            f"/api/v1/enterprise/knowledge/outlines/{outline.json()['id']}/workspaces/{workspace['id']}/presentations/{entry['id']}/citations"
+        )
+        assert applied.status_code == 200
+        assert applied.json()["presentation_entry_id"] == entry["id"]
+        assert materialized.status_code == 200
+        assert len(materialized.json()) == 1
+        assert materialized_again.json()[0]["id"] == materialized.json()[0]["id"]
+        evaluation_denied = client.post(
+            "/api/v1/enterprise/knowledge/evaluations",
+            json={"cases": [{"case_id": "c1", "expected_document_ids": [second.json()["id"]], "ranked_document_ids": [second.json()["id"]]}]},
+        )
+        evaluation = client.post(
+            "/api/v1/enterprise/knowledge/evaluations",
+            json={"cases": [{"case_id": "c1", "expected_document_ids": [second.json()["id"]], "ranked_document_ids": [second.json()["id"]]}]},
+            headers={"x-test-user": "admin"},
+        )
+        assert evaluation_denied.status_code == 403
+        assert evaluation.status_code == 200
+        assert evaluation.json()["hit_rate"] == 1.0
+        assert evaluation.json()["mean_reciprocal_rank"] == 1.0
+
+        async def revoke_cited_document():
+            async with session_maker() as session:
+                document = await session.get(
+                    EnterpriseDocumentModel, uuid.UUID(second.json()["id"])
+                )
+                document.authorization_status = "revoked"
+                session.add(document)
+                await session.commit()
+
+        asyncio.run(revoke_cited_document())
+        stale_citation_quality = client.post(
+            f"/api/v1/enterprise/workspaces/{workspace['id']}/presentations/{entry['id']}/quality-runs"
+        )
+        assert stale_citation_quality.status_code == 201
+        assert stale_citation_quality.json()["status"] == "failed"
+        assert "citation_source_invalid" in {
+            item["rule_code"] for item in stale_citation_quality.json()["issues"]
+        }
 
         for path in storage_root.rglob("*.md"):
             aged = (datetime.now(timezone.utc) - timedelta(days=2)).timestamp()

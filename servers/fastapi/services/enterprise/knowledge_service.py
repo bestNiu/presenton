@@ -22,6 +22,13 @@ def _terms(value: str) -> set[str]:
     return terms
 
 
+def _trigrams(value: str) -> set[str]:
+    normalized = re.sub(r"\s+", "", value.casefold())
+    if len(normalized) < 3:
+        return {normalized} if normalized else set()
+    return {normalized[index : index + 3] for index in range(len(normalized) - 2)}
+
+
 def _excerpt(content: str, matched_terms: set[str], limit: int = 500) -> str:
     if len(content) <= limit:
         return content
@@ -40,21 +47,41 @@ def _rank_chunk(
     query_terms: set[str],
     chunk: EnterpriseDocumentChunkModel,
     document: EnterpriseDocumentModel,
-) -> tuple[float, set[str]]:
+    retrieval_mode: str,
+) -> tuple[float, set[str], dict]:
     content_terms = _terms(chunk.content)
     heading_terms = _terms(chunk.heading or "")
     document_terms = _terms(f"{document.logical_name} {document.category}")
     all_terms = content_terms | heading_terms | document_terms
     matched = query_terms & all_terms
-    if not matched:
-        return 0.0, set()
-    coverage = len(matched) / len(query_terms)
-    score = coverage * 60
-    score += len(query_terms & heading_terms) * 10
-    score += len(query_terms & document_terms) * 8
+    coverage = len(matched) / len(query_terms) if query_terms else 0
+    lexical_score = coverage * 60
+    lexical_score += len(query_terms & heading_terms) * 10
+    lexical_score += len(query_terms & document_terms) * 8
     if query.casefold() in chunk.content.casefold():
-        score += 20
-    return round(min(score, 100.0), 3), matched
+        lexical_score += 20
+    query_ngrams = _trigrams(query)
+    candidate_ngrams = _trigrams(
+        f"{document.logical_name} {chunk.heading or ''} {chunk.content}"
+    )
+    semantic_score = (
+        len(query_ngrams & candidate_ngrams) / len(query_ngrams) * 100
+        if query_ngrams
+        else 0
+    )
+    score = (
+        lexical_score
+        if retrieval_mode == "lexical"
+        else lexical_score * 0.75 + semantic_score * 0.25
+    )
+    return (
+        round(min(score, 100.0), 3),
+        matched,
+        {
+            "lexical": round(min(lexical_score, 100.0), 3),
+            "semantic": round(min(semantic_score, 100.0), 3),
+        },
+    )
 
 
 async def search_enterprise_knowledge(
@@ -68,6 +95,8 @@ async def search_enterprise_knowledge(
     categories: list[str],
     latest_only: bool,
     limit: int,
+    document_ids: list[uuid.UUID] | None = None,
+    retrieval_mode: str = "hybrid",
 ) -> list[dict]:
     workspace_id, project_id = await authorize_document_scope(
         session,
@@ -81,6 +110,8 @@ async def search_enterprise_knowledge(
     query_terms = _terms(normalized_query)
     if not query_terms:
         raise HTTPException(status_code=422, detail="Knowledge search query is required")
+    if retrieval_mode not in {"lexical", "hybrid"}:
+        raise HTTPException(status_code=422, detail="Invalid knowledge retrieval mode")
 
     predicates = [
         EnterpriseDocumentModel.scope_type == scope_type,
@@ -103,6 +134,8 @@ async def search_enterprise_knowledge(
     normalized_categories = [item.strip() for item in categories if item.strip()]
     if normalized_categories:
         predicates.append(EnterpriseDocumentModel.category.in_(normalized_categories))
+    if document_ids:
+        predicates.append(EnterpriseDocumentModel.id.in_(document_ids))
 
     candidate_limit = min(max(limit * 100, 500), 5000)
     rows = (
@@ -119,8 +152,12 @@ async def search_enterprise_knowledge(
     ).all()
     ranked: list[dict] = []
     for chunk, document in rows:
-        score, matched_terms = _rank_chunk(
-            normalized_query, query_terms, chunk, document
+        score, matched_terms, score_components = _rank_chunk(
+            normalized_query,
+            query_terms,
+            chunk,
+            document,
+            retrieval_mode,
         )
         if score <= 0:
             continue
@@ -140,6 +177,8 @@ async def search_enterprise_knowledge(
                 "excerpt": _excerpt(chunk.content, matched_terms),
                 "locator": locator,
                 "score": score,
+                "retrieval_mode": retrieval_mode,
+                "score_components": score_components,
                 "matched_terms": sorted(matched_terms),
                 "citation": {
                     "source_type": "enterprise_document",

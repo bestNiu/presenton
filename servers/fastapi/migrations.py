@@ -47,7 +47,8 @@ REVISION_ASSET_OPERATIONS_ANALYTICS = "c8a2e6f0b4d5"
 REVISION_ASSET_PERSONALIZATION = "d9b3f7a1c5e6"
 REVISION_ASSET_ASYNC_PREVIEWS = "e0c4a8b2d6f7"
 REVISION_ASSET_VERSIONING = "f1d5b9c3e7a8"
-REVISION_HEAD = REVISION_ASSET_VERSIONING
+REVISION_ASSET_DUPLICATE_GOVERNANCE = "g2e6c0d4f8b9"
+REVISION_HEAD = REVISION_ASSET_DUPLICATE_GOVERNANCE
 
 
 async def migrate_database_on_startup() -> None:
@@ -144,6 +145,8 @@ def _infer_revision_from_schema(
     if enterprise_tables.issubset(tables):
         if "enterprise_asset_items" in tables:
             asset_columns = {column["name"] for column in inspector.get_columns("enterprise_asset_items")}
+            if "duplicate_status" in asset_columns:
+                return REVISION_ASSET_DUPLICATE_GOVERNANCE
             if "version_group_id" in asset_columns:
                 return REVISION_ASSET_VERSIONING
             if "preview_task_id" in asset_columns:

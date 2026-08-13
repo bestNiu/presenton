@@ -98,6 +98,8 @@ class AssetItemResponse(BaseModel):
     version_no: int
     is_latest: bool
     supersedes_asset_id: uuid.UUID | None
+    duplicate_of_asset_id: uuid.UUID | None
+    duplicate_status: str
     workspace_id: uuid.UUID | None
     created_by: uuid.UUID | None
     scope_type: AssetScopeType
@@ -247,6 +249,24 @@ class AssetPersonalizedItemResponse(BaseModel):
 class AssetFavoriteResponse(BaseModel):
     asset_id: uuid.UUID
     is_favorite: bool
+
+
+class AssetDiscoveryItemResponse(BaseModel):
+    asset: AssetItemResponse
+    score: float
+    reasons: list[str] = Field(default_factory=list)
+    exact_duplicate: bool = False
+
+
+class AssetDuplicateDecisionRequest(BaseModel):
+    action: str = Field(pattern="^(confirm|distinct)$")
+    canonical_asset_id: uuid.UUID | None = None
+
+
+class AssetDuplicateDecisionResponse(BaseModel):
+    asset_id: uuid.UUID
+    duplicate_status: str
+    duplicate_of_asset_id: uuid.UUID | None
 
 
 class AssetPreviewTaskResponse(BaseModel):

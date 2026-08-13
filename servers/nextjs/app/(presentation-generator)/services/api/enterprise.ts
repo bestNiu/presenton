@@ -389,6 +389,8 @@ export interface AssetItemResponse {
   version_no: number;
   is_latest: boolean;
   supersedes_asset_id: string | null;
+  duplicate_of_asset_id: string | null;
+  duplicate_status: "none" | "suspected" | "confirmed" | "distinct";
   workspace_id: string | null;
   created_by: string | null;
   scope_type: AssetScopeType;
@@ -511,6 +513,13 @@ export interface AssetPersonalizedItemResponse {
   recommendation_reasons: string[];
 }
 
+export interface AssetDiscoveryItemResponse {
+  asset: AssetItemResponse;
+  score: number;
+  reasons: string[];
+  exact_duplicate: boolean;
+}
+
 export class EnterpriseApi {
   static async ensurePersonalWorkspace(): Promise<WorkspaceResponse> {
     const response = await fetch(
@@ -577,6 +586,27 @@ export class EnterpriseApi {
       { credentials: "include", cache: "no-store" }
     );
     return ApiResponseHandler.handleResponse(response, "Failed to load personalized assets");
+  }
+
+  static async searchAssets(workspaceId: string, query: string, assetType?: string): Promise<AssetDiscoveryItemResponse[]> {
+    const params = new URLSearchParams({ workspace_id: workspaceId, q: query });
+    if (assetType) params.set("asset_type", assetType);
+    const response = await fetch(getApiUrl(`/api/v1/enterprise/assets/search?${params.toString()}`), { credentials: "include", cache: "no-store" });
+    return ApiResponseHandler.handleResponse(response, "Failed to search assets");
+  }
+
+  static async getSimilarAssets(assetId: string, workspaceId: string): Promise<AssetDiscoveryItemResponse[]> {
+    const params = new URLSearchParams({ workspace_id: workspaceId });
+    const response = await fetch(getApiUrl(`/api/v1/enterprise/assets/${encodeURIComponent(assetId)}/similar?${params.toString()}`), { credentials: "include", cache: "no-store" });
+    return ApiResponseHandler.handleResponse(response, "Failed to find similar assets");
+  }
+
+  static async decideAssetDuplicate(assetId: string, action: "confirm" | "distinct", canonicalAssetId?: string): Promise<{ asset_id: string; duplicate_status: string; duplicate_of_asset_id: string | null }> {
+    const response = await fetch(getApiUrl(`/api/v1/enterprise/assets/${encodeURIComponent(assetId)}/duplicate-decision`), {
+      method: "POST", credentials: "include", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action, canonical_asset_id: canonicalAssetId || null }),
+    });
+    return ApiResponseHandler.handleResponse(response, "Failed to resolve duplicate asset");
   }
 
   static async setAssetFavorite(assetId: string, favorite: boolean): Promise<{ asset_id: string; is_favorite: boolean }> {

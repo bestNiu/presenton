@@ -11,6 +11,9 @@ from api.v1.enterprise.schemas import (
     AssetCompatibilityResponse,
     AssetElementInsertRequest,
     AssetElementInsertResponse,
+    AssetDiscoveryItemResponse,
+    AssetDuplicateDecisionRequest,
+    AssetDuplicateDecisionResponse,
     AssetItemResponse,
     AssetPageInsertRequest,
     AssetPageInsertResponse,
@@ -160,6 +163,11 @@ from services.enterprise.asset_preview_service import (
     queue_asset_preview,
     run_asset_preview_task,
 )
+from services.enterprise.asset_discovery_service import (
+    decide_asset_duplicate,
+    find_similar_assets,
+    search_assets,
+)
 from services.enterprise.bid_project_service import (
     add_project_document,
     confirm_project_profile,
@@ -304,6 +312,48 @@ async def get_enterprise_personalized_assets(
         tags=tags,
         limit=limit,
     )
+
+
+@API_V1_ENTERPRISE_ROUTER.get(
+    "/assets/search",
+    response_model=list[AssetDiscoveryItemResponse],
+)
+async def get_enterprise_asset_search(
+    workspace_id: uuid.UUID = Query(),
+    q: str = Query(min_length=1, max_length=300),
+    asset_type: str | None = Query(default=None),
+    limit: int = Query(default=30, ge=1, le=100),
+    principal: AuthPrincipal = Depends(principal_from_request),
+    session: AsyncSession = Depends(get_async_session),
+):
+    return await search_assets(session, principal=principal, workspace_id=workspace_id, query=q, asset_type=asset_type, limit=limit)
+
+
+@API_V1_ENTERPRISE_ROUTER.get(
+    "/assets/{asset_id}/similar",
+    response_model=list[AssetDiscoveryItemResponse],
+)
+async def get_enterprise_similar_assets(
+    asset_id: uuid.UUID,
+    workspace_id: uuid.UUID = Query(),
+    limit: int = Query(default=10, ge=1, le=50),
+    principal: AuthPrincipal = Depends(principal_from_request),
+    session: AsyncSession = Depends(get_async_session),
+):
+    return await find_similar_assets(session, principal=principal, asset_id=asset_id, workspace_id=workspace_id, limit=limit)
+
+
+@API_V1_ENTERPRISE_ROUTER.post(
+    "/assets/{asset_id}/duplicate-decision",
+    response_model=AssetDuplicateDecisionResponse,
+)
+async def post_enterprise_asset_duplicate_decision(
+    asset_id: uuid.UUID,
+    body: AssetDuplicateDecisionRequest,
+    principal: AuthPrincipal = Depends(principal_from_request),
+    session: AsyncSession = Depends(get_async_session),
+):
+    return await decide_asset_duplicate(session, principal=principal, asset_id=asset_id, action=body.action, canonical_asset_id=body.canonical_asset_id)
 
 
 @API_V1_ENTERPRISE_ROUTER.post(

@@ -179,12 +179,33 @@ async def create_asset(
     if asset_type not in ALLOWED_ASSET_TYPES:
         raise HTTPException(status_code=422, detail="Unsupported asset type")
     payload = values.get("payload") or {}
+    payload_hash = _canonical_hash(payload)
+    duplicate = None
+    if int(values.get("version_no", 1)) == 1:
+        scope_match = (
+            AssetItemModel.created_by == principal.user_id
+            if scope_type == AssetScopeType.PERSONAL
+            else AssetItemModel.workspace_id == workspace_id
+            if scope_type == AssetScopeType.WORKSPACE
+            else AssetItemModel.workspace_id.is_(None)
+        )
+        duplicate = await session.scalar(
+            select(AssetItemModel).where(
+                AssetItemModel.scope_type == scope_type,
+                AssetItemModel.asset_type == asset_type,
+                AssetItemModel.payload_hash == payload_hash,
+                AssetItemModel.duplicate_status != "confirmed",
+                scope_match,
+            ).order_by(AssetItemModel.created_at.asc()).limit(1)
+        )
     values.setdefault("preview", _build_preview(name=values["name"], payload=payload, asset_type=asset_type))
     asset = AssetItemModel(
         workspace_id=workspace_id,
         created_by=principal.user_id,
         scope_type=scope_type,
-        payload_hash=_canonical_hash(payload),
+        payload_hash=payload_hash,
+        duplicate_of_asset_id=duplicate.id if duplicate else None,
+        duplicate_status="suspected" if duplicate else "none",
         **values,
     )
     session.add(asset)
@@ -195,7 +216,7 @@ async def create_asset(
         action="asset.created",
         resource_type="asset_item",
         resource_id=asset.id,
-        metadata={"asset_type": asset.asset_type, "scope_type": scope_type.value},
+        metadata={"asset_type": asset.asset_type, "scope_type": scope_type.value, "suspected_duplicate_of": str(duplicate.id) if duplicate else None},
     )
     if commit:
         await session.commit()
@@ -431,6 +452,7 @@ async def list_assets(
             AssetItemModel.is_latest.is_(True),
             AssetItemModel.status == AssetStatus.DRAFT,
         ),
+        AssetItemModel.duplicate_status != "confirmed",
     )
     if workspace_id is not None:
         statement = statement.where(or_(
@@ -658,6 +680,8 @@ async def insert_asset_page(
     if PresentationEntryStatus(entry.status) != PresentationEntryStatus.DRAFT:
         raise HTTPException(status_code=409, detail="Only draft presentation accepts reusable assets")
     asset = await _require_asset_access(session, asset_id=asset_id, principal=principal)
+    if asset.duplicate_status == "confirmed":
+        raise HTTPException(status_code=409, detail={"message": "Asset is a confirmed duplicate", "canonical_asset_id": str(asset.duplicate_of_asset_id) if asset.duplicate_of_asset_id else None})
     if AssetStatus(asset.status) in (AssetStatus.OFFLINE, AssetStatus.ARCHIVED):
         raise HTTPException(status_code=409, detail="Asset is not available")
     if asset.status != AssetStatus.PUBLISHED and asset.created_by != principal.user_id:
@@ -738,6 +762,8 @@ async def insert_asset_element(
     if PresentationEntryStatus(entry.status) != PresentationEntryStatus.DRAFT:
         raise HTTPException(status_code=409, detail="Only draft presentation accepts reusable assets")
     asset = await _require_asset_access(session, asset_id=asset_id, principal=principal)
+    if asset.duplicate_status == "confirmed":
+        raise HTTPException(status_code=409, detail={"message": "Asset is a confirmed duplicate", "canonical_asset_id": str(asset.duplicate_of_asset_id) if asset.duplicate_of_asset_id else None})
     if asset.asset_type not in ELEMENT_ASSET_TYPES:
         raise HTTPException(status_code=422, detail="Asset cannot be inserted into a slide")
     if AssetStatus(asset.status) in {AssetStatus.OFFLINE, AssetStatus.ARCHIVED}:

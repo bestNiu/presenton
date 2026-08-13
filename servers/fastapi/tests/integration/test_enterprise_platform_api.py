@@ -640,6 +640,14 @@ def test_asset_library_page_snapshot_lifecycle_and_reuse(tmp_path, monkeypatch):
                 "tags": ["经营", "批量治理"],
             },
         ).json()
+        similar_personal_assets = client.get(
+            f"/api/v1/enterprise/assets/{personal_asset['id']}/similar",
+            params={"workspace_id": workspace["id"]},
+        )
+        confirmed_duplicate = client.post(
+            f"/api/v1/enterprise/assets/{second_personal_asset['id']}/duplicate-decision",
+            json={"action": "confirm", "canonical_asset_id": personal_asset["id"]},
+        )
         client.put(
             f"/api/v1/enterprise/workspaces/{workspace['id']}/members/{users['member'].id}",
             json={"user_id": str(users["member"].id), "role": "admin"},
@@ -783,6 +791,10 @@ def test_asset_library_page_snapshot_lifecycle_and_reuse(tmp_path, monkeypatch):
                 "presentation_entry_id": entry["id"],
                 "slide_id": str(slide_id),
             },
+        )
+        semantic_search = client.get(
+            "/api/v1/enterprise/assets/search",
+            params={"workspace_id": workspace["id"], "q": "季度趋势收入", "asset_type": "chart"},
         )
         element_asset_specs = [
             ("image", "品牌主视觉", {"format": "presentation-element-v1", "element": {"type": "image", "data": "/app_data/images/brand.png", "size": {"width": 320, "height": 180}}}),
@@ -953,6 +965,11 @@ def test_asset_library_page_snapshot_lifecycle_and_reuse(tmp_path, monkeypatch):
         assert member_recommendations.json()[0]["asset"]["id"] == asset_id
         assert any("标签" in reason for reason in member_recommendations.json()[0]["recommendation_reasons"])
         assert reviewer_insert_denied.status_code == 404
+        assert second_personal_asset["duplicate_status"] == "suspected"
+        assert second_personal_asset["duplicate_of_asset_id"] == personal_asset["id"]
+        assert similar_personal_assets.json()[0]["asset"]["id"] == second_personal_asset["id"]
+        assert similar_personal_assets.json()[0]["exact_duplicate"] is True
+        assert confirmed_duplicate.json()["duplicate_status"] == "confirmed"
         assert unconfirmed_promotion.status_code == 422
         assert promotion.status_code == 201
         assert promotion.json()["status"] == "pending"
@@ -987,6 +1004,9 @@ def test_asset_library_page_snapshot_lifecycle_and_reuse(tmp_path, monkeypatch):
         assert inserted_chart.status_code == 201
         assert inserted_chart.json()["asset_type"] == "chart"
         assert inserted_chart.json()["component_index"] == 0
+        assert semantic_search.status_code == 200
+        assert semantic_search.json()[0]["asset"]["id"] == chart_asset_id
+        assert "内容语义匹配" in semantic_search.json()[0]["reasons"]
         assert [response.status_code for response in additional_insertions] == [201, 201, 201]
         assert [response.json()["component_index"] for response in additional_insertions] == [1, 2, 3]
         assert saved_selected_chart.status_code == 201

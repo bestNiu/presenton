@@ -19,6 +19,8 @@ class AssetItemModel(SQLModel, table=True):
     version_no: int = Field(default=1, sa_column=Column(Integer, nullable=False))
     is_latest: bool = Field(default=True, sa_column=Column(Boolean, nullable=False, index=True))
     supersedes_asset_id: uuid.UUID | None = Field(default=None, sa_column=Column(ForeignKey("enterprise_asset_items.id", ondelete="SET NULL"), index=True))
+    duplicate_of_asset_id: uuid.UUID | None = Field(default=None, sa_column=Column(ForeignKey("enterprise_asset_items.id", ondelete="SET NULL"), index=True))
+    duplicate_status: str = Field(default="none", sa_column=Column(String(32), nullable=False, index=True))
     workspace_id: uuid.UUID | None = Field(default=None, sa_column=Column(ForeignKey("enterprise_workspaces.id", ondelete="CASCADE"), index=True))
     created_by: uuid.UUID | None = Field(default=None, sa_column=Column(ForeignKey("user.id", ondelete="SET NULL"), index=True))
     scope_type: AssetScopeType = Field(sa_column=Column(String(32), nullable=False, index=True))

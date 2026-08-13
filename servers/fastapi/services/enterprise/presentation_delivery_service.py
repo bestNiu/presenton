@@ -376,6 +376,82 @@ async def build_presentation_delivery_evidence_package(
     return content, filename, package_hash
 
 
+async def verify_presentation_delivery_evidence_package(
+    session: AsyncSession,
+    *,
+    workspace_id: uuid.UUID,
+    entry_id: uuid.UUID,
+    artifact_id: uuid.UUID,
+    package: dict,
+    principal: AuthPrincipal,
+) -> dict:
+    if len(json.dumps(package, ensure_ascii=False, default=str).encode("utf-8")) > 5 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="Evidence package is too large")
+    evidence = await get_presentation_delivery_evidence(
+        session,
+        workspace_id=workspace_id,
+        entry_id=entry_id,
+        artifact_id=artifact_id,
+        principal=principal,
+    )
+    claimed_hash = package.get("package_hash")
+    package_body = {key: value for key, value in package.items() if key != "package_hash"}
+    package_integrity = isinstance(claimed_hash, str) and _canonical_hash(package_body) == claimed_hash
+    artifact_payload = package.get("artifact") if isinstance(package.get("artifact"), dict) else {}
+    snapshot_payload = package.get("snapshot") if isinstance(package.get("snapshot"), dict) else {}
+    artifact_match = (
+        artifact_payload.get("id") == str(artifact_id)
+        and artifact_payload.get("sha256") == evidence["artifact"].sha256
+        and artifact_payload.get("size_bytes") == evidence["artifact"].size_bytes
+        and snapshot_payload.get("id") == str(evidence["snapshot_id"])
+    )
+    issued_events = list(
+        (
+            await session.scalars(
+                select(AuditEventModel).where(
+                    AuditEventModel.workspace_id == workspace_id,
+                    AuditEventModel.action == "presentation.delivery_evidence_exported",
+                    AuditEventModel.resource_id == str(artifact_id),
+                )
+            )
+        ).all()
+    )
+    issued_by_platform = isinstance(claimed_hash, str) and any(
+        (event.event_metadata or {}).get("package_hash") == claimed_hash
+        for event in issued_events
+    )
+    valid = all(
+        (
+            package_integrity,
+            issued_by_platform,
+            artifact_match,
+            evidence["file_integrity"],
+            evidence["snapshot_integrity"],
+            evidence["citation_integrity"],
+        )
+    )
+    record_audit_event(
+        session,
+        actor_id=principal.user_id,
+        workspace_id=workspace_id,
+        action="presentation.delivery_evidence_verified",
+        resource_type="presentation_delivery_artifact",
+        resource_id=artifact_id,
+        metadata={"package_hash": claimed_hash, "valid": valid},
+    )
+    await session.commit()
+    return {
+        "valid": valid,
+        "package_integrity": package_integrity,
+        "issued_by_platform": issued_by_platform,
+        "artifact_match": artifact_match,
+        "current_file_integrity": evidence["file_integrity"],
+        "current_snapshot_integrity": evidence["snapshot_integrity"],
+        "current_citation_integrity": evidence["citation_integrity"],
+        "package_hash": claimed_hash if isinstance(claimed_hash, str) else None,
+    }
+
+
 async def revoke_presentation_delivery(
     session: AsyncSession,
     *,

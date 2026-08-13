@@ -506,6 +506,17 @@ export interface AuditEventResponse {
   created_at: string;
 }
 
+export interface PresentationDeliveryEvidenceVerifyResponse {
+  valid: boolean;
+  package_integrity: boolean;
+  issued_by_platform: boolean;
+  artifact_match: boolean;
+  current_file_integrity: boolean;
+  current_snapshot_integrity: boolean;
+  current_citation_integrity: boolean;
+  package_hash: string | null;
+}
+
 export interface TemplatePublicationResponse {
   id: string;
   publication_key: string;
@@ -1268,6 +1279,11 @@ export class EnterpriseApi {
     anchor.download = `presentation-delivery-${artifactId}-evidence.json`;
     anchor.click();
     URL.revokeObjectURL(blobUrl);
+  }
+
+  static async verifyPresentationDeliveryEvidencePackage(workspaceId: string, entryId: string, artifactId: string, evidencePackage: Record<string, unknown>): Promise<PresentationDeliveryEvidenceVerifyResponse> {
+    const response = await fetch(getApiUrl(`/api/v1/enterprise/workspaces/${encodeURIComponent(workspaceId)}/presentations/${encodeURIComponent(entryId)}/deliveries/${encodeURIComponent(artifactId)}/evidence-package/verify`), { method: "POST", credentials: "include", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ package: evidencePackage }) });
+    return ApiResponseHandler.handleResponse(response, "Failed to verify delivery evidence package");
   }
 
   static async issuePresentationDownloadGrant(workspaceId: string, entryId: string, artifactId: string): Promise<BidDownloadGrantResponse> {

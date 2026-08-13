@@ -1147,6 +1147,21 @@ class PresentationDeliveryEvidenceResponse(BaseModel):
     credential_hash: str
 
 
+class PresentationDeliveryEvidenceVerifyRequest(BaseModel):
+    package: dict
+
+
+class PresentationDeliveryEvidenceVerifyResponse(BaseModel):
+    valid: bool
+    package_integrity: bool
+    issued_by_platform: bool
+    artifact_match: bool
+    current_file_integrity: bool
+    current_snapshot_integrity: bool
+    current_citation_integrity: bool
+    package_hash: str | None
+
+
 class PresentationQualityIssueResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: uuid.UUID

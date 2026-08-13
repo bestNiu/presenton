@@ -105,6 +105,8 @@ from api.v1.enterprise.schemas import (
     PresentationDeliveryCreateRequest,
     PresentationDeliveryArtifactResponse,
     PresentationDeliveryEvidenceResponse,
+    PresentationDeliveryEvidenceVerifyRequest,
+    PresentationDeliveryEvidenceVerifyResponse,
     PresentationRegisterRequest,
     PresentationReviewDecisionRequest,
     PresentationReviewResponse,
@@ -167,6 +169,7 @@ from services.enterprise.presentation_delivery_service import (
     issue_presentation_download_grant,
     list_presentation_deliveries,
     list_presentation_delivery_activity,
+    verify_presentation_delivery_evidence_package,
     revoke_presentation_delivery,
 )
 from services.enterprise.notification_service import (
@@ -1840,6 +1843,11 @@ async def get_presentation_delivery_activity(workspace_id: uuid.UUID, entry_id: 
 async def get_presentation_delivery_evidence_package(workspace_id: uuid.UUID, entry_id: uuid.UUID, artifact_id: uuid.UUID, principal: AuthPrincipal = Depends(principal_from_request), session: AsyncSession = Depends(get_async_session)):
     content, filename, package_hash = await build_presentation_delivery_evidence_package(session, workspace_id=workspace_id, entry_id=entry_id, artifact_id=artifact_id, principal=principal)
     return Response(content=content, media_type="application/json", headers={"Content-Disposition": f'attachment; filename="{filename}"', "X-Evidence-Package-SHA256": package_hash})
+
+
+@API_V1_ENTERPRISE_ROUTER.post("/workspaces/{workspace_id}/presentations/{entry_id}/deliveries/{artifact_id}/evidence-package/verify", response_model=PresentationDeliveryEvidenceVerifyResponse)
+async def post_presentation_delivery_evidence_package_verify(workspace_id: uuid.UUID, entry_id: uuid.UUID, artifact_id: uuid.UUID, body: PresentationDeliveryEvidenceVerifyRequest, principal: AuthPrincipal = Depends(principal_from_request), session: AsyncSession = Depends(get_async_session)):
+    return await verify_presentation_delivery_evidence_package(session, workspace_id=workspace_id, entry_id=entry_id, artifact_id=artifact_id, package=body.package, principal=principal)
 
 
 @API_V1_ENTERPRISE_ROUTER.post("/workspaces/{workspace_id}/presentations/{entry_id}/deliveries/{artifact_id}/grants", response_model=BidDownloadGrantResponse, status_code=status.HTTP_201_CREATED)

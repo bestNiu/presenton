@@ -1059,6 +1059,17 @@ def test_presentation_registration_preserves_owner_and_allows_member_listing(tmp
             f"/api/v1/enterprise/workspaces/{workspace['id']}/presentations/{entry_id}/deliveries/{delivery.json()['id']}/evidence-package",
             headers={"x-test-user": "member"},
         )
+        verified_evidence_package = client.post(
+            f"/api/v1/enterprise/workspaces/{workspace['id']}/presentations/{entry_id}/deliveries/{delivery.json()['id']}/evidence-package/verify",
+            json={"package": evidence_package.json()},
+            headers={"x-test-user": "member"},
+        )
+        tampered_package = evidence_package.json()
+        tampered_package["artifact"]["file_name"] = "tampered.pdf"
+        rejected_evidence_package = client.post(
+            f"/api/v1/enterprise/workspaces/{workspace['id']}/presentations/{entry_id}/deliveries/{delivery.json()['id']}/evidence-package/verify",
+            json={"package": tampered_package},
+        )
         governance = client.get(
             f"/api/v1/enterprise/workspaces/{workspace['id']}/presentations/{entry_id}/governance",
             headers={"x-test-user": "member"},
@@ -1132,6 +1143,12 @@ def test_presentation_registration_preserves_owner_and_allows_member_listing(tmp
         assert evidence_package.json()["artifact"]["sha256"] == delivery.json()["sha256"]
         assert evidence_package.json()["snapshot"]["citations"] == []
         assert evidence_package_denied.status_code == 404
+        assert verified_evidence_package.status_code == 200
+        assert verified_evidence_package.json()["valid"] is True
+        assert verified_evidence_package.json()["issued_by_platform"] is True
+        assert rejected_evidence_package.status_code == 200
+        assert rejected_evidence_package.json()["valid"] is False
+        assert rejected_evidence_package.json()["package_integrity"] is False
         assert frozen.json()["version_no"] == 1
         assert frozen.json()["manifest"]["scene"]["type"] == "general"
         assert governance.json()["entry"]["status"] == "frozen"

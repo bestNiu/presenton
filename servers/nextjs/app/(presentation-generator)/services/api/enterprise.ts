@@ -352,4 +352,123 @@ export class EnterpriseApi {
     );
     return ApiResponseHandler.handleResponse(response, "Failed to load bid project");
   }
+
+  static async registerBidDocument(
+    projectId: string,
+    input: {
+      logical_name: string;
+      category: string;
+      version_no: number;
+      file_ref: string;
+      sha256?: string;
+    }
+  ): Promise<BidDocumentResponse> {
+    const response = await fetch(
+      getApiUrl(`/api/v1/enterprise/bid/projects/${encodeURIComponent(projectId)}/documents`),
+      {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(input),
+      }
+    );
+    return ApiResponseHandler.handleResponse(response, "Failed to register bid document");
+  }
+
+  static async updateBidProfile(
+    projectId: string,
+    input: { facts: Record<string, unknown>; conflicts: unknown[]; row_version: number }
+  ): Promise<BidProfileResponse> {
+    const response = await fetch(
+      getApiUrl(`/api/v1/enterprise/bid/projects/${encodeURIComponent(projectId)}/profile`),
+      {
+        method: "PUT",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(input),
+      }
+    );
+    return ApiResponseHandler.handleResponse(response, "Failed to update bid profile");
+  }
+
+  static async confirmBidProfile(projectId: string): Promise<BidProfileResponse> {
+    const response = await fetch(
+      getApiUrl(`/api/v1/enterprise/bid/projects/${encodeURIComponent(projectId)}/profile/confirm`),
+      { method: "POST", credentials: "include" }
+    );
+    return ApiResponseHandler.handleResponse(response, "Failed to confirm bid profile");
+  }
+
+  static async createBidRequirement(
+    projectId: string,
+    input: {
+      category: string;
+      original_text: string;
+      mandatory: boolean;
+      score?: number;
+      source_ref?: string;
+      owner_department?: string;
+      target_module?: string;
+    }
+  ): Promise<BidRequirementResponse> {
+    const response = await fetch(
+      getApiUrl(`/api/v1/enterprise/bid/projects/${encodeURIComponent(projectId)}/requirements`),
+      {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(input),
+      }
+    );
+    return ApiResponseHandler.handleResponse(response, "Failed to create bid requirement");
+  }
+
+  static async updateBidRequirement(
+    projectId: string,
+    requirementId: string,
+    input: {
+      response: string | null;
+      status: "open" | "answered" | "verified";
+      owner_department: string | null;
+      target_module: string | null;
+      row_version: number;
+    }
+  ): Promise<BidRequirementResponse> {
+    const response = await fetch(
+      getApiUrl(
+        `/api/v1/enterprise/bid/projects/${encodeURIComponent(projectId)}/requirements/${encodeURIComponent(requirementId)}`
+      ),
+      {
+        method: "PATCH",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(input),
+      }
+    );
+    return ApiResponseHandler.handleResponse(response, "Failed to update bid requirement");
+  }
+
+  static async updateBidStrategy(
+    projectId: string,
+    input: { elements: Record<string, unknown>; row_version: number }
+  ): Promise<BidStrategyResponse> {
+    const response = await fetch(
+      getApiUrl(`/api/v1/enterprise/bid/projects/${encodeURIComponent(projectId)}/strategy`),
+      {
+        method: "PUT",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(input),
+      }
+    );
+    return ApiResponseHandler.handleResponse(response, "Failed to update bid strategy");
+  }
+
+  static async confirmBidStrategy(projectId: string): Promise<BidStrategyResponse> {
+    const response = await fetch(
+      getApiUrl(`/api/v1/enterprise/bid/projects/${encodeURIComponent(projectId)}/strategy/confirm`),
+      { method: "POST", credentials: "include" }
+    );
+    return ApiResponseHandler.handleResponse(response, "Failed to confirm bid strategy");
+  }
 }

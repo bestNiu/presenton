@@ -29,11 +29,17 @@ from services.enterprise.audit_service import record_audit_event
 from services.enterprise.workspace_service import require_workspace_role
 
 
-PROJECT_ROLE_RANK = {
-    BidProjectRole.VIEWER: 10,
-    BidProjectRole.REVIEWER: 20,
-    BidProjectRole.CONTRIBUTOR: 30,
-    BidProjectRole.BID_MANAGER: 40,
+PROJECT_ROLE_GRANTS = {
+    BidProjectRole.VIEWER: set(BidProjectRole),
+    BidProjectRole.CONTRIBUTOR: {
+        BidProjectRole.CONTRIBUTOR,
+        BidProjectRole.BID_MANAGER,
+    },
+    BidProjectRole.REVIEWER: {
+        BidProjectRole.REVIEWER,
+        BidProjectRole.BID_MANAGER,
+    },
+    BidProjectRole.BID_MANAGER: {BidProjectRole.BID_MANAGER},
 }
 STRATEGY_ELEMENTS = (
     "project_assessment",
@@ -54,7 +60,7 @@ def _role_allows(actual: BidProjectRole | str, required: BidProjectRole) -> bool
         actual_role = actual if isinstance(actual, BidProjectRole) else BidProjectRole(actual)
     except ValueError:
         return False
-    return PROJECT_ROLE_RANK[actual_role] >= PROJECT_ROLE_RANK[required]
+    return actual_role in PROJECT_ROLE_GRANTS[required]
 
 
 async def require_project_role(

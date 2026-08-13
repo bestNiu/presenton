@@ -536,12 +536,29 @@ def test_bid_understanding_flow_enforces_project_access_and_strategy_gate(tmp_pa
                 "row_version": 1,
             },
         )
+        contributor_cannot_confirm = client.post(
+            f"/api/v1/enterprise/bid/projects/{project_id}/profile/confirm",
+            headers={"x-test-user": "member"},
+        )
         stale_profile = client.put(
             f"/api/v1/enterprise/bid/projects/{project_id}/profile",
             json={"facts": {}, "conflicts": [], "row_version": 1},
         )
         confirmed_profile = client.post(
             f"/api/v1/enterprise/bid/projects/{project_id}/profile/confirm"
+        )
+        client.put(
+            f"/api/v1/enterprise/bid/projects/{project_id}/members/{users['member'].id}",
+            json={"user_id": str(users["member"].id), "role": "reviewer"},
+        )
+        reviewer_cannot_create_requirement = client.post(
+            f"/api/v1/enterprise/bid/projects/{project_id}/requirements",
+            json={
+                "category": "medical",
+                "original_text": "审核人不应创建的需求",
+                "mandatory": False,
+            },
+            headers={"x-test-user": "member"},
         )
         requirement = client.post(
             f"/api/v1/enterprise/bid/projects/{project_id}/requirements",
@@ -607,7 +624,9 @@ def test_bid_understanding_flow_enforces_project_access_and_strategy_gate(tmp_pa
         assert outsider_dashboard.status_code == 404
         assert profile.status_code == 200
         assert stale_profile.status_code == 409
+        assert contributor_cannot_confirm.status_code == 404
         assert confirmed_profile.json()["status"] == "confirmed"
+        assert reviewer_cannot_create_requirement.status_code == 404
         assert blocked.status_code == 409
         assert "策略六要素未完成" in " ".join(blocked.json()["detail"]["blockers"])
         assert answered.json()["status"] == "answered"

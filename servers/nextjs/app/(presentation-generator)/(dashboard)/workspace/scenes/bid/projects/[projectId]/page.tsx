@@ -2,12 +2,23 @@
 
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { useEffect, useState } from "react";
-import { AlertTriangle, ArrowLeft, CheckCircle2, FileText, Loader2, Target } from "lucide-react";
+import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import {
+  AlertTriangle,
+  ArrowLeft,
+  CheckCircle2,
+  FilePlus2,
+  FileText,
+  Loader2,
+  Plus,
+  Save,
+  Target,
+} from "lucide-react";
 
 import {
   EnterpriseApi,
   type BidProjectDashboardResponse,
+  type BidRequirementResponse,
 } from "@/app/(presentation-generator)/services/api/enterprise";
 
 const statusLabel = {
@@ -17,16 +28,117 @@ const statusLabel = {
   archived: "已归档",
 };
 
+const profileFields = [
+  ["drug", "药物"],
+  ["indication", "适应症"],
+  ["development", "开发阶段"],
+  ["design", "研究设计"],
+  ["scale", "研究规模"],
+  ["safety", "安全性"],
+  ["testing", "检测要求"],
+  ["client", "客户关注"],
+  ["gaps", "信息缺口"],
+] as const;
+
+const strategyFields = [
+  ["project_assessment", "项目判断"],
+  ["client_concerns", "客户担忧"],
+  ["solutions", "解决方案"],
+  ["differentiators", "差异化优势"],
+  ["commitments", "关键承诺"],
+  ["joint_decisions", "需共同决策事项"],
+] as const;
+
+type FactDraft = Record<string, { value: string; source: string }>;
+type StrategyDraft = Record<string, string>;
+
+function factDraftFromDashboard(dashboard: BidProjectDashboardResponse): FactDraft {
+  return Object.fromEntries(
+    profileFields.map(([key]) => {
+      const fact = dashboard.profile.facts[key];
+      if (fact && typeof fact === "object" && !Array.isArray(fact)) {
+        const record = fact as Record<string, unknown>;
+        return [key, { value: String(record.value ?? ""), source: String(record.source ?? "") }];
+      }
+      return [key, { value: fact == null ? "" : String(fact), source: "" }];
+    })
+  );
+}
+
+function strategyDraftFromDashboard(
+  dashboard: BidProjectDashboardResponse
+): StrategyDraft {
+  return Object.fromEntries(
+    strategyFields.map(([key]) => {
+      const value = dashboard.strategy.elements[key];
+      return [key, Array.isArray(value) ? value.join("\n") : String(value ?? "")];
+    })
+  );
+}
+
 function BidProjectDashboardPage() {
   const params = useParams<{ projectId: string }>();
   const [dashboard, setDashboard] = useState<BidProjectDashboardResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [pending, setPending] = useState("");
+  const [profileDraft, setProfileDraft] = useState<FactDraft>({});
+  const [conflictDraft, setConflictDraft] = useState("");
+  const [strategyDraft, setStrategyDraft] = useState<StrategyDraft>({});
+  const [documentDraft, setDocumentDraft] = useState({
+    logical_name: "",
+    category: "rfp",
+    version_no: 1,
+    file_ref: "",
+  });
+  const [requirementDraft, setRequirementDraft] = useState({
+    category: "commercial",
+    original_text: "",
+    mandatory: true,
+    source_ref: "",
+  });
+  const [responses, setResponses] = useState<Record<string, string>>({});
+
+  const load = useCallback(async () => {
+    const next = await EnterpriseApi.getBidProject(params.projectId);
+    setDashboard(next);
+    setProfileDraft(factDraftFromDashboard(next));
+    setConflictDraft(next.profile.conflicts.map(String).join("\n"));
+    setStrategyDraft(strategyDraftFromDashboard(next));
+    setResponses(
+      Object.fromEntries(next.requirements.map((item) => [item.id, item.response || ""]))
+    );
+  }, [params.projectId]);
 
   useEffect(() => {
-    EnterpriseApi.getBidProject(params.projectId)
-      .then(setDashboard)
-      .catch((cause) => setError(cause instanceof Error ? cause.message : "项目加载失败"));
-  }, [params.projectId]);
+    load().catch((cause) =>
+      setError(cause instanceof Error ? cause.message : "项目加载失败")
+    );
+  }, [load]);
+
+  const execute = async (key: string, action: () => Promise<unknown>) => {
+    setPending(key);
+    setError(null);
+    try {
+      await action();
+      await load();
+      return true;
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "操作失败");
+      return false;
+    } finally {
+      setPending("");
+    }
+  };
+
+  const role = dashboard?.project.current_user_role;
+  const canContribute = role === "bid_manager" || role === "contributor";
+  const canReview = role === "bid_manager" || role === "reviewer";
+  const canConfirmStrategy = role === "bid_manager";
+
+  const activeDocuments = useMemo(
+    () => dashboard?.documents.filter((document) => document.status === "active") || [],
+    [dashboard]
+  );
 
   if (!dashboard && !error) {
     return <main className="flex min-h-screen items-center justify-center bg-[#F7F8FC]"><Loader2 className="h-7 w-7 animate-spin text-[#635BFF]" /></main>;
@@ -35,8 +147,73 @@ function BidProjectDashboardPage() {
     return <main className="min-h-screen bg-[#F7F8FC] p-8"><div className="mx-auto max-w-4xl rounded-xl border border-[#FECACA] bg-white p-6 text-sm text-[#B42318]">{error}</div></main>;
   }
 
-  const { project, profile, documents, requirements, strategy } = dashboard;
-  const activeDocuments = documents.filter((document) => document.status === "active");
+  const { project, profile, requirements, strategy } = dashboard;
+
+  const saveProfile = async () => {
+    const facts = Object.fromEntries(
+      Object.entries(profileDraft)
+        .filter(([, item]) => item.value.trim())
+        .map(([key, item]) => [key, { value: item.value.trim(), source: item.source.trim() || null }])
+    );
+    await execute("profile-save", () =>
+      EnterpriseApi.updateBidProfile(project.id, {
+        facts,
+        conflicts: conflictDraft.split("\n").map((line) => line.trim()).filter(Boolean),
+        row_version: profile.row_version,
+      })
+    );
+  };
+
+  const registerDocument = async (event: FormEvent) => {
+    event.preventDefault();
+    const succeeded = await execute("document", () =>
+      EnterpriseApi.registerBidDocument(project.id, documentDraft)
+    );
+    if (succeeded) {
+      setDocumentDraft((current) => ({ ...current, logical_name: "", file_ref: "" }));
+    }
+  };
+
+  const createRequirement = async (event: FormEvent) => {
+    event.preventDefault();
+    const succeeded = await execute("requirement-create", () =>
+      EnterpriseApi.createBidRequirement(project.id, {
+        ...requirementDraft,
+        source_ref: requirementDraft.source_ref || undefined,
+      })
+    );
+    if (succeeded) {
+      setRequirementDraft((current) => ({ ...current, original_text: "", source_ref: "" }));
+    }
+  };
+
+  const answerRequirement = async (requirement: BidRequirementResponse) => {
+    const response = responses[requirement.id]?.trim() || "";
+    await execute(`requirement-${requirement.id}`, () =>
+      EnterpriseApi.updateBidRequirement(project.id, requirement.id, {
+        response,
+        status: response ? "answered" : "open",
+        owner_department: requirement.owner_department,
+        target_module: requirement.target_module,
+        row_version: requirement.row_version,
+      })
+    );
+  };
+
+  const saveStrategy = async () => {
+    const elements = Object.fromEntries(
+      Object.entries(strategyDraft).map(([key, value]) => [
+        key,
+        value.split("\n").map((line) => line.trim()).filter(Boolean),
+      ])
+    );
+    await execute("strategy-save", () =>
+      EnterpriseApi.updateBidStrategy(project.id, {
+        elements,
+        row_version: strategy.row_version,
+      })
+    );
+  };
 
   return (
     <main className="min-h-screen bg-[#F7F8FC] px-5 py-8 sm:px-8 lg:px-10">
@@ -44,14 +221,12 @@ function BidProjectDashboardPage() {
         <header className="rounded-2xl bg-white p-6 shadow-sm">
           <Link href={`/workspace/scenes/bid?workspace_id=${project.workspace_id}`} className="inline-flex items-center gap-1 text-sm text-[#635BFF]"><ArrowLeft className="h-4 w-4" /> 竞标工作台</Link>
           <div className="mt-4 flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
-            <div>
-              <p className="text-xs font-semibold text-[#635BFF]">{project.bid_code}</p>
-              <h1 className="mt-1 font-syne text-3xl font-semibold tracking-[-0.04em] text-[#17171B]">{project.name}</h1>
-              <p className="mt-2 text-sm text-[#667085]">{project.sponsor_name || "未填写申办方"} · {project.drug_name || "药物待确认"} · {project.indication || "适应症待确认"}</p>
-            </div>
-            <span className="rounded-full bg-[#F2F1FF] px-3 py-1.5 text-xs font-medium text-[#4238CA]">{statusLabel[project.status]}</span>
+            <div><p className="text-xs font-semibold text-[#635BFF]">{project.bid_code}</p><h1 className="mt-1 font-syne text-3xl font-semibold tracking-[-0.04em] text-[#17171B]">{project.name}</h1><p className="mt-2 text-sm text-[#667085]">{project.sponsor_name || "未填写申办方"} · {project.drug_name || "药物待确认"} · {project.indication || "适应症待确认"}</p></div>
+            <div className="text-right"><span className="rounded-full bg-[#F2F1FF] px-3 py-1.5 text-xs font-medium text-[#4238CA]">{statusLabel[project.status]}</span><p className="mt-2 text-xs text-[#98A2B3]">项目角色：{role}</p></div>
           </div>
         </header>
+
+        {error && <div className="mt-4 rounded-xl border border-[#FECACA] bg-[#FEF2F2] px-4 py-3 text-sm text-[#B42318]">{error}</div>}
 
         <section className="mt-5 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
           <Metric label="资料有效版本" value={String(activeDocuments.length)} detail="RFP 与方案资料影响策略门禁" />
@@ -60,35 +235,36 @@ function BidProjectDashboardPage() {
           <Metric label="策略纸" value={strategy.status === "confirmed" ? "已确认" : `v${strategy.version_no} 草稿`} detail="确认后开放专业模块" />
         </section>
 
-        <div className="mt-5 grid gap-5 lg:grid-cols-[1.25fr_1fr]">
-          <section className="rounded-2xl border border-[#E3E4EA] bg-white p-6">
-            <div className="flex items-center gap-2"><Target className="h-4 w-4 text-[#635BFF]" /><h2 className="font-semibold text-[#101828]">策略确认门禁</h2></div>
-            {dashboard.strategy_blockers.length === 0 ? (
-              <div className="mt-4 flex items-center gap-2 rounded-xl bg-[#ECFDF3] p-4 text-sm text-[#027A48]"><CheckCircle2 className="h-4 w-4" /> 所有前置检查均已通过</div>
-            ) : (
-              <div className="mt-4 grid gap-2">
-                {dashboard.strategy_blockers.map((blocker) => <div key={blocker} className="flex items-start gap-2 rounded-lg bg-[#FFFAEB] px-3 py-2.5 text-sm text-[#B54708]"><AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />{blocker}</div>)}
-              </div>
-            )}
-          </section>
+        <section className="mt-5 rounded-2xl border border-[#E3E4EA] bg-white p-6">
+          <div className="flex items-center gap-2"><Target className="h-4 w-4 text-[#635BFF]" /><h2 className="font-semibold text-[#101828]">策略确认门禁</h2></div>
+          {dashboard.strategy_blockers.length === 0 ? <div className="mt-4 flex items-center gap-2 rounded-xl bg-[#ECFDF3] p-4 text-sm text-[#027A48]"><CheckCircle2 className="h-4 w-4" /> 所有前置检查均已通过</div> : <div className="mt-4 grid gap-2">{dashboard.strategy_blockers.map((blocker) => <div key={blocker} className="flex items-start gap-2 rounded-lg bg-[#FFFAEB] px-3 py-2.5 text-sm text-[#B54708]"><AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />{blocker}</div>)}</div>}
+        </section>
+
+        <div className="mt-5 grid gap-5 lg:grid-cols-2">
           <section className="rounded-2xl border border-[#E3E4EA] bg-white p-6">
             <div className="flex items-center gap-2"><FileText className="h-4 w-4 text-[#087BCB]" /><h2 className="font-semibold text-[#101828]">项目资料</h2></div>
-            <div className="mt-3 divide-y divide-[#EAECF0]">
-              {activeDocuments.map((document) => <div key={document.id} className="flex items-center justify-between py-3 text-sm"><span className="truncate text-[#344054]">{document.logical_name}</span><span className="text-xs text-[#667085]">{document.category} · v{document.version_no}</span></div>)}
-              {activeDocuments.length === 0 && <p className="py-6 text-center text-sm text-[#98A2B3]">尚未登记项目资料</p>}
-            </div>
+            {canContribute && <form onSubmit={registerDocument} className="mt-4 grid gap-2 sm:grid-cols-2"><input value={documentDraft.logical_name} onChange={(event) => setDocumentDraft({ ...documentDraft, logical_name: event.target.value })} placeholder="资料名称" className="h-10 rounded-lg border border-[#D9DCE3] px-3 text-sm" /><select value={documentDraft.category} onChange={(event) => setDocumentDraft({ ...documentDraft, category: event.target.value })} className="h-10 rounded-lg border border-[#D9DCE3] bg-white px-3 text-sm"><option value="rfp">RFP</option><option value="protocol_summary">方案摘要</option><option value="protocol">完整方案</option><option value="ib">IB</option><option value="meeting_minutes">客户会议纪要</option><option value="historical_bid">历史竞标材料</option></select><input value={documentDraft.file_ref} onChange={(event) => setDocumentDraft({ ...documentDraft, file_ref: event.target.value })} placeholder="已上传文件引用" className="h-10 rounded-lg border border-[#D9DCE3] px-3 text-sm" /><button disabled={pending === "document" || !documentDraft.logical_name || !documentDraft.file_ref} className="inline-flex h-10 items-center justify-center gap-1 rounded-lg bg-[#087BCB] px-3 text-sm font-medium text-white disabled:opacity-50"><FilePlus2 className="h-4 w-4" /> 登记版本</button></form>}
+            <div className="mt-4 divide-y divide-[#EAECF0]">{activeDocuments.map((document) => <div key={document.id} className="flex items-center justify-between py-3 text-sm"><span className="truncate text-[#344054]">{document.logical_name}</span><span className="text-xs text-[#667085]">{document.category} · v{document.version_no}</span></div>)}{activeDocuments.length === 0 && <p className="py-6 text-center text-sm text-[#98A2B3]">尚未登记项目资料</p>}</div>
+          </section>
+
+          <section className="rounded-2xl border border-[#E3E4EA] bg-white p-6">
+            <div className="flex items-center justify-between"><h2 className="font-semibold text-[#101828]">项目画像</h2><span className="text-xs text-[#667085]">版本 {profile.row_version}</span></div>
+            <div className="mt-4 grid gap-3">{profileFields.map(([key, label]) => <div key={key} className="grid gap-2 sm:grid-cols-[90px_1fr_1fr] sm:items-center"><label className="text-xs font-medium text-[#475467]">{label}</label><input disabled={!canContribute} value={profileDraft[key]?.value || ""} onChange={(event) => setProfileDraft({ ...profileDraft, [key]: { ...(profileDraft[key] || { source: "" }), value: event.target.value } })} placeholder="字段值" className="h-9 rounded-lg border border-[#D9DCE3] px-3 text-sm disabled:bg-[#F8F9FC]" /><input disabled={!canContribute} value={profileDraft[key]?.source || ""} onChange={(event) => setProfileDraft({ ...profileDraft, [key]: { ...(profileDraft[key] || { value: "" }), source: event.target.value } })} placeholder="来源，如 protocol:p2" className="h-9 rounded-lg border border-[#D9DCE3] px-3 text-sm disabled:bg-[#F8F9FC]" /></div>)}</div>
+            <textarea disabled={!canContribute} value={conflictDraft} onChange={(event) => setConflictDraft(event.target.value)} placeholder="未解决冲突，每行一条" rows={3} className="mt-4 w-full rounded-lg border border-[#D9DCE3] p-3 text-sm disabled:bg-[#F8F9FC]" />
+            <div className="mt-3 flex justify-end gap-2">{canContribute && <button type="button" onClick={() => void saveProfile()} disabled={pending === "profile-save"} className="inline-flex h-9 items-center gap-1 rounded-lg border border-[#D9DCE3] px-3 text-sm"><Save className="h-4 w-4" /> 保存画像</button>}{canReview && profile.status !== "confirmed" && <button type="button" onClick={() => void execute("profile-confirm", () => EnterpriseApi.confirmBidProfile(project.id))} disabled={pending === "profile-confirm"} className="h-9 rounded-lg bg-[#027A48] px-3 text-sm font-medium text-white disabled:opacity-50">确认画像</button>}</div>
           </section>
         </div>
 
         <section className="mt-5 rounded-2xl border border-[#E3E4EA] bg-white p-6">
-          <h2 className="font-semibold text-[#101828]">需求矩阵</h2>
-          <div className="mt-4 overflow-x-auto">
-            <table className="w-full min-w-[760px] text-left text-sm">
-              <thead className="text-xs text-[#667085]"><tr><th className="pb-3">类别</th><th className="pb-3">客户原文</th><th className="pb-3">必答</th><th className="pb-3">责任部门</th><th className="pb-3">目标模块</th><th className="pb-3">状态</th></tr></thead>
-              <tbody className="divide-y divide-[#EAECF0]">{requirements.map((item) => <tr key={item.id}><td className="py-3 text-[#475467]">{item.category}</td><td className="max-w-sm py-3 text-[#101828]">{item.original_text}</td><td className="py-3">{item.mandatory ? "是" : "否"}</td><td className="py-3 text-[#667085]">{item.owner_department || "未认领"}</td><td className="py-3 text-[#667085]">{item.target_module || "待分配"}</td><td className="py-3"><span className="rounded-full bg-[#F2F4F7] px-2 py-1 text-xs">{item.status}</span></td></tr>)}</tbody>
-            </table>
-            {requirements.length === 0 && <p className="py-8 text-center text-sm text-[#98A2B3]">尚未录入或抽取需求</p>}
-          </div>
+          <div className="flex items-center justify-between"><h2 className="font-semibold text-[#101828]">需求矩阵</h2><span className="text-xs text-[#667085]">必答覆盖 {dashboard.mandatory_requirement_coverage}%</span></div>
+          {canContribute && <form onSubmit={createRequirement} className="mt-4 grid gap-2 md:grid-cols-[140px_1fr_180px_auto]"><select value={requirementDraft.category} onChange={(event) => setRequirementDraft({ ...requirementDraft, category: event.target.value })} className="h-10 rounded-lg border border-[#D9DCE3] bg-white px-3 text-sm"><option value="commercial">商务</option><option value="medical">医学</option><option value="operations">运营</option><option value="statistics">数统</option><option value="delivery">交付</option></select><input value={requirementDraft.original_text} onChange={(event) => setRequirementDraft({ ...requirementDraft, original_text: event.target.value })} placeholder="客户要求原文" className="h-10 rounded-lg border border-[#D9DCE3] px-3 text-sm" /><input value={requirementDraft.source_ref} onChange={(event) => setRequirementDraft({ ...requirementDraft, source_ref: event.target.value })} placeholder="来源，如 rfp:p8" className="h-10 rounded-lg border border-[#D9DCE3] px-3 text-sm" /><button disabled={pending === "requirement-create" || !requirementDraft.original_text.trim()} className="inline-flex h-10 items-center justify-center gap-1 rounded-lg bg-[#635BFF] px-3 text-sm font-medium text-white disabled:opacity-50"><Plus className="h-4 w-4" /> 添加</button></form>}
+          <div className="mt-4 grid gap-3">{requirements.map((item) => <article key={item.id} className="rounded-xl border border-[#EAECF0] p-4"><div className="flex flex-wrap items-start justify-between gap-2"><div><span className="mr-2 rounded-full bg-[#F2F4F7] px-2 py-1 text-[11px] text-[#475467]">{item.category}</span>{item.mandatory && <span className="text-xs font-medium text-[#D92D20]">必答</span>}<p className="mt-2 text-sm text-[#101828]">{item.original_text}</p></div><span className="text-xs text-[#667085]">{item.status}</span></div><div className="mt-3 flex gap-2"><input disabled={!canContribute} value={responses[item.id] || ""} onChange={(event) => setResponses({ ...responses, [item.id]: event.target.value })} placeholder="录入响应要点" className="h-9 flex-1 rounded-lg border border-[#D9DCE3] px-3 text-sm disabled:bg-[#F8F9FC]" />{canContribute && <button type="button" onClick={() => void answerRequirement(item)} disabled={pending === `requirement-${item.id}`} className="h-9 rounded-lg border border-[#D9DCE3] px-3 text-xs font-medium">保存响应</button>}</div></article>)}{requirements.length === 0 && <p className="py-8 text-center text-sm text-[#98A2B3]">尚未录入或抽取需求</p>}</div>
+        </section>
+
+        <section className="mt-5 rounded-2xl border border-[#E3E4EA] bg-white p-6">
+          <div className="flex items-center justify-between"><div><h2 className="font-semibold text-[#101828]">投标策略纸</h2><p className="mt-1 text-xs text-[#667085]">每行一个策略要点；确认版本不可覆盖。</p></div><span className="text-xs text-[#667085]">v{strategy.version_no} · {strategy.status}</span></div>
+          <div className="mt-4 grid gap-4 md:grid-cols-2">{strategyFields.map(([key, label]) => <label key={key} className="grid gap-1.5 text-xs font-medium text-[#475467]">{label}<textarea disabled={!canContribute || strategy.status === "confirmed"} value={strategyDraft[key] || ""} onChange={(event) => setStrategyDraft({ ...strategyDraft, [key]: event.target.value })} rows={4} placeholder="每行填写一个要点" className="rounded-lg border border-[#D9DCE3] p-3 text-sm font-normal text-[#101828] disabled:bg-[#F8F9FC]" /></label>)}</div>
+          <div className="mt-4 flex justify-end gap-2">{canContribute && strategy.status !== "confirmed" && <button type="button" onClick={() => void saveStrategy()} disabled={pending === "strategy-save"} className="inline-flex h-9 items-center gap-1 rounded-lg border border-[#D9DCE3] px-3 text-sm"><Save className="h-4 w-4" /> 保存草稿</button>}{canConfirmStrategy && strategy.status !== "confirmed" && <button type="button" onClick={() => void execute("strategy-confirm", () => EnterpriseApi.confirmBidStrategy(project.id))} disabled={pending === "strategy-confirm" || dashboard.strategy_blockers.length > 0} className="h-9 rounded-lg bg-[#17171B] px-4 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-40">确认策略纸</button>}</div>
         </section>
       </div>
     </main>

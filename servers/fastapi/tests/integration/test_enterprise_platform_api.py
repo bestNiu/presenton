@@ -334,7 +334,15 @@ def test_presentation_registration_preserves_owner_and_allows_member_listing(tmp
         )
         blocking_comment = client.post(
             f"/api/v1/enterprise/workspaces/{workspace['id']}/presentations/{entry_id}/comment-threads",
-            json={"slide_index": 0, "title": "补充数据口径", "body": "明确架构收益的统计口径", "is_blocking": True, "assigned_to": str(users["member"].id)},
+            json={"slide_index": 0, "title": "补充数据口径", "body": "明确架构收益的统计口径", "is_blocking": True, "assigned_to": str(users["member"].id), "due_at": "2020-01-01T00:00:00Z"},
+        )
+        review_inbox = client.get(
+            f"/api/v1/enterprise/workspaces/{workspace['id']}/review-inbox"
+        )
+        member_review_inbox = client.get(
+            f"/api/v1/enterprise/workspaces/{workspace['id']}/review-inbox",
+            params={"scope": "mine", "overdue_only": True},
+            headers={"x-test-user": "member"},
         )
         approval_comment_blocked = client.post(
             f"/api/v1/enterprise/workspaces/{workspace['id']}/presentations/{entry_id}/review/decision",
@@ -412,6 +420,10 @@ def test_presentation_registration_preserves_owner_and_allows_member_listing(tmp
         assert quality.json()["status"] == "passed"
         assert blocking_comment.status_code == 201
         assert blocking_comment.json()["slide_index"] == 0
+        assert review_inbox.json()["summary"] == {"open_count": 1, "blocking_count": 1, "overdue_count": 1, "assigned_to_me_count": 0}
+        assert member_review_inbox.json()["summary"]["assigned_to_me_count"] == 1
+        assert member_review_inbox.json()["tasks"][0]["presentation_title"] == "企业架构汇报"
+        assert member_review_inbox.json()["tasks"][0]["is_overdue"] is True
         assert approval_comment_blocked.status_code == 409
         assert comment_reply.status_code == 201
         assert resolved_comment.json()["status"] == "resolved"

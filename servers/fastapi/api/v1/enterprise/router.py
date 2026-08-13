@@ -57,6 +57,7 @@ from api.v1.enterprise.schemas import (
     PresentationRegisterRequest,
     PresentationReviewDecisionRequest,
     PresentationReviewResponse,
+    PresentationReviewInboxResponse,
     PresentationSnapshotResponse,
     PresentationSnapshotDiffResponse,
     SceneDefinitionResponse,
@@ -89,6 +90,7 @@ from services.enterprise.presentation_comment_service import (
     add_comment_reply,
     create_comment_thread,
     list_comment_threads,
+    get_workspace_review_inbox,
     transition_comment_thread,
 )
 from services.enterprise.presentation_quality_service import (
@@ -770,6 +772,18 @@ async def get_presentation_entries(
 )
 async def get_presentation_entry_governance(workspace_id: uuid.UUID, entry_id: uuid.UUID, principal: AuthPrincipal = Depends(principal_from_request), session: AsyncSession = Depends(get_async_session)):
     return await get_presentation_governance(session, workspace_id=workspace_id, entry_id=entry_id, principal=principal)
+
+
+@API_V1_ENTERPRISE_ROUTER.get(
+    "/workspaces/{workspace_id}/review-inbox",
+    response_model=PresentationReviewInboxResponse,
+)
+async def get_workspace_presentation_review_inbox(workspace_id: uuid.UUID, scope: str = Query(default="all", pattern="^(all|mine)$"), task_status: str = Query(default="open", pattern="^(all|open|resolved)$"), overdue_only: bool = Query(default=False), principal: AuthPrincipal = Depends(principal_from_request), session: AsyncSession = Depends(get_async_session)):
+    result = await get_workspace_review_inbox(session, workspace_id=workspace_id, principal=principal, scope=scope, status=task_status, overdue_only=overdue_only)
+    return {
+        "summary": result["summary"],
+        "tasks": [{**PresentationCommentThreadResponse.model_validate(row["thread"]).model_dump(), **{key: value for key, value in row.items() if key != "thread"}} for row in result["tasks"]],
+    }
 
 
 @API_V1_ENTERPRISE_ROUTER.post(

@@ -12,7 +12,9 @@ from models.sql.enterprise.presentation_governance import (
     PresentationCommentThreadModel,
 )
 from models.sql.enterprise.workspace import WorkspaceMemberModel
+from models.sql.enterprise.presentation_entry import PresentationEntryModel
 from models.sql.slide import SlideModel
+from models.sql.user import User
 from services.enterprise.audit_service import record_audit_event
 from services.enterprise.presentation_governance_service import (
     _presentation_snapshot,
@@ -188,3 +190,77 @@ async def count_open_blocking_comments(session: AsyncSession, *, entry_id: uuid.
             PresentationCommentThreadModel.is_blocking.is_(True),
         )
     ) or 0)
+
+
+def _is_overdue(thread: PresentationCommentThreadModel, now: datetime) -> bool:
+    if thread.status != PresentationCommentStatus.OPEN or thread.due_at is None:
+        return False
+    due_at = thread.due_at
+    if due_at.tzinfo is None:
+        due_at = due_at.replace(tzinfo=timezone.utc)
+    return due_at < now
+
+
+async def get_workspace_review_inbox(
+    session: AsyncSession,
+    *,
+    workspace_id: uuid.UUID,
+    principal: AuthPrincipal,
+    scope: str,
+    status: str,
+    overdue_only: bool,
+) -> dict:
+    await require_workspace_role(session, workspace_id=workspace_id, principal=principal)
+    rows = list((await session.execute(
+        select(PresentationCommentThreadModel, PresentationEntryModel)
+        .join(PresentationEntryModel, PresentationEntryModel.id == PresentationCommentThreadModel.presentation_entry_id)
+        .where(PresentationEntryModel.workspace_id == workspace_id)
+        .order_by(
+            PresentationCommentThreadModel.is_blocking.desc(),
+            PresentationCommentThreadModel.due_at.asc(),
+            PresentationCommentThreadModel.created_at.desc(),
+        )
+    )).all())
+    now = datetime.now(timezone.utc)
+    open_rows = [row for row in rows if row[0].status == PresentationCommentStatus.OPEN]
+    assignee_ids = {thread.assigned_to for thread, _ in rows if thread.assigned_to}
+    assignees = {}
+    if assignee_ids:
+        users = list((await session.scalars(select(User).where(User.id.in_(assignee_ids)))).all())
+        assignees = {user.id: user.username for user in users}
+    reply_counts = dict((await session.execute(
+        select(PresentationCommentReplyModel.thread_id, func.count(PresentationCommentReplyModel.id))
+        .join(PresentationCommentThreadModel, PresentationCommentThreadModel.id == PresentationCommentReplyModel.thread_id)
+        .join(PresentationEntryModel, PresentationEntryModel.id == PresentationCommentThreadModel.presentation_entry_id)
+        .where(PresentationEntryModel.workspace_id == workspace_id)
+        .group_by(PresentationCommentReplyModel.thread_id)
+    )).all())
+    filtered = rows
+    if scope == "mine":
+        filtered = [row for row in filtered if row[0].assigned_to == principal.user_id]
+    if status != "all":
+        wanted = PresentationCommentStatus(status)
+        filtered = [row for row in filtered if row[0].status == wanted]
+    if overdue_only:
+        filtered = [row for row in filtered if _is_overdue(row[0], now)]
+    tasks = [
+        {
+            "thread": thread,
+            "presentation_title": entry.title or "Untitled presentation",
+            "scene_type": entry.scene_type,
+            "presentation_status": entry.status,
+            "assigned_to_username": assignees.get(thread.assigned_to),
+            "reply_count": int(reply_counts.get(thread.id, 0)),
+            "is_overdue": _is_overdue(thread, now),
+        }
+        for thread, entry in filtered[:200]
+    ]
+    return {
+        "summary": {
+            "open_count": len(open_rows),
+            "blocking_count": sum(thread.is_blocking for thread, _ in open_rows),
+            "overdue_count": sum(_is_overdue(thread, now) for thread, _ in open_rows),
+            "assigned_to_me_count": sum(thread.assigned_to == principal.user_id for thread, _ in open_rows),
+        },
+        "tasks": tasks,
+    }

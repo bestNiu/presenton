@@ -24,6 +24,7 @@ import {
   type ConfidentialityLevel,
   type PresentationEntryResponse,
   type PresentationQualityRunResponse,
+  type PresentationReviewInboxResponse,
   type SceneDefinitionResponse,
   type TemplatePublicationResponse,
   type WorkspaceResponse,
@@ -59,6 +60,8 @@ function WorkspacePage() {
   const [presentations, setPresentations] =
     useState<PresentationEntryResponse[]>([]);
   const [qualityReports, setQualityReports] = useState<Record<string, PresentationQualityRunResponse | null>>({});
+  const [reviewInbox, setReviewInbox] = useState<PresentationReviewInboxResponse | null>(null);
+  const [reviewInboxFilter, setReviewInboxFilter] = useState<"all" | "mine" | "overdue">("all");
   const [publishedTemplates, setPublishedTemplates] =
     useState<TemplatePublicationResponse[]>([]);
   const [activeWorkspaceId, setActiveWorkspaceId] = useState("");
@@ -96,18 +99,22 @@ function WorkspacePage() {
   useEffect(() => {
     if (!activeWorkspaceId) {
       setPresentations([]);
+      setReviewInbox(null);
       setPublishedTemplates([]);
       return;
     }
+    setReviewInboxFilter("all");
     let active = true;
     Promise.all([
       EnterpriseApi.getPresentations(activeWorkspaceId),
       EnterpriseApi.getPublishedTemplates(activeWorkspaceId),
+      EnterpriseApi.getPresentationReviewInbox(activeWorkspaceId),
     ])
-      .then(([presentationRows, templateRows]) => {
+      .then(([presentationRows, templateRows, inbox]) => {
         if (active) {
           setPresentations(presentationRows);
           setPublishedTemplates(templateRows);
+          setReviewInbox(inbox);
           void Promise.all(presentationRows.map((item) => EnterpriseApi.getPresentationQualityReport(activeWorkspaceId, item.id)))
             .then((reports) => {
               if (active) setQualityReports(Object.fromEntries(presentationRows.map((item, index) => [item.id, reports[index].run])));
@@ -180,6 +187,19 @@ function WorkspacePage() {
       setError(cause instanceof Error ? cause.message : "质量检查失败");
     } finally {
       setGovernancePending("");
+    }
+  };
+
+  const changeReviewInboxFilter = async (filter: "all" | "mine" | "overdue") => {
+    if (!activeWorkspaceId) return;
+    setReviewInboxFilter(filter);
+    try {
+      setReviewInbox(await EnterpriseApi.getPresentationReviewInbox(activeWorkspaceId, {
+        scope: filter === "mine" ? "mine" : "all",
+        overdueOnly: filter === "overdue",
+      }));
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "整改任务加载失败");
     }
   };
 
@@ -522,6 +542,11 @@ function WorkspacePage() {
             </div>
           </section>
         )}
+
+        {reviewInbox && <section className="mt-9 rounded-2xl border border-[#E3E4EA] bg-white p-5">
+          <div className="flex flex-wrap items-start justify-between gap-4"><div><h2 className="text-base font-semibold text-[#1D2939]">整改任务箱</h2><p className="mt-1 text-sm text-[#667085]">跨通用文稿与专业场景统一跟进评审责任和截止时间。</p></div><div className="flex flex-wrap gap-2 text-xs"><button type="button" onClick={() => void changeReviewInboxFilter("all")} className={`rounded-full px-3 py-1.5 ${reviewInboxFilter === "all" ? "bg-[#344054] text-white" : "bg-[#F2F4F7]"}`}>待处理 {reviewInbox.summary.open_count}</button><span className="rounded-full bg-[#FEF2F2] px-3 py-1.5 text-[#B42318]">阻断 {reviewInbox.summary.blocking_count}</span><button type="button" onClick={() => void changeReviewInboxFilter("overdue")} className={`rounded-full px-3 py-1.5 text-[#B54708] ${reviewInboxFilter === "overdue" ? "bg-[#FEC84B]" : "bg-[#FFF4E5]"}`}>逾期 {reviewInbox.summary.overdue_count}</button><button type="button" onClick={() => void changeReviewInboxFilter("mine")} className={`rounded-full px-3 py-1.5 text-[#4238CA] ${reviewInboxFilter === "mine" ? "bg-[#D9D6FE]" : "bg-[#F2F1FF]"}`}>我的 {reviewInbox.summary.assigned_to_me_count}</button></div></div>
+          {reviewInbox.tasks.length === 0 ? <p className="mt-4 rounded-xl bg-[#F8F9FC] p-4 text-sm text-[#667085]">当前没有待处理整改项。</p> : <div className="mt-4 grid gap-3 lg:grid-cols-2">{reviewInbox.tasks.slice(0, 6).map((task) => <Link key={task.id} href={`/workspace/presentations/${encodeURIComponent(task.presentation_entry_id)}/review?workspace_id=${encodeURIComponent(activeWorkspaceId)}`} className="rounded-xl border border-[#EAECF0] p-3 transition hover:border-[#B9B2FF]"><div className="flex items-center justify-between gap-3"><p className="truncate text-sm font-medium text-[#101828]">{task.title}</p><span className={`shrink-0 rounded-full px-2 py-1 text-[10px] ${task.is_overdue ? "bg-[#FEF2F2] text-[#B42318]" : task.is_blocking ? "bg-[#FFF4E5] text-[#B54708]" : "bg-[#F2F4F7] text-[#475467]"}`}>{task.is_overdue ? "已逾期" : task.is_blocking ? "阻断" : "待跟进"}</span></div><p className="mt-1 truncate text-xs text-[#667085]">{task.presentation_title} · {task.slide_index === null ? "全稿" : `第 ${task.slide_index + 1} 页`} · {task.assigned_to_username || "未指派"}</p></Link>)}</div>}
+        </section>}
 
         <section className="mt-9">
           <div className="flex items-center justify-between">

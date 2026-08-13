@@ -577,6 +577,27 @@ class PresentationSnapshotDiffResponse(BaseModel):
     slides: list[PresentationSnapshotSlideDiffResponse]
 
 
+class PresentationReviewTaskSummaryResponse(BaseModel):
+    open_count: int
+    blocking_count: int
+    overdue_count: int
+    assigned_to_me_count: int
+
+
+class PresentationReviewTaskResponse(PresentationCommentThreadResponse):
+    presentation_title: str
+    scene_type: str
+    presentation_status: PresentationEntryStatus
+    assigned_to_username: str | None
+    reply_count: int
+    is_overdue: bool
+
+
+class PresentationReviewInboxResponse(BaseModel):
+    summary: PresentationReviewTaskSummaryResponse
+    tasks: list[PresentationReviewTaskResponse]
+
+
 class PresentationDeliveryCreateRequest(BaseModel):
     snapshot_id: uuid.UUID
     format: PresentationDeliveryFormat = PresentationDeliveryFormat.PPTX

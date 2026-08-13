@@ -284,6 +284,23 @@ export interface PresentationSnapshotDiffResponse {
   }>;
 }
 
+export interface PresentationReviewInboxResponse {
+  summary: {
+    open_count: number;
+    blocking_count: number;
+    overdue_count: number;
+    assigned_to_me_count: number;
+  };
+  tasks: Array<PresentationCommentThreadResponse & {
+    presentation_title: string;
+    scene_type: string;
+    presentation_status: PresentationEntryResponse["status"];
+    assigned_to_username: string | null;
+    reply_count: number;
+    is_overdue: boolean;
+  }>;
+}
+
 export interface PresentationQualityRunResponse {
   id: string;
   presentation_entry_id: string;
@@ -460,6 +477,12 @@ export class EnterpriseApi {
   static async getPresentationComments(workspaceId: string, entryId: string): Promise<PresentationCommentThreadResponse[]> {
     const response = await fetch(getApiUrl(`/api/v1/enterprise/workspaces/${encodeURIComponent(workspaceId)}/presentations/${encodeURIComponent(entryId)}/comment-threads`), { credentials: "include", cache: "no-store" });
     return ApiResponseHandler.handleResponse(response, "Failed to load presentation comments");
+  }
+
+  static async getPresentationReviewInbox(workspaceId: string, options: { scope?: "all" | "mine"; taskStatus?: "all" | "open" | "resolved"; overdueOnly?: boolean } = {}): Promise<PresentationReviewInboxResponse> {
+    const params = new URLSearchParams({ scope: options.scope || "all", task_status: options.taskStatus || "open", overdue_only: String(options.overdueOnly || false) });
+    const response = await fetch(getApiUrl(`/api/v1/enterprise/workspaces/${encodeURIComponent(workspaceId)}/review-inbox?${params.toString()}`), { credentials: "include", cache: "no-store" });
+    return ApiResponseHandler.handleResponse(response, "Failed to load presentation review inbox");
   }
 
   static async createPresentationComment(workspaceId: string, entryId: string, input: { slide_id?: string; slide_index?: number; title: string; body: string; is_blocking: boolean; assigned_to?: string; due_at?: string }): Promise<PresentationCommentThreadResponse> {

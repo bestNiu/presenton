@@ -291,6 +291,40 @@ export interface EnterpriseKnowledgeSearchItemResponse {
   };
 }
 
+export interface PresentationSourceCitationResponse {
+  id: string;
+  presentation_entry_id: string;
+  slide_id: string | null;
+  element_ref: string | null;
+  source_type: string;
+  source_id: string;
+  source_version: string | null;
+  locator: string | null;
+  excerpt: string | null;
+  created_by: string | null;
+  created_at: string;
+  status: "valid" | "missing" | "revoked" | "archived" | "expired" | "unavailable" | "source_updated" | "locator_changed" | "excerpt_changed";
+  status_message: string;
+  source_name: string | null;
+  source_category: string | null;
+  current_version: string | null;
+  source_available: boolean;
+}
+
+export interface PresentationSourceCitationSummaryResponse {
+  total_citations: number;
+  valid_citations: number;
+  invalid_citations: number;
+  cited_slide_ids: string[];
+  invalid_citation_ids: string[];
+}
+
+export interface PresentationSourceCitationPreviewResponse {
+  citation: PresentationSourceCitationResponse;
+  heading: string | null;
+  content: string | null;
+}
+
 export interface EnterpriseKnowledgeOutlineResponse {
   id: string;
   workspace_id: string | null;
@@ -676,6 +710,31 @@ export class EnterpriseApi {
   static async materializeKnowledgeCitations(outlineId: string, workspaceId: string, entryId: string): Promise<unknown[]> {
     const response = await fetch(getApiUrl(`/api/v1/enterprise/knowledge/outlines/${encodeURIComponent(outlineId)}/workspaces/${encodeURIComponent(workspaceId)}/presentations/${encodeURIComponent(entryId)}/citations`), { method: "POST", credentials: "include" });
     return ApiResponseHandler.handleResponse(response, "Failed to materialize knowledge citations");
+  }
+
+  static async getPresentationCitations(workspaceId: string, entryId: string): Promise<PresentationSourceCitationResponse[]> {
+    const response = await fetch(getApiUrl(`/api/v1/enterprise/workspaces/${encodeURIComponent(workspaceId)}/presentations/${encodeURIComponent(entryId)}/citations`), { credentials: "include", cache: "no-store" });
+    return ApiResponseHandler.handleResponse(response, "Failed to load presentation citations");
+  }
+
+  static async getPresentationCitationSummary(workspaceId: string, entryId: string): Promise<PresentationSourceCitationSummaryResponse> {
+    const response = await fetch(getApiUrl(`/api/v1/enterprise/workspaces/${encodeURIComponent(workspaceId)}/presentations/${encodeURIComponent(entryId)}/citations/summary`), { credentials: "include", cache: "no-store" });
+    return ApiResponseHandler.handleResponse(response, "Failed to load citation summary");
+  }
+
+  static async getPresentationCitationPreview(workspaceId: string, entryId: string, citationId: string): Promise<PresentationSourceCitationPreviewResponse> {
+    const response = await fetch(getApiUrl(`/api/v1/enterprise/workspaces/${encodeURIComponent(workspaceId)}/presentations/${encodeURIComponent(entryId)}/citations/${encodeURIComponent(citationId)}/source`), { credentials: "include", cache: "no-store" });
+    return ApiResponseHandler.handleResponse(response, "Failed to load citation source");
+  }
+
+  static async createPresentationCitation(workspaceId: string, entryId: string, input: { slide_id?: string; element_ref?: string; source_type: string; source_id: string; source_version?: string; locator?: string; excerpt?: string }): Promise<PresentationSourceCitationResponse> {
+    const response = await fetch(getApiUrl(`/api/v1/enterprise/workspaces/${encodeURIComponent(workspaceId)}/presentations/${encodeURIComponent(entryId)}/citations`), { method: "POST", credentials: "include", headers: { "Content-Type": "application/json" }, body: JSON.stringify(input) });
+    return ApiResponseHandler.handleResponse(response, "Failed to create citation");
+  }
+
+  static async deletePresentationCitation(workspaceId: string, entryId: string, citationId: string): Promise<void> {
+    const response = await fetch(getApiUrl(`/api/v1/enterprise/workspaces/${encodeURIComponent(workspaceId)}/presentations/${encodeURIComponent(entryId)}/citations/${encodeURIComponent(citationId)}`), { method: "DELETE", credentials: "include" });
+    if (!response.ok) await ApiResponseHandler.handleResponse(response, "Failed to delete citation");
   }
 
   static async getAssets(

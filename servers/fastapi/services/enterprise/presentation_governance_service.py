@@ -329,6 +329,19 @@ async def freeze_presentation(
     slide_hash, manifest, content_snapshot = await _presentation_state(session, entry)
     if review is not None and slide_hash != review.slide_snapshot_hash:
         raise HTTPException(status_code=409, detail="Approved presentation changed; reopen review")
+    # Citation validity can change without changing the presentation snapshot
+    # (for example when a source is revoked or superseded), so always recheck it.
+    from services.enterprise.presentation_quality_service import invalid_source_citations
+
+    invalid_citations = await invalid_source_citations(session, entry_id=entry.id)
+    if invalid_citations:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "message": "Resolve invalid source citations before freeze",
+                "invalid_citation_ids": [str(item.id) for item in invalid_citations],
+            },
+        )
     if review is None:
         submission_no = (
             await session.scalar(

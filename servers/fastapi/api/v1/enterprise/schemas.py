@@ -1165,6 +1165,29 @@ class PresentationSourceCitationResponse(BaseModel):
     created_at: datetime
 
 
+class PresentationSourceCitationDetailResponse(PresentationSourceCitationResponse):
+    status: str
+    status_message: str
+    source_name: str | None = None
+    source_category: str | None = None
+    current_version: str | None = None
+    source_available: bool = False
+
+
+class PresentationSourceCitationSummaryResponse(BaseModel):
+    total_citations: int
+    valid_citations: int
+    invalid_citations: int
+    cited_slide_ids: list[uuid.UUID]
+    invalid_citation_ids: list[uuid.UUID]
+
+
+class PresentationSourceCitationPreviewResponse(BaseModel):
+    citation: PresentationSourceCitationDetailResponse
+    heading: str | None = None
+    content: str | None = None
+
+
 class SceneDefinitionResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

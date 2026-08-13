@@ -97,7 +97,10 @@ from api.v1.enterprise.schemas import (
     PresentationQualityReportResponse,
     PresentationQualityRunResponse,
     PresentationSourceCitationCreateRequest,
+    PresentationSourceCitationDetailResponse,
+    PresentationSourceCitationPreviewResponse,
     PresentationSourceCitationResponse,
+    PresentationSourceCitationSummaryResponse,
     PresentationDeliveryCreateRequest,
     PresentationDeliveryArtifactResponse,
     PresentationRegisterRequest,
@@ -144,9 +147,12 @@ from services.enterprise.presentation_comment_service import (
 )
 from services.enterprise.presentation_quality_service import (
     create_source_citation,
+    delete_source_citation,
+    get_source_citation_preview,
     latest_quality_report,
-    list_source_citations,
+    list_source_citation_details,
     run_quality_check,
+    source_citation_summary,
 )
 from services.enterprise.presentation_delivery_service import (
     consume_presentation_download_grant,
@@ -1723,10 +1729,35 @@ async def post_presentation_source_citation(workspace_id: uuid.UUID, entry_id: u
 
 @API_V1_ENTERPRISE_ROUTER.get(
     "/workspaces/{workspace_id}/presentations/{entry_id}/citations",
-    response_model=list[PresentationSourceCitationResponse],
+    response_model=list[PresentationSourceCitationDetailResponse],
 )
 async def get_presentation_source_citations(workspace_id: uuid.UUID, entry_id: uuid.UUID, principal: AuthPrincipal = Depends(principal_from_request), session: AsyncSession = Depends(get_async_session)):
-    return await list_source_citations(session, workspace_id=workspace_id, entry_id=entry_id, principal=principal)
+    return await list_source_citation_details(session, workspace_id=workspace_id, entry_id=entry_id, principal=principal)
+
+
+@API_V1_ENTERPRISE_ROUTER.get(
+    "/workspaces/{workspace_id}/presentations/{entry_id}/citations/summary",
+    response_model=PresentationSourceCitationSummaryResponse,
+)
+async def get_presentation_source_citation_summary(workspace_id: uuid.UUID, entry_id: uuid.UUID, principal: AuthPrincipal = Depends(principal_from_request), session: AsyncSession = Depends(get_async_session)):
+    return await source_citation_summary(session, workspace_id=workspace_id, entry_id=entry_id, principal=principal)
+
+
+@API_V1_ENTERPRISE_ROUTER.get(
+    "/workspaces/{workspace_id}/presentations/{entry_id}/citations/{citation_id}/source",
+    response_model=PresentationSourceCitationPreviewResponse,
+)
+async def get_presentation_source_citation_preview(workspace_id: uuid.UUID, entry_id: uuid.UUID, citation_id: uuid.UUID, principal: AuthPrincipal = Depends(principal_from_request), session: AsyncSession = Depends(get_async_session)):
+    return await get_source_citation_preview(session, workspace_id=workspace_id, entry_id=entry_id, citation_id=citation_id, principal=principal)
+
+
+@API_V1_ENTERPRISE_ROUTER.delete(
+    "/workspaces/{workspace_id}/presentations/{entry_id}/citations/{citation_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+async def delete_presentation_source_citation(workspace_id: uuid.UUID, entry_id: uuid.UUID, citation_id: uuid.UUID, principal: AuthPrincipal = Depends(principal_from_request), session: AsyncSession = Depends(get_async_session)):
+    await delete_source_citation(session, workspace_id=workspace_id, entry_id=entry_id, citation_id=citation_id, principal=principal)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @API_V1_ENTERPRISE_ROUTER.post(

@@ -37,6 +37,97 @@ DOCUMENT_LOCATOR_PATTERN = re.compile(
 )
 
 
+async def _citation_detail(
+    session: AsyncSession, citation: PresentationSourceCitationModel
+) -> tuple[dict, EnterpriseDocumentChunkModel | None]:
+    detail = {
+        "status": "valid",
+        "status_message": "来源有效",
+        "source_name": None,
+        "source_category": None,
+        "current_version": citation.source_version,
+        "source_available": False,
+    }
+    if citation.source_type != "enterprise_document":
+        return detail, None
+    try:
+        document_id = uuid.UUID(citation.source_id)
+    except (TypeError, ValueError):
+        detail.update(status="missing", status_message="来源标识无效")
+        return detail, None
+    document = await session.get(EnterpriseDocumentModel, document_id)
+    if document is None:
+        detail.update(status="missing", status_message="来源资料已删除")
+        return detail, None
+    detail.update(
+        source_name=document.logical_name,
+        source_category=document.category,
+        current_version=str(document.version_no),
+        source_available=True,
+    )
+    expires_at = document.expires_at
+    if expires_at is not None and expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+    if document.authorization_status == "revoked" or document.status == "revoked":
+        detail.update(status="revoked", status_message="来源授权已撤销")
+        return detail, None
+    if document.status == "archived":
+        detail.update(status="archived", status_message="来源资料已归档")
+        return detail, None
+    if expires_at is not None and expires_at <= datetime.now(timezone.utc):
+        detail.update(status="expired", status_message="来源资料已过期")
+        return detail, None
+    if document.parse_status != "ready":
+        detail.update(status="unavailable", status_message="来源资料尚不可用")
+        return detail, None
+    if str(document.version_no) != citation.source_version:
+        detail.update(status="source_updated", status_message="来源资料已有新版本")
+        return detail, None
+    locator_match = DOCUMENT_LOCATOR_PATTERN.fullmatch(citation.locator or "")
+    if locator_match is None:
+        detail.update(status="locator_changed", status_message="来源定位信息无效")
+        return detail, None
+    chunk = await session.scalar(
+        select(EnterpriseDocumentChunkModel).where(
+            EnterpriseDocumentChunkModel.document_id == document.id,
+            EnterpriseDocumentChunkModel.chunk_index
+            == int(locator_match.group("chunk")),
+        )
+    )
+    if (
+        chunk is None
+        or chunk.start_line != int(locator_match.group("start"))
+        or chunk.end_line != int(locator_match.group("end"))
+    ):
+        detail.update(status="locator_changed", status_message="来源段落位置已变化")
+        return detail, chunk
+    excerpt_body = (citation.excerpt or "").strip().strip("…").strip()
+    if not excerpt_body or excerpt_body not in chunk.content:
+        detail.update(status="excerpt_changed", status_message="引用摘录与来源不一致")
+        return detail, chunk
+    return detail, chunk
+
+
+async def invalid_source_citations(
+    session: AsyncSession, *, entry_id: uuid.UUID
+) -> list[PresentationSourceCitationModel]:
+    citations = list(
+        (
+            await session.scalars(
+                select(PresentationSourceCitationModel).where(
+                    PresentationSourceCitationModel.presentation_entry_id == entry_id
+                )
+            )
+        ).all()
+    )
+    invalid = []
+    for citation in citations:
+        detail, _ = await _citation_detail(session, citation)
+        if detail["status"] != "valid":
+            invalid.append(citation)
+    return invalid
+
+
 def _walk(value: object, path: str = ""):
     if isinstance(value, dict):
         yield path, value
@@ -111,32 +202,8 @@ async def run_quality_check(
     for citation in citations:
         if citation.source_type != "enterprise_document" or citation.slide_id is None:
             continue
-        try:
-            document_id = uuid.UUID(citation.source_id)
-        except (TypeError, ValueError):
-            document_id = None
-        document = (
-            await session.get(EnterpriseDocumentModel, document_id)
-            if document_id is not None
-            else None
-        )
-        valid = (
-            document is not None
-            and document.parse_status == "ready"
-            and document.authorization_status != "revoked"
-            and document.status not in {"archived", "revoked"}
-            and str(document.version_no) == citation.source_version
-            and (
-                document.expires_at is None
-                or (
-                    document.expires_at
-                    if document.expires_at.tzinfo
-                    else document.expires_at.replace(tzinfo=timezone.utc)
-                )
-                > datetime.now(timezone.utc)
-            )
-        )
-        if valid:
+        citation_detail, _ = await _citation_detail(session, citation)
+        if citation_detail["status"] == "valid":
             cited_slide_ids.add(citation.slide_id)
         else:
             raw_issues.append(
@@ -149,6 +216,7 @@ async def run_quality_check(
                         "citation_id": str(citation.id),
                         "source_id": citation.source_id,
                         "source_version": citation.source_version,
+                        "status": citation_detail["status"],
                     },
                 }
             )
@@ -272,3 +340,53 @@ async def list_source_citations(session: AsyncSession, *, workspace_id: uuid.UUI
     if entry is None or entry.workspace_id != workspace_id:
         raise HTTPException(status_code=404, detail="Presentation entry not found")
     return list((await session.scalars(select(PresentationSourceCitationModel).where(PresentationSourceCitationModel.presentation_entry_id == entry.id).order_by(PresentationSourceCitationModel.created_at))).all())
+
+
+async def list_source_citation_details(session: AsyncSession, *, workspace_id: uuid.UUID, entry_id: uuid.UUID, principal: AuthPrincipal) -> list[dict]:
+    citations = await list_source_citations(session, workspace_id=workspace_id, entry_id=entry_id, principal=principal)
+    result = []
+    for citation in citations:
+        detail, _ = await _citation_detail(session, citation)
+        result.append({**citation.model_dump(), **detail})
+    return result
+
+
+async def source_citation_summary(session: AsyncSession, *, workspace_id: uuid.UUID, entry_id: uuid.UUID, principal: AuthPrincipal) -> dict:
+    details = await list_source_citation_details(session, workspace_id=workspace_id, entry_id=entry_id, principal=principal)
+    invalid = [item for item in details if item["status"] != "valid"]
+    return {
+        "total_citations": len(details),
+        "valid_citations": len(details) - len(invalid),
+        "invalid_citations": len(invalid),
+        "cited_slide_ids": sorted({item["slide_id"] for item in details if item["status"] == "valid" and item["slide_id"] is not None}, key=str),
+        "invalid_citation_ids": [item["id"] for item in invalid],
+    }
+
+
+async def get_source_citation_preview(session: AsyncSession, *, workspace_id: uuid.UUID, entry_id: uuid.UUID, citation_id: uuid.UUID, principal: AuthPrincipal) -> dict:
+    details = await list_source_citation_details(session, workspace_id=workspace_id, entry_id=entry_id, principal=principal)
+    item = next((row for row in details if row["id"] == citation_id), None)
+    if item is None:
+        raise HTTPException(status_code=404, detail="Citation not found")
+    citation = await session.get(PresentationSourceCitationModel, citation_id)
+    if citation is None:
+        raise HTTPException(status_code=404, detail="Citation not found")
+    _, chunk = await _citation_detail(session, citation)
+    if citation.source_type == "enterprise_document":
+        try:
+            document_id = uuid.UUID(citation.source_id)
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(status_code=404, detail="Citation source not found") from exc
+        await get_enterprise_document(session, document_id=document_id, principal=principal)
+    return {"citation": item, "heading": chunk.heading if chunk else None, "content": chunk.content if chunk else None}
+
+
+async def delete_source_citation(session: AsyncSession, *, workspace_id: uuid.UUID, entry_id: uuid.UUID, citation_id: uuid.UUID, principal: AuthPrincipal) -> None:
+    await require_workspace_role(session, workspace_id=workspace_id, principal=principal, required_role=WorkspaceRole.EDITOR)
+    entry = await session.get(PresentationEntryModel, entry_id)
+    citation = await session.get(PresentationSourceCitationModel, citation_id)
+    if entry is None or entry.workspace_id != workspace_id or citation is None or citation.presentation_entry_id != entry_id:
+        raise HTTPException(status_code=404, detail="Citation not found")
+    await session.delete(citation)
+    record_audit_event(session, actor_id=principal.user_id, workspace_id=workspace_id, action="presentation.citation_deleted", resource_type="presentation_source_citation", resource_id=citation.id, metadata={"entry_id": str(entry.id), "source_id": citation.source_id})
+    await session.commit()

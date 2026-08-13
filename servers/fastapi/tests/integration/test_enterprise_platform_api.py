@@ -605,6 +605,31 @@ def test_enterprise_document_upload_versions_parse_access_and_storage_protection
         assert citation.status_code == 201, citation.text
         assert citation.json()["source_id"] == second.json()["id"]
         assert tampered_citation.status_code == 422
+        removable_citation = client.post(
+            f"/api/v1/enterprise/workspaces/{workspace['id']}/presentations/{entry['id']}/citations",
+            json=citation_payload,
+        )
+        removed_citation = client.delete(
+            f"/api/v1/enterprise/workspaces/{workspace['id']}/presentations/{entry['id']}/citations/{removable_citation.json()['id']}"
+        )
+        assert removable_citation.status_code == 201
+        assert removed_citation.status_code == 204
+        citation_list = client.get(
+            f"/api/v1/enterprise/workspaces/{workspace['id']}/presentations/{entry['id']}/citations"
+        )
+        citation_summary = client.get(
+            f"/api/v1/enterprise/workspaces/{workspace['id']}/presentations/{entry['id']}/citations/summary"
+        )
+        citation_preview = client.get(
+            f"/api/v1/enterprise/workspaces/{workspace['id']}/presentations/{entry['id']}/citations/{citation.json()['id']}/source"
+        )
+        assert citation_list.status_code == 200
+        assert citation_list.json()[0]["status"] == "valid"
+        assert citation_list.json()[0]["source_name"] == "企业介绍"
+        assert citation_summary.json()["valid_citations"] == 1
+        assert citation_summary.json()["cited_slide_ids"] == [str(slide_id)]
+        assert citation_preview.status_code == 200
+        assert "可信、可追溯的产品能力" in citation_preview.json()["content"]
 
         outline_created = client.post(
             "/api/v1/enterprise/knowledge/outlines",
@@ -754,6 +779,16 @@ def test_enterprise_document_upload_versions_parse_access_and_storage_protection
         assert evaluation.status_code == 200
         assert evaluation.json()["hit_rate"] == 1.0
         assert evaluation.json()["mean_reciprocal_rank"] == 1.0
+        governance_policy = client.put(
+            f"/api/v1/enterprise/workspaces/{workspace['id']}/governance-policy",
+            json={
+                "review_mode": "none",
+                "quality_gate_enabled": False,
+                "require_numeric_citations": False,
+                "revoked_delivery_retention_days": 30,
+            },
+        )
+        assert governance_policy.status_code == 200
 
         async def revoke_cited_document():
             async with session_maker() as session:
@@ -765,6 +800,16 @@ def test_enterprise_document_upload_versions_parse_access_and_storage_protection
                 await session.commit()
 
         asyncio.run(revoke_cited_document())
+        revoked_citations = client.get(
+            f"/api/v1/enterprise/workspaces/{workspace['id']}/presentations/{entry['id']}/citations"
+        )
+        assert revoked_citations.json()[0]["status"] == "revoked"
+        assert revoked_citations.json()[0]["status_message"] == "来源授权已撤销"
+        freeze_with_revoked_source = client.post(
+            f"/api/v1/enterprise/workspaces/{workspace['id']}/presentations/{entry['id']}/freeze"
+        )
+        assert freeze_with_revoked_source.status_code == 409
+        assert freeze_with_revoked_source.json()["detail"]["message"] == "Resolve invalid source citations before freeze"
         stale_citation_quality = client.post(
             f"/api/v1/enterprise/workspaces/{workspace['id']}/presentations/{entry['id']}/quality-runs"
         )

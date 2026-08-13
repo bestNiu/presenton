@@ -40,6 +40,7 @@ import {
 import PresentationHeader from "./PresentationHeader";
 import PresentationActions from "./PresentationActions";
 import EnterpriseReviewPanel from "./EnterpriseReviewPanel";
+import EnterpriseSourcePanel from "./EnterpriseSourcePanel";
 import EnterpriseAssetPanel from "./EnterpriseAssetPanel";
 import {
   TEMPLATE_V2_ACTIVATE_SURFACE_EVENT,
@@ -696,6 +697,12 @@ const PresentationPage: React.FC<PresentationPageProps> = ({
           generationMode={isSmartPresentation ? "smart" : "standard"}
         />
         {enterpriseWorkspaceId && enterpriseEntryId && <EnterpriseReviewPanel
+          workspaceId={enterpriseWorkspaceId}
+          entryId={enterpriseEntryId}
+          currentSlideIndex={selectedSlide}
+          currentSlideId={presentationData?.slides?.[selectedSlide]?.id}
+        />}
+        {enterpriseWorkspaceId && enterpriseEntryId && <EnterpriseSourcePanel
           workspaceId={enterpriseWorkspaceId}
           entryId={enterpriseEntryId}
           currentSlideIndex={selectedSlide}

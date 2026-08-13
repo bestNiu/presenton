@@ -1,5 +1,6 @@
 import asyncio
 from dataclasses import dataclass
+from datetime import datetime, timezone
 import hashlib
 import os
 from pathlib import Path, PurePosixPath
@@ -26,6 +27,13 @@ class StoredObject:
 class StoredObjectLocation:
     object_key: str | None = None
     legacy_path: str | None = None
+
+
+@dataclass(frozen=True)
+class StoredObjectMetadata:
+    object_key: str
+    size_bytes: int
+    last_modified: datetime
 
 
 def _sha256(path: str) -> str:
@@ -135,6 +143,66 @@ class EnterpriseObjectStorage:
                 },
             )
         return StoredObject(object_key=key, sha256=sha256, size_bytes=size_bytes)
+
+    async def list_objects(self, prefix: str = "") -> list[StoredObjectMetadata]:
+        normalized_prefix = _normalize_object_key(prefix) if prefix else ""
+        if self.backend == "local":
+            root = self._local_root()
+            search_root = self._local_path(normalized_prefix) if normalized_prefix else root
+            if not search_root.exists():
+                return []
+            rows = []
+            for path in search_root.rglob("*"):
+                if not path.is_file() or path.name.startswith("."):
+                    continue
+                stat = path.stat()
+                rows.append(
+                    StoredObjectMetadata(
+                        object_key=path.relative_to(root).as_posix(),
+                        size_bytes=stat.st_size,
+                        last_modified=datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc),
+                    )
+                )
+            return sorted(rows, key=lambda row: row.object_key)
+
+        bucket, _ = self._s3_settings()
+        client = self._s3_client()
+
+        def collect() -> list[StoredObjectMetadata]:
+            paginator = client.get_paginator("list_objects_v2")
+            rows = []
+            for page in paginator.paginate(Bucket=bucket, Prefix=normalized_prefix):
+                for item in page.get("Contents", []):
+                    rows.append(
+                        StoredObjectMetadata(
+                            object_key=item["Key"],
+                            size_bytes=int(item["Size"]),
+                            last_modified=item["LastModified"],
+                        )
+                    )
+            return rows
+
+        return await asyncio.to_thread(collect)
+
+    async def delete_object(self, object_key: str) -> bool:
+        key = _normalize_object_key(object_key)
+        if self.backend == "local":
+            path = self._local_path(key)
+            if not path.is_file():
+                return False
+            await asyncio.to_thread(path.unlink)
+            root = self._local_root()
+            parent = path.parent
+            while parent != root:
+                try:
+                    parent.rmdir()
+                except OSError:
+                    break
+                parent = parent.parent
+            return True
+        bucket, _ = self._s3_settings()
+        await asyncio.to_thread(self._s3_client().delete_object, Bucket=bucket, Key=key)
+        return True
 
     async def verify(
         self,

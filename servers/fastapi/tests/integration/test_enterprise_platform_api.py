@@ -1,6 +1,7 @@
 import asyncio
 import hashlib
 import json
+import os
 import uuid
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
@@ -209,6 +210,46 @@ def test_personal_workspace_is_idempotent_and_isolated(tmp_path):
         assert first.json()["current_user_role"] == "owner"
         assert outsider.status_code == 200
         assert outsider.json() == []
+    finally:
+        asyncio.run(engine.dispose())
+
+
+def test_storage_lifecycle_requires_admin_and_cleans_aged_orphan(tmp_path, monkeypatch):
+    client, engine, _, _ = _build_client(tmp_path)
+    storage_root = tmp_path / "enterprise-objects"
+    orphan = storage_root / "orphaned" / "old.bin"
+    orphan.parent.mkdir(parents=True)
+    orphan.write_bytes(b"unreferenced-object")
+    aged = (datetime.now(timezone.utc) - timedelta(days=2)).timestamp()
+    os.utime(orphan, (aged, aged))
+    monkeypatch.setenv("ENTERPRISE_OBJECT_STORAGE_BACKEND", "local")
+    monkeypatch.setenv("ENTERPRISE_OBJECT_STORAGE_LOCAL_ROOT", str(storage_root))
+    monkeypatch.setenv("ENTERPRISE_OBJECT_STORAGE_ORPHAN_GRACE_DAYS", "1")
+    try:
+        denied = client.post(
+            "/api/v1/enterprise/admin/storage/lifecycle-runs",
+            json={"execute": False},
+        )
+        dry_run = client.post(
+            "/api/v1/enterprise/admin/storage/lifecycle-runs",
+            json={"execute": False},
+            headers={"x-test-user": "admin"},
+        )
+        assert denied.status_code == 403
+        assert dry_run.status_code == 200
+        assert dry_run.json()["candidate_count"] == 1
+        assert dry_run.json()["deleted_count"] == 0
+        assert orphan.exists()
+
+        executed = client.post(
+            "/api/v1/enterprise/admin/storage/lifecycle-runs",
+            json={"execute": True, "max_delete": 10},
+            headers={"x-test-user": "admin"},
+        )
+
+        assert executed.json()["deleted_count"] == 1
+        assert executed.json()["deleted_bytes"] == len(b"unreferenced-object")
+        assert not orphan.exists()
     finally:
         asyncio.run(engine.dispose())
 

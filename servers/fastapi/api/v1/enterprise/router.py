@@ -92,6 +92,8 @@ from api.v1.enterprise.schemas import (
     WorkspaceMemberUpsertRequest,
     WorkspaceResponse,
     WorkspaceGovernancePolicyRequest,
+    StorageLifecycleRunRequest,
+    StorageLifecycleRunResponse,
 )
 from domains.platform.enums import AssetStatus, BidGateType, TemplatePublicationStatus, WorkspaceRole
 from models.sql.enterprise.audit_event import AuditEventModel
@@ -208,6 +210,7 @@ from services.enterprise.bid_delivery_service import (
     revoke_delivery_artifact,
 )
 from services.enterprise.scene_service import list_active_scenes
+from services.enterprise.storage_lifecycle_service import run_storage_lifecycle
 from services.enterprise.scene_registry_service import resolve_scene_runtime
 from services.enterprise.template_publication_service import (
     create_template_publication,
@@ -232,6 +235,23 @@ from services.enterprise.workspace_service import (
 API_V1_ENTERPRISE_ROUTER = APIRouter(
     prefix="/api/v1/enterprise", tags=["Enterprise Platform"]
 )
+
+
+@API_V1_ENTERPRISE_ROUTER.post(
+    "/admin/storage/lifecycle-runs",
+    response_model=StorageLifecycleRunResponse,
+)
+async def post_storage_lifecycle_run(
+    body: StorageLifecycleRunRequest,
+    principal: AuthPrincipal = Depends(principal_from_request),
+    session: AsyncSession = Depends(get_async_session),
+):
+    return await run_storage_lifecycle(
+        session,
+        principal=principal,
+        execute=body.execute,
+        max_delete=body.max_delete,
+    )
 
 
 @API_V1_ENTERPRISE_ROUTER.post(

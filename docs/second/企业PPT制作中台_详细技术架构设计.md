@@ -777,10 +777,14 @@ stateDiagram-v2
 | `ENTERPRISE_OBJECT_STORAGE_ACCESS_KEY` | SDK 凭据链 | 访问密钥；生产环境优先使用工作负载身份或密钥注入 |
 | `ENTERPRISE_OBJECT_STORAGE_SECRET_KEY` | SDK 凭据链 | 密钥，不写入仓库和数据库 |
 | `ENTERPRISE_OBJECT_STORAGE_ADDRESSING_STYLE` | `path` | MinIO 通常使用 `path`，AWS 可配置为 `virtual` |
+| `ENTERPRISE_OBJECT_STORAGE_REVOKED_RETENTION_DAYS` | `90` | 工作区未单独配置时，撤销交付件的默认保留天数 |
+| `ENTERPRISE_OBJECT_STORAGE_ORPHAN_GRACE_DAYS` | `7` | 无数据库引用对象进入清理候选前的安全宽限期 |
 
 本地写入采用临时文件加原子替换；S3 写入携带 SHA-256 元数据。下载授权消费前校验对象大小和摘要，S3 内容由后端流式转发，因此桶必须保持私有。正式切换 MinIO 时只变更运行配置，不改变业务 API 和数据库引用方式。
 
 交付件采用“两阶段生命周期”：业务管理员撤销时立即把交付件置为 `revoked`，并联动撤销全部未失效下载授权；对象本体暂时保留，以满足审计、争议追溯和误操作恢复。物理清理必须由后续保留期策略驱动，不能在撤销接口中同步删除。撤销动作、被撤销授权数量和对象保留状态均写入审计事件。
+
+生命周期作业通过 `POST /api/v1/enterprise/admin/storage/lifecycle-runs` 运行，仅平台管理员可访问。默认请求 `{ "execute": false }` 只生成 dry-run 报告；确认后使用 `{ "execute": true, "max_delete": 100 }` 分批删除。作业保护所有数据库仍引用的有效对象，只清理超过工作区保留期的已撤销交付件，以及超过孤儿宽限期的无引用对象；每次运行记录扫描量、候选量、删除量、字节数和是否截断。生产调度必须先持续运行 dry-run 并监控候选变化，再启用小批量执行。
 
 ### 16.2 错误码分类
 

@@ -60,6 +60,27 @@ def test_local_object_storage_round_trip_and_integrity(tmp_path, monkeypatch):
     assert exc_info.value.status_code == 409
 
 
+def test_local_object_storage_inventory_and_delete(tmp_path, monkeypatch):
+    source = tmp_path / "orphan.bin"
+    source.write_bytes(b"orphan-object")
+    monkeypatch.setenv("ENTERPRISE_OBJECT_STORAGE_BACKEND", "local")
+    monkeypatch.setenv("ENTERPRISE_OBJECT_STORAGE_LOCAL_ROOT", str(tmp_path / "objects"))
+    storage = EnterpriseObjectStorage()
+    stored = asyncio.run(
+        storage.put_file(
+            str(source), "orphaned/workspace/object.bin", content_type="application/octet-stream"
+        )
+    )
+
+    inventory = asyncio.run(storage.list_objects("orphaned"))
+
+    assert [item.object_key for item in inventory] == [stored.object_key]
+    assert inventory[0].size_bytes == len(b"orphan-object")
+    assert asyncio.run(storage.delete_object(stored.object_key)) is True
+    assert asyncio.run(storage.delete_object(stored.object_key)) is False
+    assert asyncio.run(storage.list_objects()) == []
+
+
 def test_object_storage_rejects_path_traversal(tmp_path, monkeypatch):
     source = tmp_path / "preview.png"
     source.write_bytes(b"preview")

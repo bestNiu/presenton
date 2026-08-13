@@ -16,6 +16,7 @@ export interface WorkspaceResponse {
     review_mode: "none" | "single";
     quality_gate_enabled: boolean;
     require_numeric_citations: boolean;
+    revoked_delivery_retention_days: number;
   };
   current_user_role: WorkspaceRole;
   created_at: string;
@@ -211,6 +212,7 @@ export interface BidDeliveryArtifactResponse {
   status: "ready" | "revoked";
   created_at: string;
   revoked_at: string | null;
+  purged_at: string | null;
 }
 
 export interface BidDownloadGrantResponse {
@@ -350,6 +352,7 @@ export interface PresentationDeliveryArtifactResponse {
   size_bytes: number;
   status: "ready" | "revoked";
   revoked_at: string | null;
+  purged_at: string | null;
 }
 
 export interface TemplatePublicationResponse {

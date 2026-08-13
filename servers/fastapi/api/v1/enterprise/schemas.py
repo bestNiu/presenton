@@ -591,6 +591,7 @@ class BidDeliveryArtifactResponse(BaseModel):
     created_by: uuid.UUID | None
     created_at: datetime
     revoked_at: datetime | None
+    purged_at: datetime | None
 
 
 class BidDownloadGrantRequest(BaseModel):
@@ -639,6 +640,36 @@ class WorkspaceGovernancePolicyRequest(BaseModel):
     review_mode: str = Field(default="single", pattern="^(none|single)$")
     quality_gate_enabled: bool = True
     require_numeric_citations: bool = False
+    revoked_delivery_retention_days: int = Field(default=90, ge=1, le=3650)
+
+
+class StorageLifecycleRunRequest(BaseModel):
+    execute: bool = False
+    max_delete: int = Field(default=100, ge=1, le=1000)
+
+
+class StorageLifecycleCandidateResponse(BaseModel):
+    object_key: str
+    reason: str
+    size_bytes: int
+    last_modified: datetime
+
+
+class StorageLifecycleRunResponse(BaseModel):
+    run_id: uuid.UUID
+    mode: str
+    backend: str
+    scanned_count: int
+    referenced_count: int
+    missing_referenced_count: int
+    candidate_count: int
+    candidate_bytes: int
+    deleted_count: int
+    deleted_bytes: int
+    truncated: bool
+    candidates: list[StorageLifecycleCandidateResponse]
+    started_at: datetime
+    completed_at: datetime
 
 
 class WorkspaceMemberUpsertRequest(BaseModel):
@@ -885,6 +916,7 @@ class PresentationDeliveryArtifactResponse(BaseModel):
     created_by: uuid.UUID | None
     created_at: datetime
     revoked_at: datetime | None
+    purged_at: datetime | None
 
 
 class PresentationQualityIssueResponse(BaseModel):

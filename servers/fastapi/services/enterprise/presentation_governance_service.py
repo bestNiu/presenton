@@ -331,7 +331,10 @@ async def freeze_presentation(
         raise HTTPException(status_code=409, detail="Approved presentation changed; reopen review")
     # Citation validity can change without changing the presentation snapshot
     # (for example when a source is revoked or superseded), so always recheck it.
-    from services.enterprise.presentation_quality_service import invalid_source_citations
+    from services.enterprise.presentation_quality_service import (
+        invalid_source_citations,
+        list_source_citation_details,
+    )
 
     invalid_citations = await invalid_source_citations(session, entry_id=entry.id)
     if invalid_citations:
@@ -383,9 +386,34 @@ async def freeze_presentation(
         )
         or 0
     ) + 1
+    manifest["manifest_version"] = "1.1"
     manifest["snapshot_version"] = version_no
     manifest["review_id"] = str(review.id)
     manifest["quality_run_id"] = str(quality_run.id) if quality_run else None
+    citation_details = await list_source_citation_details(
+        session,
+        workspace_id=workspace_id,
+        entry_id=entry.id,
+        principal=principal,
+    )
+    citation_manifest = [
+        {
+            "id": str(item["id"]),
+            "slide_id": str(item["slide_id"]) if item["slide_id"] else None,
+            "element_ref": item["element_ref"],
+            "source_type": item["source_type"],
+            "source_id": item["source_id"],
+            "source_version": item["source_version"],
+            "locator": item["locator"],
+            "excerpt": item["excerpt"],
+            "status": item["status"],
+            "source_name": item["source_name"],
+            "current_version": item["current_version"],
+        }
+        for item in citation_details
+    ]
+    manifest["citation_manifest"] = citation_manifest
+    manifest["citation_manifest_hash"] = _canonical_hash(citation_manifest)
     snapshot = PresentationSnapshotModel(
         presentation_entry_id=entry.id,
         review_id=review.id,
@@ -451,6 +479,65 @@ async def get_presentation_governance(
     reviews = list((await session.scalars(select(PresentationReviewModel).where(PresentationReviewModel.presentation_entry_id == entry.id).order_by(PresentationReviewModel.submission_no.desc()))).all())
     snapshots = list((await session.scalars(select(PresentationSnapshotModel).where(PresentationSnapshotModel.presentation_entry_id == entry.id).order_by(PresentationSnapshotModel.version_no.desc()))).all())
     return {"entry": entry, "reviews": reviews, "snapshots": snapshots}
+
+
+async def get_presentation_freeze_preflight(
+    session: AsyncSession,
+    *,
+    workspace_id: uuid.UUID,
+    entry_id: uuid.UUID,
+    principal: AuthPrincipal,
+) -> dict:
+    workspace, _ = await require_workspace_role(
+        session, workspace_id=workspace_id, principal=principal
+    )
+    entry = await _require_entry(session, workspace_id=workspace_id, entry_id=entry_id)
+    slide_hash, _ = await _presentation_snapshot(session, entry)
+    policy = workspace.governance_policy or {}
+    checks: list[dict] = []
+
+    review_mode = policy.get("review_mode", "single")
+    if review_mode == "single":
+        review = await session.scalar(
+            select(PresentationReviewModel)
+            .where(
+                PresentationReviewModel.presentation_entry_id == entry.id,
+                PresentationReviewModel.status == PresentationReviewStatus.APPROVED,
+            )
+            .order_by(PresentationReviewModel.submission_no.desc())
+            .limit(1)
+        )
+        review_passed = (
+            PresentationEntryStatus(entry.status) == PresentationEntryStatus.APPROVED
+            and review is not None
+            and review.slide_snapshot_hash == slide_hash
+        )
+        checks.append({"code": "review", "label": "审批状态", "passed": review_passed, "message": "当前内容已审批" if review_passed else "需要完成当前版本审批", "count": 0 if review_passed else 1})
+    else:
+        review_passed = PresentationEntryStatus(entry.status) == PresentationEntryStatus.DRAFT
+        checks.append({"code": "review", "label": "审批状态", "passed": review_passed, "message": "空间策略无需审批" if review_passed else "仅草稿可按免审策略冻结", "count": 0 if review_passed else 1})
+
+    quality_enabled = policy.get("quality_gate_enabled", True)
+    quality_passed = True
+    if quality_enabled:
+        quality_run = await session.scalar(
+            select(PresentationQualityRunModel)
+            .where(PresentationQualityRunModel.presentation_entry_id == entry.id)
+            .order_by(PresentationQualityRunModel.created_at.desc())
+            .limit(1)
+        )
+        quality_passed = bool(quality_run and PresentationQualityStatus(quality_run.status) == PresentationQualityStatus.PASSED and quality_run.slide_snapshot_hash == slide_hash)
+    quality_message = "空间策略未启用质量门禁" if not quality_enabled else ("当前版本质量检查已通过" if quality_passed else "需要重新运行并通过质量检查")
+    checks.append({"code": "quality", "label": "质量门禁", "passed": quality_passed, "message": quality_message, "count": 0 if quality_passed else 1})
+
+    from services.enterprise.presentation_comment_service import count_open_blocking_comments
+    from services.enterprise.presentation_quality_service import invalid_source_citations
+
+    blocking_comments = await count_open_blocking_comments(session, entry_id=entry.id)
+    invalid_citations = await invalid_source_citations(session, entry_id=entry.id)
+    checks.append({"code": "comments", "label": "阻断整改", "passed": blocking_comments == 0, "message": "无未解决阻断项" if blocking_comments == 0 else f"仍有 {blocking_comments} 个阻断整改项", "count": blocking_comments})
+    checks.append({"code": "citations", "label": "引用证据", "passed": not invalid_citations, "message": "全部引用当前有效" if not invalid_citations else f"仍有 {len(invalid_citations)} 条失效引用", "count": len(invalid_citations)})
+    return {"can_freeze": all(item["passed"] for item in checks), "slide_snapshot_hash": slide_hash, "checks": checks}
 
 
 async def compare_presentation_snapshots(

@@ -9,6 +9,7 @@ import {
   EnterpriseApi,
   type PresentationCommentThreadResponse,
   type PresentationGovernanceResponse,
+  type PresentationFreezePreflightResponse,
   type PresentationSnapshotDiffResponse,
   type WorkspaceMemberResponse,
 } from "@/app/(presentation-generator)/services/api/enterprise";
@@ -26,6 +27,8 @@ export default function PresentationReviewPage() {
   const entryId = params.entryId;
   const workspaceId = searchParams.get("workspace_id") || "";
   const [governance, setGovernance] = useState<PresentationGovernanceResponse | null>(null);
+  const [preflight, setPreflight] = useState<PresentationFreezePreflightResponse | null>(null);
+  const [canFreeze, setCanFreeze] = useState(false);
   const [threads, setThreads] = useState<PresentationCommentThreadResponse[]>([]);
   const [diff, setDiff] = useState<PresentationSnapshotDiffResponse | null>(null);
   const [members, setMembers] = useState<WorkspaceMemberResponse[]>([]);
@@ -43,14 +46,19 @@ export default function PresentationReviewPage() {
     if (!workspaceId) return;
     setError(null);
     try {
-      const [governanceResult, commentResult, memberResult] = await Promise.all([
+      const [governanceResult, commentResult, memberResult, preflightResult, workspaces] = await Promise.all([
         EnterpriseApi.getPresentationGovernance(workspaceId, entryId),
         EnterpriseApi.getPresentationComments(workspaceId, entryId),
         EnterpriseApi.getWorkspaceMembers(workspaceId),
+        EnterpriseApi.getPresentationFreezePreflight(workspaceId, entryId),
+        EnterpriseApi.getWorkspaces(),
       ]);
       setGovernance(governanceResult);
       setThreads(commentResult);
       setMembers(memberResult);
+      setPreflight(preflightResult);
+      const workspace = workspaces.find((item) => item.id === workspaceId);
+      setCanFreeze(Boolean(workspace && ["owner", "admin"].includes(workspace.current_user_role)));
       if (governanceResult.snapshots.length >= 2) {
         setDiff(await EnterpriseApi.comparePresentationSnapshots(workspaceId, entryId, governanceResult.snapshots[1].id, governanceResult.snapshots[0].id));
       } else {
@@ -109,6 +117,16 @@ export default function PresentationReviewPage() {
     } finally { setPending(false); }
   };
 
+  const freeze = async () => {
+    setPending(true);
+    try {
+      await EnterpriseApi.freezePresentation(workspaceId, entryId);
+      await load();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "冻结失败，请按预检清单整改");
+    } finally { setPending(false); }
+  };
+
   if (!workspaceId) return <main className="p-8 text-sm text-[#B42318]">缺少 workspace_id，无法打开评审中心。</main>;
 
   return (
@@ -133,6 +151,7 @@ export default function PresentationReviewPage() {
           </section>
 
           <aside className="space-y-5">
+            <div className="rounded-2xl border border-[#E3E4EA] bg-white p-5"><div className="flex items-center justify-between gap-2"><div className="font-semibold">冻结前预检</div><span className={`rounded-full px-2.5 py-1 text-xs ${preflight?.can_freeze ? "bg-[#ECFDF3] text-[#027A48]" : "bg-[#FFF4E5] text-[#B54708]"}`}>{preflight?.can_freeze ? "可冻结" : "待处理"}</span></div><div className="mt-4 space-y-2">{preflight?.checks.map((check) => <div key={check.code} className="flex items-start gap-2 rounded-lg bg-[#F8F9FC] p-2.5">{check.passed ? <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-[#039855]" /> : <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-[#D92D20]" />}<div><p className="text-xs font-medium text-[#344054]">{check.label}</p><p className="mt-0.5 text-xs text-[#667085]">{check.message}</p></div></div>)}</div>{canFreeze && <button type="button" onClick={() => void freeze()} disabled={pending || !preflight?.can_freeze} className="mt-4 h-10 w-full rounded-lg bg-[#17171B] text-sm font-medium text-white disabled:opacity-40">冻结当前版本</button>}</div>
             <form onSubmit={createThread} className="rounded-2xl border border-[#E3E4EA] bg-white p-5"><div className="flex items-center gap-2 font-semibold"><MessageSquarePlus className="h-4 w-4 text-[#635BFF]" />新增整改项</div><input value={title} onChange={(event) => setTitle(event.target.value)} placeholder="问题标题" className="mt-4 h-10 w-full rounded-lg border border-[#D9DCE3] px-3 text-sm" /><textarea value={body} onChange={(event) => setBody(event.target.value)} placeholder="说明问题与验收要求" rows={4} className="mt-3 w-full rounded-lg border border-[#D9DCE3] p-3 text-sm" /><input type="number" min="1" value={slideIndex} onChange={(event) => setSlideIndex(event.target.value)} placeholder="页码（可选）" className="mt-3 h-10 w-full rounded-lg border border-[#D9DCE3] px-3 text-sm" /><select value={assignee} onChange={(event) => setAssignee(event.target.value)} className="mt-3 h-10 w-full rounded-lg border border-[#D9DCE3] bg-white px-3 text-sm"><option value="">未指派责任人</option>{members.map((member) => <option key={member.user_id} value={member.user_id}>{member.username} · {member.role}</option>)}</select><input type="date" value={dueAt} onChange={(event) => setDueAt(event.target.value)} className="mt-3 h-10 w-full rounded-lg border border-[#D9DCE3] px-3 text-sm" /><label className="mt-3 flex items-center gap-2 text-sm text-[#475467]"><input type="checkbox" checked={blocking} onChange={(event) => setBlocking(event.target.checked)} />审批前必须解决</label><button disabled={pending || !title.trim() || !body.trim()} className="mt-4 h-10 w-full rounded-lg bg-[#635BFF] text-sm font-medium text-white disabled:opacity-40">创建整改项</button></form>
             <div className="rounded-2xl border border-[#E3E4EA] bg-white p-5"><div className="flex items-center gap-2 font-semibold"><GitCompareArrows className="h-4 w-4 text-[#635BFF]" />版本差异</div>{diff ? <div className="mt-4 text-sm text-[#475467]"><p>V{diff.from_version_no} → V{diff.to_version_no}</p><div className="mt-3 grid grid-cols-2 gap-2 text-xs"><span className="rounded-lg bg-[#ECFDF3] p-2">新增 {diff.added}</span><span className="rounded-lg bg-[#FFF4E5] p-2">修改 {diff.changed}</span><span className="rounded-lg bg-[#FEF2F2] p-2">删除 {diff.removed}</span><span className="rounded-lg bg-[#F2F4F7] p-2">未变 {diff.unchanged}</span></div>{diff.slides.some((slide) => slide.change_type !== "unchanged") && <div className="mt-4 space-y-2 border-t border-[#F0F1F3] pt-3">{diff.slides.filter((slide) => slide.change_type !== "unchanged").map((slide) => <div key={slide.slide_id} className="rounded-lg bg-[#F8F9FC] p-2.5 text-xs"><div className="flex items-center justify-between"><span>{slide.change_type === "added" ? `新增第 ${(slide.after_index ?? 0) + 1} 页` : slide.change_type === "removed" ? `删除原第 ${(slide.before_index ?? 0) + 1} 页` : `修改第 ${(slide.after_index ?? 0) + 1} 页`}</span><span className={slide.change_type === "changed" ? "text-[#B54708]" : slide.change_type === "added" ? "text-[#027A48]" : "text-[#B42318]"}>{slide.change_type}</span></div>{slide.changed_fields.length > 0 && <p className="mt-1 text-[#667085]">变化字段：{slide.changed_fields.map((field) => diffFieldLabel[field] || field).join("、")}</p>}</div>)}</div>}</div> : <p className="mt-3 text-sm text-[#667085]">至少形成两个冻结版本后自动展示逐页差异。</p>}</div>
           </aside>

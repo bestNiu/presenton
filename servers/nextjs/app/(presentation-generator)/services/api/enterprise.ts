@@ -373,6 +373,12 @@ export interface PresentationGovernanceResponse {
   }>;
 }
 
+export interface PresentationFreezePreflightResponse {
+  can_freeze: boolean;
+  slide_snapshot_hash: string;
+  checks: Array<{ code: string; label: string; passed: boolean; message: string; count: number }>;
+}
+
 export interface PresentationCommentThreadResponse {
   id: string;
   presentation_entry_id: string;
@@ -1138,6 +1144,11 @@ export class EnterpriseApi {
   static async getPresentationGovernance(workspaceId: string, entryId: string): Promise<PresentationGovernanceResponse> {
     const response = await fetch(getApiUrl(`/api/v1/enterprise/workspaces/${encodeURIComponent(workspaceId)}/presentations/${encodeURIComponent(entryId)}/governance`), { credentials: "include", cache: "no-store" });
     return ApiResponseHandler.handleResponse(response, "Failed to load presentation governance");
+  }
+
+  static async getPresentationFreezePreflight(workspaceId: string, entryId: string): Promise<PresentationFreezePreflightResponse> {
+    const response = await fetch(getApiUrl(`/api/v1/enterprise/workspaces/${encodeURIComponent(workspaceId)}/presentations/${encodeURIComponent(entryId)}/freeze-preflight`), { credentials: "include", cache: "no-store" });
+    return ApiResponseHandler.handleResponse(response, "Failed to load freeze preflight");
   }
 
   static async getPresentationComments(workspaceId: string, entryId: string): Promise<PresentationCommentThreadResponse[]> {

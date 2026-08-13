@@ -545,6 +545,12 @@ sequenceDiagram
 
 冻结不能只信任最近一次质量报告。资料状态可能在页面内容和快照哈希不变时发生变化，因此 `freeze_presentation` 在创建不可变快照前始终重新计算所有来源状态；存在任一失效引用时返回 409 和引用 ID 清单，即使工作区关闭质量门禁也不能生成带失效证据的冻结版本。
 
+### 11.10 冻结预检与引用证据快照（T36）
+
+`GET /workspaces/{workspace_id}/presentations/{entry_id}/freeze-preflight` 使用与冻结动作相同的实时数据，输出审批状态、当前页面快照对应的质量门禁、未解决阻断整改、引用有效性四项检查及统一的 `can_freeze`。评审中心直接展示这份清单，空间 owner/admin 只有在全部通过时才能触发冻结，避免依赖提交后的 409 错误猜测缺失条件。
+
+冻结快照 manifest 增加 `citation_manifest` 与 `citation_manifest_hash`。清单固化引用 ID、页面、元素、来源类型、来源 ID、引用版本、locator、摘录、冻结时状态、资料名称和当时最新版本；它与当前可变的资料表分离，因此资料后续升级、撤销或删除时，历史交付件仍可证明冻结时使用了哪一版本和哪一段证据。引用 manifest 参与整个 snapshot manifest 哈希，任何事后篡改都会改变快照摘要。
+
 ---
 
 ## 12. AI 编排架构

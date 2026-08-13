@@ -999,6 +999,20 @@ class PresentationGovernanceResponse(BaseModel):
     snapshots: list[PresentationSnapshotResponse]
 
 
+class PresentationFreezePreflightCheckResponse(BaseModel):
+    code: str
+    label: str
+    passed: bool
+    message: str
+    count: int = 0
+
+
+class PresentationFreezePreflightResponse(BaseModel):
+    can_freeze: bool
+    slide_snapshot_hash: str
+    checks: list[PresentationFreezePreflightCheckResponse]
+
+
 class PresentationCommentCreateRequest(BaseModel):
     slide_id: uuid.UUID | None = None
     slide_index: int | None = Field(default=None, ge=0)

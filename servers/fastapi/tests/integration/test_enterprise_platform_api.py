@@ -987,9 +987,17 @@ def test_presentation_registration_preserves_owner_and_allows_member_listing(tmp
             json={"action": "approve", "comment": "内容与品牌规范检查通过"},
             headers={"x-test-user": "member"},
         )
+        freeze_preflight = client.get(
+            f"/api/v1/enterprise/workspaces/{workspace['id']}/presentations/{entry_id}/freeze-preflight"
+        )
         frozen = client.post(
             f"/api/v1/enterprise/workspaces/{workspace['id']}/presentations/{entry_id}/freeze"
         )
+        assert freeze_preflight.status_code == 200
+        assert freeze_preflight.json()["can_freeze"] is True
+        assert {item["code"] for item in freeze_preflight.json()["checks"]} == {"review", "quality", "comments", "citations"}
+        assert frozen.json()["manifest"]["citation_manifest"] == []
+        assert len(frozen.json()["manifest"]["citation_manifest_hash"]) == 64
         frozen_update_denied = client.patch(
             "/api/v1/ppt/presentation/update",
             json={"id": str(presentation_id), "title": "不应覆盖的标题"},

@@ -94,6 +94,7 @@ from api.v1.enterprise.schemas import (
     PresentationCommentReplyResponse,
     PresentationCommentThreadResponse,
     PresentationGovernanceResponse,
+    PresentationFreezePreflightResponse,
     PresentationQualityReportResponse,
     PresentationQualityRunResponse,
     PresentationSourceCitationCreateRequest,
@@ -135,6 +136,7 @@ from services.enterprise.presentation_governance_service import (
     decide_presentation_review,
     freeze_presentation,
     get_presentation_governance,
+    get_presentation_freeze_preflight,
     reopen_presentation_review,
     submit_presentation_review,
 )
@@ -1639,6 +1641,14 @@ async def get_presentation_entries(
 )
 async def get_presentation_entry_governance(workspace_id: uuid.UUID, entry_id: uuid.UUID, principal: AuthPrincipal = Depends(principal_from_request), session: AsyncSession = Depends(get_async_session)):
     return await get_presentation_governance(session, workspace_id=workspace_id, entry_id=entry_id, principal=principal)
+
+
+@API_V1_ENTERPRISE_ROUTER.get(
+    "/workspaces/{workspace_id}/presentations/{entry_id}/freeze-preflight",
+    response_model=PresentationFreezePreflightResponse,
+)
+async def get_presentation_entry_freeze_preflight(workspace_id: uuid.UUID, entry_id: uuid.UUID, principal: AuthPrincipal = Depends(principal_from_request), session: AsyncSession = Depends(get_async_session)):
+    return await get_presentation_freeze_preflight(session, workspace_id=workspace_id, entry_id=entry_id, principal=principal)
 
 
 @API_V1_ENTERPRISE_ROUTER.get(

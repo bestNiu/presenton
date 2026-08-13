@@ -79,6 +79,12 @@ class SlideAssetCreateRequest(AssetMetadataRequest):
     pass
 
 
+class SlideElementAssetCreateRequest(AssetMetadataRequest):
+    asset_type: str = Field(pattern="^(chart|image|logo|copy|component)$")
+    component_index: int = Field(ge=0)
+    element_index: int | None = Field(default=None, ge=0)
+
+
 class SlideAssetVersionCreateRequest(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=300)
     description: str | None = None
@@ -154,6 +160,20 @@ class AssetPageInsertResponse(BaseModel):
     slide_index: int
     asset_id: uuid.UUID
     compatibility: AssetCompatibilityResponse
+
+
+class AssetElementInsertRequest(BaseModel):
+    workspace_id: uuid.UUID
+    presentation_entry_id: uuid.UUID
+    slide_id: uuid.UUID
+
+
+class AssetElementInsertResponse(BaseModel):
+    asset_id: uuid.UUID
+    slide_id: uuid.UUID
+    component_id: str
+    component_index: int
+    asset_type: str
 
 
 class AssetBulkTransitionRequest(BaseModel):

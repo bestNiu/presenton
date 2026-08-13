@@ -9,6 +9,10 @@ import {
   type AssetScopeType,
   type AssetPersonalizedItemResponse,
 } from "@/app/(presentation-generator)/services/api/enterprise";
+import {
+  TEMPLATE_V2_SURFACE_SELECTED_EVENT,
+  type TemplateV2SurfaceSelectedDetail,
+} from "@/components/slide-editor/events/events";
 
 interface EnterpriseAssetPanelProps {
   workspaceId: string;
@@ -41,11 +45,33 @@ export default function EnterpriseAssetPanel({
   const [query, setQuery] = useState("");
   const [pending, setPending] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [selectedAssetTarget, setSelectedAssetTarget] = useState<{ assetType: "chart" | "image" | "copy" | "component"; componentIndex: number; elementIndex?: number } | null>(null);
+
+  useEffect(() => {
+    const handleSelection = (event: Event) => {
+      const detail = (event as CustomEvent<TemplateV2SurfaceSelectedDetail>).detail;
+      if (String(detail?.slideId ?? "") !== String(currentSlideId ?? "")) return;
+      const selection = detail?.selection;
+      if (!selection || selection.kind === "multi-component" || typeof selection.componentIndex !== "number") {
+        setSelectedAssetTarget(null);
+        return;
+      }
+      if (selection.kind === "component") {
+        setSelectedAssetTarget({ assetType: "component", componentIndex: selection.componentIndex });
+        return;
+      }
+      const match = selection.elementPath?.match(/elements\[(\d+)\]$/);
+      const assetType = selection.elementType === "chart" ? "chart" : selection.elementType === "image" ? "image" : ["text", "text-list"].includes(selection.elementType || "") ? "copy" : null;
+      setSelectedAssetTarget(assetType && match ? { assetType, componentIndex: selection.componentIndex, elementIndex: Number(match[1]) } : null);
+    };
+    window.addEventListener(TEMPLATE_V2_SURFACE_SELECTED_EVENT, handleSelection);
+    return () => window.removeEventListener(TEMPLATE_V2_SURFACE_SELECTED_EVENT, handleSelection);
+  }, [currentSlideId]);
 
   const load = useCallback(async () => {
     try {
       const [assetRows, recommended, recent, favorites] = await Promise.all([
-        EnterpriseApi.getAssets(workspaceId, { assetType: "page" }),
+        EnterpriseApi.getAssets(workspaceId),
         EnterpriseApi.getPersonalizedAssets(workspaceId, "recommended", { limit: 30 }),
         EnterpriseApi.getPersonalizedAssets(workspaceId, "recent", { limit: 30 }),
         EnterpriseApi.getPersonalizedAssets(workspaceId, "favorites", { limit: 30 }),
@@ -73,8 +99,6 @@ export default function EnterpriseAssetPanel({
     const favoriteIds = new Set((personalized.favorites || []).map((item) => item.asset.id));
     const source: AssetPersonalizedItemResponse[] = view === "all" ? assets.map((asset) => ({ asset, is_favorite: favoriteIds.has(asset.id), last_used_at: null, recommendation_score: null, recommendation_reasons: [] })) : (personalized[view] || []);
     return source.filter(
-      (item) => item.asset.asset_type === "page"
-    ).filter(
       (item) => {
         const asset = item.asset;
         return (
@@ -121,29 +145,41 @@ export default function EnterpriseAssetPanel({
     }
   };
 
+  const saveSelectedAsset = async () => {
+    if (!currentSlideId || !name.trim() || !selectedAssetTarget) return;
+    setPending("save-selection");
+    setError(null);
+    try {
+      await EnterpriseApi.saveSlideElementAsAsset(workspaceId, entryId, currentSlideId, {
+        scope_type: scope,
+        name: name.trim(),
+        tags: tags.split(",").map((item) => item.trim()).filter(Boolean),
+        asset_type: selectedAssetTarget.assetType,
+        component_index: selectedAssetTarget.componentIndex,
+        ...(selectedAssetTarget.elementIndex === undefined ? {} : { element_index: selectedAssetTarget.elementIndex }),
+      });
+      setName(""); setTags(""); await load();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "选中内容保存失败");
+    } finally { setPending(""); }
+  };
+
   const insert = async (asset: AssetItemResponse) => {
     setPending(asset.id);
     setError(null);
     try {
-      const compatibility = await EnterpriseApi.getAssetCompatibility(
-        asset.id,
-        workspaceId,
-        entryId
-      );
-      if (!compatibility.can_insert) {
-        setError(compatibility.issues.map((issue) => issue.message).join("；") || "该资产与当前文稿不兼容");
-        return;
+      if (asset.asset_type === "page") {
+        const compatibility = await EnterpriseApi.getAssetCompatibility(asset.id, workspaceId, entryId);
+        if (!compatibility.can_insert) {
+          setError(compatibility.issues.map((issue) => issue.message).join("；") || "该资产与当前文稿不兼容");
+          return;
+        }
+        if (compatibility.status === "warning" && !window.confirm(`${compatibility.issues.map((issue) => issue.message).join("；")}。是否按保留源样式方式插入？`)) return;
+        await EnterpriseApi.insertAssetPage(asset.id, workspaceId, entryId, currentSlideIndex);
+      } else {
+        if (!currentSlideId) throw new Error("请先选择目标页面");
+        await EnterpriseApi.insertAssetElement(asset.id, workspaceId, entryId, currentSlideId);
       }
-      if (
-        compatibility.status === "warning" &&
-        !window.confirm(`${compatibility.issues.map((issue) => issue.message).join("；")}。是否按保留源样式方式插入？`)
-      ) return;
-      await EnterpriseApi.insertAssetPage(
-        asset.id,
-        workspaceId,
-        entryId,
-        currentSlideIndex
-      );
       await Promise.all([load(), onPresentationChanged()]);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "资产页插入失败");
@@ -175,28 +211,28 @@ export default function EnterpriseAssetPanel({
     </button>
     {open && <aside className="fixed inset-y-3 right-3 z-[80] flex w-[min(420px,calc(100vw-24px))] flex-col overflow-hidden rounded-2xl border border-[#E3E4EA] bg-white shadow-2xl">
       <header className="flex items-center justify-between border-b border-[#EAECF0] px-4 py-3">
-        <div><h2 className="text-sm font-semibold text-[#101828]">通用页面资产库</h2><p className="mt-0.5 text-xs text-[#667085]">保存当前页，或复制资产到第 {currentSlideIndex + 1} 页之后</p></div>
+        <div><h2 className="text-sm font-semibold text-[#101828]">通用 PPT 资产库</h2><p className="mt-0.5 text-xs text-[#667085]">页面插入到当前页后，图表、图片、文案和组件插入当前页</p></div>
         <button type="button" onClick={() => setOpen(false)} className="rounded-full p-2 hover:bg-[#F2F4F7]"><X className="h-4 w-4" /></button>
       </header>
       <form onSubmit={saveCurrentSlide} className="space-y-2 border-b border-[#EAECF0] p-4">
         <div className="flex items-center gap-2 text-xs font-medium text-[#344054]"><Save className="h-4 w-4" />保存当前页为资产</div>
         <input value={name} onChange={(event) => setName(event.target.value)} placeholder="资产名称" className="h-9 w-full rounded-lg border border-[#D9DCE3] px-3 text-xs" />
         <div className="flex gap-2"><input value={tags} onChange={(event) => setTags(event.target.value)} placeholder="标签，逗号分隔" className="h-9 min-w-0 flex-1 rounded-lg border border-[#D9DCE3] px-3 text-xs" /><select value={scope} onChange={(event) => setScope(event.target.value as "personal" | "workspace")} className="h-9 rounded-lg border border-[#D9DCE3] px-2 text-xs"><option value="personal">个人资产</option><option value="workspace">空间资产</option></select></div>
-        <button disabled={!currentSlideId || !name.trim() || pending === "save"} className="flex h-9 w-full items-center justify-center gap-2 rounded-lg bg-[#635BFF] text-xs text-white disabled:opacity-40">{pending === "save" && <Loader2 className="h-3.5 w-3.5 animate-spin" />}保存快照</button>
+        <div className="grid grid-cols-2 gap-2"><button disabled={!currentSlideId || !name.trim() || Boolean(pending)} className="flex h-9 items-center justify-center gap-2 rounded-lg bg-[#635BFF] text-xs text-white disabled:opacity-40">{pending === "save" && <Loader2 className="h-3.5 w-3.5 animate-spin" />}保存整页</button><button type="button" onClick={() => void saveSelectedAsset()} disabled={!selectedAssetTarget || !name.trim() || Boolean(pending)} className="flex h-9 items-center justify-center gap-2 rounded-lg border border-[#CBC7FF] text-xs text-[#4238CA] disabled:opacity-40">{pending === "save-selection" && <Loader2 className="h-3.5 w-3.5 animate-spin" />}保存选中{selectedAssetTarget?.assetType === "component" ? "组件" : "元素"}</button></div>
       </form>
       <div className="flex min-h-0 flex-1 flex-col p-4">
         <div className="mb-3 grid grid-cols-4 gap-1 rounded-lg bg-[#F2F4F7] p-1">{(["recommended", "recent", "favorites", "all"] as const).map((item) => <button key={item} onClick={() => setView(item)} className={`rounded-md px-1 py-1.5 text-[10px] ${view === item ? "bg-white font-medium text-[#4238CA] shadow-sm" : "text-[#667085]"}`}>{item === "recommended" ? "推荐" : item === "recent" ? "最近" : item === "favorites" ? "收藏" : "全部"}</button>)}</div>
         <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索名称或标签" className="h-9 rounded-lg border border-[#D9DCE3] px-3 text-xs" />
         {error && <p className="mt-2 rounded-lg bg-[#FEF2F2] p-2 text-xs text-[#B42318]">{error}</p>}
         <div className="mt-3 min-h-0 flex-1 space-y-2 overflow-y-auto">
-          {visibleAssets.length === 0 && <p className="rounded-xl bg-[#F8F9FC] p-5 text-center text-xs text-[#667085]">暂无可复用页面资产</p>}
+          {visibleAssets.length === 0 && <p className="rounded-xl bg-[#F8F9FC] p-5 text-center text-xs text-[#667085]">暂无可复用资产</p>}
           {visibleAssets.map((item) => { const asset = item.asset; return <article key={asset.id} className="rounded-xl border border-[#EAECF0] p-3">
             <div className="flex items-start justify-between gap-2"><div className="min-w-0"><p className="truncate text-sm font-medium text-[#101828]">{asset.name}</p><p className="mt-1 text-[11px] text-[#667085]">{scopeLabel[asset.scope_type]} · v{asset.version_no}{asset.is_latest ? " 当前版" : ""} · {asset.status === "published" ? "已发布" : "草稿"} · 复用 {asset.usage_count} 次</p></div><button type="button" onClick={() => void toggleFavorite(item)} className="rounded p-1 hover:bg-[#F2F4F7]" title="收藏"><Star className={`h-4 w-4 ${item.is_favorite ? "fill-[#F5B700] text-[#F5B700]" : "text-[#98A2B3]"}`} /></button></div>
             {EnterpriseApi.getAssetPreviewUrl(asset) && <div className="mt-2 aspect-[16/9] rounded-lg border border-[#EAECF0] bg-cover bg-center" role="img" aria-label={`${asset.name}预览图`} style={{ backgroundImage: `url(${EnterpriseApi.getAssetPreviewUrl(asset)})` }} />}
             {["queued", "rendering"].includes(asset.preview_status) && <p className="mt-2 inline-flex items-center gap-1 text-[10px] text-[#667085]"><Loader2 className="h-3 w-3 animate-spin" />正在生成高清预览</p>}
             {item.recommendation_reasons?.length > 0 && <p className="mt-2 text-[10px] text-[#667085]">{item.recommendation_reasons.slice(0, 2).join(" · ")}</p>}
             {asset.tags.length > 0 && <div className="mt-2 flex flex-wrap gap-1">{asset.tags.map((tag) => <span key={tag} className="rounded bg-[#F2F1FF] px-1.5 py-0.5 text-[10px] text-[#4238CA]">{tag}</span>)}</div>}
-            <div className="mt-3 grid grid-cols-2 gap-2"><button type="button" disabled={Boolean(pending)} onClick={() => void insert(asset)} className="flex h-8 items-center justify-center gap-1 rounded-lg border border-[#CBC7FF] text-xs text-[#4238CA] disabled:opacity-40">{pending === asset.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Plus className="h-3.5 w-3.5" />}兼容检查并插入</button><button type="button" disabled={Boolean(pending) || !currentSlideId || asset.status !== "published"} onClick={() => void createVersion(asset)} className="flex h-8 items-center justify-center gap-1 rounded-lg border border-[#D9DCE3] text-xs text-[#475467] disabled:opacity-40">{pending === `version:${asset.id}` && <Loader2 className="h-3.5 w-3.5 animate-spin" />}当前页建新版</button></div>
+            <div className="mt-3 grid grid-cols-2 gap-2"><button type="button" disabled={Boolean(pending) || (asset.asset_type !== "page" && !currentSlideId)} onClick={() => void insert(asset)} className="flex h-8 items-center justify-center gap-1 rounded-lg border border-[#CBC7FF] text-xs text-[#4238CA] disabled:opacity-40">{pending === asset.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Plus className="h-3.5 w-3.5" />}{asset.asset_type === "page" ? "兼容检查并插入" : "插入当前页"}</button><button type="button" disabled={Boolean(pending) || !currentSlideId || asset.status !== "published" || asset.asset_type !== "page"} onClick={() => void createVersion(asset)} className="flex h-8 items-center justify-center gap-1 rounded-lg border border-[#D9DCE3] text-xs text-[#475467] disabled:opacity-40">{pending === `version:${asset.id}` && <Loader2 className="h-3.5 w-3.5 animate-spin" />}当前页建新版</button></div>
           </article>; })}
         </div>
       </div>

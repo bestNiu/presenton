@@ -22,6 +22,13 @@ from services.enterprise.workspace_service import require_workspace_role
 
 
 ALLOWED_ASSET_TYPES = {"page", "chart", "image", "logo", "copy", "component"}
+ELEMENT_ASSET_TYPES = {"chart", "image", "logo", "copy", "component"}
+ELEMENT_TYPES_BY_ASSET = {
+    "chart": {"chart"},
+    "image": {"image"},
+    "logo": {"image"},
+    "copy": {"text", "text-list"},
+}
 
 
 def _presentation_template_id(presentation: PresentationModel) -> str | None:
@@ -90,6 +97,45 @@ def _build_preview(*, name: str, payload: dict, asset_type: str) -> dict:
 def _canonical_hash(value: object) -> str:
     payload = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _unique_component_id(components: list, preferred: str) -> str:
+    normalized = "-".join(part for part in preferred.lower().replace("_", "-").split("-") if part)[:64] or "asset"
+    existing = {
+        item.get("id") for item in components if isinstance(item, dict) and isinstance(item.get("id"), str)
+    }
+    candidate = normalized
+    suffix = 2
+    while candidate in existing:
+        candidate = f"{normalized}-{suffix}"
+        suffix += 1
+    return candidate
+
+
+def _component_from_asset(asset: AssetItemModel, components: list) -> dict:
+    payload = asset.payload or {}
+    if asset.asset_type == "component":
+        if payload.get("format") != "presentation-component-v1" or not isinstance(payload.get("component"), dict):
+            raise HTTPException(status_code=422, detail="Component asset payload is invalid")
+        component = copy.deepcopy(payload["component"])
+        if not isinstance(component.get("elements"), list) or not component["elements"]:
+            raise HTTPException(status_code=422, detail="Component asset has no editable elements")
+    else:
+        if payload.get("format") != "presentation-element-v1" or not isinstance(payload.get("element"), dict):
+            raise HTTPException(status_code=422, detail="Element asset payload is invalid")
+        element = copy.deepcopy(payload["element"])
+        allowed = ELEMENT_TYPES_BY_ASSET.get(asset.asset_type, set())
+        if element.get("type") not in allowed:
+            raise HTTPException(status_code=422, detail="Element type does not match asset type")
+        component = {
+            "description": asset.description or f"Reusable {asset.asset_type} asset: {asset.name}",
+            "elements": [element],
+        }
+    component["id"] = _unique_component_id(components, str(component.get("id") or asset.name or asset.asset_type))
+    if not isinstance(component.get("position"), dict):
+        offset = min(40 + len(components) * 16, 240)
+        component["position"] = {"x": offset, "y": offset}
+    return component
 
 
 async def _validate_scope(
@@ -210,6 +256,54 @@ async def save_slide_as_asset(
         "compatibility": _presentation_compatibility(presentation),
     })
     return await create_asset(session, principal=principal, values=values, commit=commit)
+
+
+async def save_slide_element_as_asset(
+    session: AsyncSession,
+    *,
+    principal: AuthPrincipal,
+    workspace_id: uuid.UUID,
+    entry_id: uuid.UUID,
+    slide_id: uuid.UUID,
+    values: dict,
+) -> AssetItemModel:
+    await require_workspace_role(session, workspace_id=workspace_id, principal=principal, required_role=WorkspaceRole.EDITOR)
+    entry = await session.get(PresentationEntryModel, entry_id)
+    if entry is None or entry.workspace_id != workspace_id:
+        raise HTTPException(status_code=404, detail="Presentation entry not found")
+    slide = await session.scalar(select(SlideModel).execution_options(skip_owner_scope=True).where(SlideModel.id == slide_id, SlideModel.presentation == entry.presentation_id))
+    presentation = await session.scalar(select(PresentationModel).execution_options(skip_owner_scope=True).where(PresentationModel.id == entry.presentation_id))
+    if slide is None or presentation is None:
+        raise HTTPException(status_code=404, detail="Slide not found")
+    ui = slide.ui if isinstance(slide.ui, dict) else {}
+    components = ui.get("components") if isinstance(ui.get("components"), list) else []
+    component_index = values.pop("component_index")
+    element_index = values.pop("element_index", None)
+    if component_index >= len(components) or not isinstance(components[component_index], dict):
+        raise HTTPException(status_code=422, detail="Selected component no longer exists")
+    component = components[component_index]
+    asset_type = values["asset_type"]
+    if asset_type == "component":
+        payload = {"format": "presentation-component-v1", "component": copy.deepcopy(component)}
+    else:
+        elements = component.get("elements") if isinstance(component.get("elements"), list) else []
+        if element_index is None or element_index >= len(elements) or not isinstance(elements[element_index], dict):
+            raise HTTPException(status_code=422, detail="Selected element no longer exists")
+        element = elements[element_index]
+        if element.get("type") not in ELEMENT_TYPES_BY_ASSET.get(asset_type, set()):
+            raise HTTPException(status_code=422, detail="Selected element does not match asset type")
+        payload = {"format": "presentation-element-v1", "element": copy.deepcopy(element)}
+    scope_type = AssetScopeType(values.get("scope_type", AssetScopeType.PERSONAL))
+    values.update({
+        "scope_type": scope_type,
+        "workspace_id": workspace_id if scope_type == AssetScopeType.WORKSPACE else None,
+        "payload": payload,
+        "source_presentation_entry_id": entry.id,
+        "source_slide_id": slide.id,
+        "scene_type": values.get("scene_type") or entry.scene_type,
+        "compatibility": _presentation_compatibility(presentation),
+    })
+    return await create_asset(session, principal=principal, values=values)
 
 
 async def save_slide_as_asset_version(
@@ -621,6 +715,86 @@ async def insert_asset_page(
     await session.commit()
     await session.refresh(slide)
     return slide, compatibility
+
+
+async def insert_asset_element(
+    session: AsyncSession,
+    *,
+    asset_id: uuid.UUID,
+    workspace_id: uuid.UUID,
+    entry_id: uuid.UUID,
+    slide_id: uuid.UUID,
+    principal: AuthPrincipal,
+) -> tuple[SlideModel, str, int, str]:
+    await require_workspace_role(
+        session,
+        workspace_id=workspace_id,
+        principal=principal,
+        required_role=WorkspaceRole.EDITOR,
+    )
+    entry = await session.get(PresentationEntryModel, entry_id)
+    if entry is None or entry.workspace_id != workspace_id:
+        raise HTTPException(status_code=404, detail="Presentation entry not found")
+    if PresentationEntryStatus(entry.status) != PresentationEntryStatus.DRAFT:
+        raise HTTPException(status_code=409, detail="Only draft presentation accepts reusable assets")
+    asset = await _require_asset_access(session, asset_id=asset_id, principal=principal)
+    if asset.asset_type not in ELEMENT_ASSET_TYPES:
+        raise HTTPException(status_code=422, detail="Asset cannot be inserted into a slide")
+    if AssetStatus(asset.status) in {AssetStatus.OFFLINE, AssetStatus.ARCHIVED}:
+        raise HTTPException(status_code=409, detail="Asset is not available")
+    if asset.status != AssetStatus.PUBLISHED and asset.created_by != principal.user_id:
+        raise HTTPException(status_code=409, detail="Asset is not published")
+    if asset.authorization_status == "revoked":
+        raise HTTPException(status_code=409, detail="Asset authorization is revoked")
+    if asset.expires_at is not None:
+        expires_at = asset.expires_at.replace(tzinfo=timezone.utc) if asset.expires_at.tzinfo is None else asset.expires_at
+        if expires_at < datetime.now(timezone.utc):
+            raise HTTPException(status_code=409, detail="Asset authorization has expired")
+    slide = await session.scalar(
+        select(SlideModel).execution_options(skip_owner_scope=True).where(
+            SlideModel.id == slide_id,
+            SlideModel.presentation == entry.presentation_id,
+        )
+    )
+    if slide is None:
+        raise HTTPException(status_code=404, detail="Slide not found")
+    ui = copy.deepcopy(slide.ui) if isinstance(slide.ui, dict) else {}
+    components = ui.get("components")
+    if not isinstance(components, list):
+        components = []
+    component = _component_from_asset(asset, components)
+    component_index = len(components)
+    components.append(component)
+    ui["components"] = components
+    slide.ui = ui
+    asset.usage_count += 1
+    usage_event = AssetUsageEventModel(
+        asset_id=asset.id,
+        workspace_id=workspace_id,
+        presentation_entry_id=entry.id,
+        slide_id=slide.id,
+        reused_by=principal.user_id,
+        insert_index=slide.index,
+    )
+    session.add_all([slide, asset, usage_event])
+    record_audit_event(
+        session,
+        actor_id=principal.user_id,
+        workspace_id=workspace_id,
+        action="asset.element_reused",
+        resource_type="asset_item",
+        resource_id=asset.id,
+        metadata={
+            "entry_id": str(entry.id),
+            "slide_id": str(slide.id),
+            "component_id": component["id"],
+            "component_index": component_index,
+            "asset_type": asset.asset_type,
+        },
+    )
+    await session.commit()
+    await session.refresh(slide)
+    return slide, component["id"], component_index, asset.asset_type
 
 
 async def get_asset_analytics(

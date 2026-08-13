@@ -9,6 +9,8 @@ from api.v1.auth.principal import AuthPrincipal, principal_from_request
 from api.v1.enterprise.schemas import (
     AssetCreateRequest,
     AssetCompatibilityResponse,
+    AssetElementInsertRequest,
+    AssetElementInsertResponse,
     AssetItemResponse,
     AssetPageInsertRequest,
     AssetPageInsertResponse,
@@ -21,6 +23,7 @@ from api.v1.enterprise.schemas import (
     AssetPersonalizedItemResponse,
     AssetPreviewTaskResponse,
     SlideAssetCreateRequest,
+    SlideElementAssetCreateRequest,
     SlideAssetVersionCreateRequest,
     AuditEventResponse,
     BidDocumentCreateRequest,
@@ -135,9 +138,11 @@ from services.enterprise.asset_library_service import (
     get_asset_analytics,
     get_asset_compatibility,
     insert_asset_page,
+    insert_asset_element,
     list_asset_versions,
     list_assets,
     save_slide_as_asset,
+    save_slide_element_as_asset,
     save_slide_as_asset_version,
     transition_asset,
 )
@@ -357,6 +362,29 @@ async def post_presentation_slide_asset(
 
 
 @API_V1_ENTERPRISE_ROUTER.post(
+    "/workspaces/{workspace_id}/presentations/{entry_id}/slides/{slide_id}/element-assets",
+    response_model=AssetItemResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def post_presentation_slide_element_asset(
+    workspace_id: uuid.UUID,
+    entry_id: uuid.UUID,
+    slide_id: uuid.UUID,
+    body: SlideElementAssetCreateRequest,
+    principal: AuthPrincipal = Depends(principal_from_request),
+    session: AsyncSession = Depends(get_async_session),
+):
+    return await save_slide_element_as_asset(
+        session,
+        principal=principal,
+        workspace_id=workspace_id,
+        entry_id=entry_id,
+        slide_id=slide_id,
+        values=body.model_dump(),
+    )
+
+
+@API_V1_ENTERPRISE_ROUTER.post(
     "/workspaces/{workspace_id}/presentations/{entry_id}/slides/{slide_id}/assets/{asset_id}/versions",
     response_model=AssetItemResponse,
     status_code=status.HTTP_201_CREATED,
@@ -503,6 +531,34 @@ async def post_enterprise_asset_insert_page(
         slide_index=slide.index,
         asset_id=asset_id,
         compatibility=AssetCompatibilityResponse.model_validate(compatibility),
+    )
+
+
+@API_V1_ENTERPRISE_ROUTER.post(
+    "/assets/{asset_id}/insert-element",
+    response_model=AssetElementInsertResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def post_enterprise_asset_insert_element(
+    asset_id: uuid.UUID,
+    body: AssetElementInsertRequest,
+    principal: AuthPrincipal = Depends(principal_from_request),
+    session: AsyncSession = Depends(get_async_session),
+):
+    slide, component_id, component_index, asset_type = await insert_asset_element(
+        session,
+        asset_id=asset_id,
+        workspace_id=body.workspace_id,
+        entry_id=body.presentation_entry_id,
+        slide_id=body.slide_id,
+        principal=principal,
+    )
+    return AssetElementInsertResponse(
+        asset_id=asset_id,
+        slide_id=slide.id,
+        component_id=component_id,
+        component_index=component_index,
+        asset_type=asset_type,
     )
 
 

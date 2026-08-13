@@ -751,6 +751,73 @@ def test_asset_library_page_snapshot_lifecycle_and_reuse(tmp_path, monkeypatch):
                 "after_index": 0,
             },
         )
+        chart_asset = client.post(
+            "/api/v1/enterprise/assets",
+            json={
+                "workspace_id": workspace["id"],
+                "scope_type": "workspace",
+                "asset_type": "chart",
+                "name": "季度趋势图",
+                "tags": ["经营", "图表"],
+                "payload": {
+                    "format": "presentation-element-v1",
+                    "element": {
+                        "type": "chart",
+                        "chart_type": "bar",
+                        "data": {
+                            "labels": ["Q1", "Q2"],
+                            "datasets": [{"label": "收入", "data": [12, 18]}],
+                        },
+                        "size": {"width": 520, "height": 280},
+                    },
+                },
+                "compatibility": {"presentation_version": "v2-standard", "editable": True},
+            },
+        )
+        chart_asset_id = chart_asset.json()["id"]
+        client.post(f"/api/v1/enterprise/assets/{chart_asset_id}/transitions/publish")
+        inserted_chart = client.post(
+            f"/api/v1/enterprise/assets/{chart_asset_id}/insert-element",
+            json={
+                "workspace_id": workspace["id"],
+                "presentation_entry_id": entry["id"],
+                "slide_id": str(slide_id),
+            },
+        )
+        element_asset_specs = [
+            ("image", "品牌主视觉", {"format": "presentation-element-v1", "element": {"type": "image", "data": "/app_data/images/brand.png", "size": {"width": 320, "height": 180}}}),
+            ("copy", "标准结论文案", {"format": "presentation-element-v1", "element": {"type": "text", "runs": [{"text": "经营质量持续改善"}], "size": {"width": 420, "height": 80}}}),
+            ("component", "结论组合组件", {"format": "presentation-component-v1", "component": {"id": "insight", "description": "Reusable insight component", "elements": [{"type": "text", "runs": [{"text": "关键洞察"}], "size": {"width": 300, "height": 60}}]}}),
+        ]
+        additional_insertions = []
+        for asset_type, asset_name, payload in element_asset_specs:
+            created_element_asset = client.post(
+                "/api/v1/enterprise/assets",
+                json={
+                    "workspace_id": workspace["id"],
+                    "scope_type": "workspace",
+                    "asset_type": asset_type,
+                    "name": asset_name,
+                    "payload": payload,
+                    "compatibility": {"presentation_version": "v2-standard", "editable": True},
+                },
+            ).json()
+            client.post(f"/api/v1/enterprise/assets/{created_element_asset['id']}/transitions/publish")
+            additional_insertions.append(client.post(
+                f"/api/v1/enterprise/assets/{created_element_asset['id']}/insert-element",
+                json={"workspace_id": workspace["id"], "presentation_entry_id": entry["id"], "slide_id": str(slide_id)},
+            ))
+        saved_selected_chart = client.post(
+            f"/api/v1/enterprise/workspaces/{workspace['id']}/presentations/{entry['id']}/slides/{slide_id}/element-assets",
+            json={
+                "scope_type": "personal",
+                "asset_type": "chart",
+                "name": "从编辑器保存的趋势图",
+                "tags": ["选中元素"],
+                "component_index": 0,
+                "element_index": 0,
+            },
+        )
         reused_assets = client.get(
             "/api/v1/enterprise/assets",
             params={"workspace_id": workspace["id"]},
@@ -916,15 +983,24 @@ def test_asset_library_page_snapshot_lifecycle_and_reuse(tmp_path, monkeypatch):
         assert inserted.status_code == 201
         assert inserted.json()["slide_index"] == 1
         assert inserted.json()["compatibility"]["status"] == "warning"
+        assert chart_asset.status_code == 201
+        assert inserted_chart.status_code == 201
+        assert inserted_chart.json()["asset_type"] == "chart"
+        assert inserted_chart.json()["component_index"] == 0
+        assert [response.status_code for response in additional_insertions] == [201, 201, 201]
+        assert [response.json()["component_index"] for response in additional_insertions] == [1, 2, 3]
+        assert saved_selected_chart.status_code == 201
+        assert saved_selected_chart.json()["asset_type"] == "chart"
+        assert saved_selected_chart.json()["source_slide_id"] == str(slide_id)
         assert next(item for item in reused_assets.json() if item["id"] == asset_id)["usage_count"] == 1
         assert analytics.status_code == 200
-        assert analytics.json()["total_reuses"] == 1
+        assert analytics.json()["total_reuses"] == 5
         assert analytics.json()["unique_presentations"] == 1
         assert analytics.json()["unique_users"] == 1
-        assert analytics.json()["top_assets"][0]["asset_id"] == asset_id
+        assert {item["asset_id"] for item in analytics.json()["top_assets"]} >= {asset_id, chart_asset_id}
         assert saved.json()["preview"]["title"] == "核心经营指标"
-        assert recent_assets.json()[0]["asset"]["id"] == asset_id
-        assert recent_assets.json()[0]["last_used_at"]
+        assert {item["asset"]["id"] for item in recent_assets.json()} >= {asset_id, chart_asset_id}
+        assert all(item["last_used_at"] for item in recent_assets.json())
         assert owner_favorite.json()["is_favorite"] is True
         assert owner_unfavorite.json()["is_favorite"] is False
         assert new_version.status_code == 201
@@ -941,6 +1017,8 @@ def test_asset_library_page_snapshot_lifecycle_and_reuse(tmp_path, monkeypatch):
         assert blocked_insert.json()["detail"]["compatibility"]["status"] == "blocked"
         assert len(presentation.json()["slides"]) == 2
         assert presentation.json()["slides"][1]["content"]["title"] == "核心经营指标"
+        assert presentation.json()["slides"][0]["ui"]["components"][0]["elements"][0]["type"] == "chart"
+        assert [component["elements"][0]["type"] for component in presentation.json()["slides"][0]["ui"]["components"]] == ["chart", "image", "text", "text"]
         assert offline.json()["status"] == "offline"
         assert offline_insert_denied.status_code == 409
         assert outsider_list_denied.status_code == 404
@@ -958,6 +1036,7 @@ def test_asset_library_page_snapshot_lifecycle_and_reuse(tmp_path, monkeypatch):
             "asset.favorited", "asset.unfavorited",
             "asset.preview_queued", "asset.preview_ready", "asset.preview_failed",
             "asset.version_created",
+            "asset.element_reused",
         }
     finally:
         asyncio.run(engine.dispose())

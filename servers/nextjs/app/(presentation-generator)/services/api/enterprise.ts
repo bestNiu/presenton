@@ -454,6 +454,14 @@ export interface AssetPreviewTaskResponse {
   status: string;
 }
 
+export interface AssetElementInsertResponse {
+  asset_id: string;
+  slide_id: string;
+  component_id: string;
+  component_index: number;
+  asset_type: string;
+}
+
 export type AssetPromotionStatus = "pending" | "approved" | "rejected" | "cancelled";
 
 export interface AssetPromotionResponse {
@@ -616,6 +624,26 @@ export class EnterpriseApi {
     return ApiResponseHandler.handleResponse(response, "Failed to save slide as asset");
   }
 
+  static async saveSlideElementAsAsset(
+    workspaceId: string,
+    entryId: string,
+    slideId: string,
+    input: {
+      scope_type: "personal" | "workspace";
+      name: string;
+      tags: string[];
+      asset_type: "chart" | "image" | "copy" | "component";
+      component_index: number;
+      element_index?: number;
+    }
+  ): Promise<AssetItemResponse> {
+    const response = await fetch(
+      getApiUrl(`/api/v1/enterprise/workspaces/${encodeURIComponent(workspaceId)}/presentations/${encodeURIComponent(entryId)}/slides/${encodeURIComponent(slideId)}/element-assets`),
+      { method: "POST", credentials: "include", headers: { "Content-Type": "application/json" }, body: JSON.stringify(input) }
+    );
+    return ApiResponseHandler.handleResponse(response, "Failed to save selected asset");
+  }
+
   static async saveSlideAsAssetVersion(
     workspaceId: string,
     entryId: string,
@@ -704,6 +732,28 @@ export class EnterpriseApi {
       }
     );
     return ApiResponseHandler.handleResponse(response, "Failed to insert asset page");
+  }
+
+  static async insertAssetElement(
+    assetId: string,
+    workspaceId: string,
+    entryId: string,
+    slideId: string
+  ): Promise<AssetElementInsertResponse> {
+    const response = await fetch(
+      getApiUrl(`/api/v1/enterprise/assets/${encodeURIComponent(assetId)}/insert-element`),
+      {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          workspace_id: workspaceId,
+          presentation_entry_id: entryId,
+          slide_id: slideId,
+        }),
+      }
+    );
+    return ApiResponseHandler.handleResponse(response, "Failed to insert asset element");
   }
 
   static async createAssetPromotionRequest(

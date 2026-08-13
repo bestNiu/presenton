@@ -5,6 +5,7 @@ import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   ArrowRight,
+  Bell,
   Building2,
   FilePlus2,
   FileText,
@@ -22,6 +23,7 @@ import {
 import {
   EnterpriseApi,
   type ConfidentialityLevel,
+  type EnterpriseNotificationListResponse,
   type PresentationEntryResponse,
   type PresentationQualityRunResponse,
   type PresentationReviewInboxResponse,
@@ -61,6 +63,8 @@ function WorkspacePage() {
     useState<PresentationEntryResponse[]>([]);
   const [qualityReports, setQualityReports] = useState<Record<string, PresentationQualityRunResponse | null>>({});
   const [reviewInbox, setReviewInbox] = useState<PresentationReviewInboxResponse | null>(null);
+  const [notifications, setNotifications] = useState<EnterpriseNotificationListResponse | null>(null);
+  const [showNotifications, setShowNotifications] = useState(false);
   const [reviewInboxFilter, setReviewInboxFilter] = useState<"all" | "mine" | "overdue">("all");
   const [publishedTemplates, setPublishedTemplates] =
     useState<TemplatePublicationResponse[]>([]);
@@ -100,6 +104,7 @@ function WorkspacePage() {
     if (!activeWorkspaceId) {
       setPresentations([]);
       setReviewInbox(null);
+      setNotifications(null);
       setPublishedTemplates([]);
       return;
     }
@@ -109,12 +114,14 @@ function WorkspacePage() {
       EnterpriseApi.getPresentations(activeWorkspaceId),
       EnterpriseApi.getPublishedTemplates(activeWorkspaceId),
       EnterpriseApi.getPresentationReviewInbox(activeWorkspaceId),
+      EnterpriseApi.getNotifications(activeWorkspaceId),
     ])
-      .then(([presentationRows, templateRows, inbox]) => {
+      .then(([presentationRows, templateRows, inbox, notificationResult]) => {
         if (active) {
           setPresentations(presentationRows);
           setPublishedTemplates(templateRows);
           setReviewInbox(inbox);
+          setNotifications(notificationResult);
           void Promise.all(presentationRows.map((item) => EnterpriseApi.getPresentationQualityReport(activeWorkspaceId, item.id)))
             .then((reports) => {
               if (active) setQualityReports(Object.fromEntries(presentationRows.map((item, index) => [item.id, reports[index].run])));
@@ -201,6 +208,24 @@ function WorkspacePage() {
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "整改任务加载失败");
     }
+  };
+
+  const openNotification = async (notificationId: string, actionUrl: string | null) => {
+    try {
+      await EnterpriseApi.markNotificationRead(notificationId);
+      setNotifications((current) => current ? {
+        unread_count: Math.max(0, current.unread_count - (current.notifications.find((item) => item.id === notificationId)?.is_read ? 0 : 1)),
+        notifications: current.notifications.map((item) => item.id === notificationId ? { ...item, is_read: true } : item),
+      } : current);
+      if (actionUrl) router.push(actionUrl);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "通知更新失败");
+    }
+  };
+
+  const readAllNotifications = async () => {
+    await EnterpriseApi.markAllNotificationsRead(activeWorkspaceId);
+    setNotifications((current) => current ? { unread_count: 0, notifications: current.notifications.map((item) => ({ ...item, is_read: true })) } : current);
   };
 
   const updateGovernancePolicy = async (reviewMode: "none" | "single") => {
@@ -309,6 +334,7 @@ function WorkspacePage() {
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
+          {activeWorkspaceId && <div className="relative"><button type="button" onClick={() => setShowNotifications((value) => !value)} className="relative inline-flex h-10 items-center gap-2 rounded-lg border border-[#D9DCE3] bg-white px-3 text-sm text-[#344054]"><Bell className="h-4 w-4" />通知{Boolean(notifications?.unread_count) && <span className="absolute -right-1 -top-1 flex h-5 min-w-5 items-center justify-center rounded-full bg-[#D92D20] px-1 text-[10px] text-white">{notifications?.unread_count}</span>}</button>{showNotifications && <div className="absolute right-0 top-12 z-30 w-[360px] overflow-hidden rounded-2xl border border-[#E3E4EA] bg-white shadow-xl"><div className="flex items-center justify-between border-b border-[#F0F1F3] px-4 py-3"><span className="text-sm font-semibold">站内通知</span><button type="button" onClick={() => void readAllNotifications()} className="text-xs text-[#635BFF]">全部已读</button></div><div className="max-h-96 overflow-y-auto">{notifications?.notifications.length ? notifications.notifications.map((item) => <button type="button" key={item.id} onClick={() => void openNotification(item.id, item.action_url)} className={`block w-full border-b border-[#F0F1F3] px-4 py-3 text-left hover:bg-[#F8F9FC] ${item.is_read ? "opacity-60" : "bg-[#FAFAFF]"}`}><div className="flex items-start justify-between gap-2"><p className="text-sm font-medium text-[#101828]">{item.title}</p>{!item.is_read && <span className="mt-1 h-2 w-2 shrink-0 rounded-full bg-[#635BFF]" />}</div><p className="mt-1 text-xs leading-5 text-[#667085]">{item.body}</p><p className="mt-1 text-[10px] text-[#98A2B3]">{new Date(item.created_at).toLocaleString()}</p></button>) : <p className="p-6 text-center text-sm text-[#667085]">暂无通知</p>}</div></div>}</div>}
           {activeWorkspaceId && (
             <Link
               href={`/workspace/templates?workspace_id=${encodeURIComponent(activeWorkspaceId)}`}

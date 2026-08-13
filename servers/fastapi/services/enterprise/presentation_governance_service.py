@@ -15,6 +15,7 @@ from domains.platform.enums import (
     WorkspaceRole,
 )
 from models.sql.enterprise.presentation_entry import PresentationEntryModel
+from models.sql.enterprise.workspace import WorkspaceMemberModel
 from models.sql.enterprise.presentation_governance import (
     PresentationReviewModel,
     PresentationQualityRunModel,
@@ -23,6 +24,7 @@ from models.sql.enterprise.presentation_governance import (
 from models.sql.presentation import PresentationModel
 from models.sql.slide import SlideModel
 from services.enterprise.audit_service import record_audit_event
+from services.enterprise.notification_service import queue_notifications
 from services.enterprise.workspace_service import require_workspace_role
 
 
@@ -162,6 +164,25 @@ async def submit_presentation_review(
     entry.status = PresentationEntryStatus.IN_REVIEW
     entry.row_version += 1
     session.add_all([review, entry])
+    reviewer_ids = set((await session.scalars(
+        select(WorkspaceMemberModel.user_id).where(
+            WorkspaceMemberModel.workspace_id == workspace_id,
+            WorkspaceMemberModel.role.in_([WorkspaceRole.REVIEWER, WorkspaceRole.ADMIN, WorkspaceRole.OWNER]),
+        )
+    )).all())
+    queue_notifications(
+        session,
+        recipient_ids=reviewer_ids,
+        actor_id=principal.user_id,
+        workspace_id=workspace_id,
+        notification_type="presentation.review_submitted",
+        title="有新的演示文稿待审批",
+        body=entry.title or "未命名演示文稿",
+        resource_type="presentation_review",
+        resource_id=review.id,
+        action_url=f"/workspace/presentations/{entry.id}/review?workspace_id={workspace_id}",
+        metadata={"entry_id": str(entry.id), "submission_no": submission_no},
+    )
     record_audit_event(
         session,
         actor_id=principal.user_id,
@@ -242,6 +263,20 @@ async def decide_presentation_review(
     )
     entry.row_version += 1
     session.add_all([review, entry])
+    if review.submitted_by:
+        queue_notifications(
+            session,
+            recipient_ids={review.submitted_by},
+            actor_id=principal.user_id,
+            workspace_id=workspace_id,
+            notification_type=("presentation.review_approved" if action == "approve" else "presentation.review_rejected"),
+            title="演示文稿审批通过" if action == "approve" else "演示文稿已退回",
+            body=entry.title or "未命名演示文稿",
+            resource_type="presentation_review",
+            resource_id=review.id,
+            action_url=f"/workspace/presentations/{entry.id}/review?workspace_id={workspace_id}",
+            metadata={"entry_id": str(entry.id), "comment": review.decision_comment},
+        )
     record_audit_event(
         session,
         actor_id=principal.user_id,

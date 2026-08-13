@@ -15,6 +15,7 @@ from models.sql.enterprise.bid import (
     BidStrategyModel,
 )
 from models.sql.enterprise.presentation_entry import PresentationEntryModel
+from models.sql.enterprise.notification import EnterpriseNotificationModel
 from models.sql.enterprise.presentation_governance import (
     PresentationDeliveryArtifactModel,
     PresentationDownloadGrantModel,
@@ -50,6 +51,7 @@ __all__ = [
     "BidReviewIssueModel",
     "BidStrategyModel",
     "PresentationEntryModel",
+    "EnterpriseNotificationModel",
     "PresentationDeliveryArtifactModel",
     "PresentationDownloadGrantModel",
     "PresentationCommentReplyModel",

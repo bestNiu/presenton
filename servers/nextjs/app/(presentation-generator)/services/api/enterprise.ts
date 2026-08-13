@@ -30,6 +30,27 @@ export interface WorkspaceMemberResponse {
   created_at: string;
 }
 
+export interface EnterpriseNotificationResponse {
+  id: string;
+  workspace_id: string | null;
+  actor_id: string | null;
+  notification_type: string;
+  title: string;
+  body: string;
+  resource_type: string;
+  resource_id: string;
+  action_url: string | null;
+  event_metadata: Record<string, unknown>;
+  is_read: boolean;
+  read_at: string | null;
+  created_at: string;
+}
+
+export interface EnterpriseNotificationListResponse {
+  unread_count: number;
+  notifications: EnterpriseNotificationResponse[];
+}
+
 export interface SceneDefinitionResponse {
   id: string;
   scene_type: string;
@@ -386,6 +407,24 @@ export class EnterpriseApi {
   static async getWorkspaceMembers(workspaceId: string): Promise<WorkspaceMemberResponse[]> {
     const response = await fetch(getApiUrl(`/api/v1/enterprise/workspaces/${encodeURIComponent(workspaceId)}/members`), { credentials: "include", cache: "no-store" });
     return ApiResponseHandler.handleResponse(response, "Failed to load workspace members");
+  }
+
+  static async getNotifications(workspaceId?: string, unreadOnly = false): Promise<EnterpriseNotificationListResponse> {
+    const params = new URLSearchParams({ unread_only: String(unreadOnly), limit: "30" });
+    if (workspaceId) params.set("workspace_id", workspaceId);
+    const response = await fetch(getApiUrl(`/api/v1/enterprise/notifications?${params.toString()}`), { credentials: "include", cache: "no-store" });
+    return ApiResponseHandler.handleResponse(response, "Failed to load notifications");
+  }
+
+  static async markNotificationRead(notificationId: string): Promise<EnterpriseNotificationResponse> {
+    const response = await fetch(getApiUrl(`/api/v1/enterprise/notifications/${encodeURIComponent(notificationId)}/read`), { method: "POST", credentials: "include" });
+    return ApiResponseHandler.handleResponse(response, "Failed to mark notification as read");
+  }
+
+  static async markAllNotificationsRead(workspaceId?: string): Promise<{ updated_count: number }> {
+    const suffix = workspaceId ? `?workspace_id=${encodeURIComponent(workspaceId)}` : "";
+    const response = await fetch(getApiUrl(`/api/v1/enterprise/notifications/read-all${suffix}`), { method: "POST", credentials: "include" });
+    return ApiResponseHandler.handleResponse(response, "Failed to mark notifications as read");
   }
 
   static async createWorkspace(input: {

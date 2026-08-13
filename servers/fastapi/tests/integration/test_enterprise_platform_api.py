@@ -16,6 +16,7 @@ from api.v1.ppt.endpoints.template import TEMPLATE_ROUTER
 from domains.platform.enums import SceneStatus
 from models.sql.enterprise import (
     AuditEventModel,
+    EnterpriseNotificationModel,
     BidDeliveryArtifactModel,
     BidDownloadGrantModel,
     BidProjectDocumentModel,
@@ -108,6 +109,7 @@ def _build_client(tmp_path):
                 PresentationQualityRunModel.__table__,
                 PresentationQualityIssueModel.__table__,
                 PresentationSourceCitationModel.__table__,
+                EnterpriseNotificationModel.__table__,
                 AuditEventModel.__table__,
                 TemplatePublicationModel.__table__,
                 BidProjectModel.__table__,
@@ -336,6 +338,24 @@ def test_presentation_registration_preserves_owner_and_allows_member_listing(tmp
             f"/api/v1/enterprise/workspaces/{workspace['id']}/presentations/{entry_id}/comment-threads",
             json={"slide_index": 0, "title": "补充数据口径", "body": "明确架构收益的统计口径", "is_blocking": True, "assigned_to": str(users["member"].id), "due_at": "2020-01-01T00:00:00Z"},
         )
+        member_notifications = client.get(
+            "/api/v1/enterprise/notifications",
+            params={"workspace_id": workspace["id"], "unread_only": True},
+            headers={"x-test-user": "member"},
+        )
+        marked_notification = client.post(
+            f"/api/v1/enterprise/notifications/{member_notifications.json()['notifications'][0]['id']}/read",
+            headers={"x-test-user": "member"},
+        )
+        outsider_notification_denied = client.post(
+            f"/api/v1/enterprise/notifications/{member_notifications.json()['notifications'][0]['id']}/read",
+            headers={"x-test-user": "outsider"},
+        )
+        member_read_all = client.post(
+            "/api/v1/enterprise/notifications/read-all",
+            params={"workspace_id": workspace["id"]},
+            headers={"x-test-user": "member"},
+        )
         review_inbox = client.get(
             f"/api/v1/enterprise/workspaces/{workspace['id']}/review-inbox"
         )
@@ -420,6 +440,11 @@ def test_presentation_registration_preserves_owner_and_allows_member_listing(tmp
         assert quality.json()["status"] == "passed"
         assert blocking_comment.status_code == 201
         assert blocking_comment.json()["slide_index"] == 0
+        assert member_notifications.json()["unread_count"] >= 1
+        assert {item["notification_type"] for item in member_notifications.json()["notifications"]} >= {"presentation.comment_assigned", "presentation.comment_overdue", "presentation.review_submitted"}
+        assert marked_notification.json()["is_read"] is True
+        assert outsider_notification_denied.status_code == 404
+        assert member_read_all.status_code == 200
         assert review_inbox.json()["summary"] == {"open_count": 1, "blocking_count": 1, "overdue_count": 1, "assigned_to_me_count": 0}
         assert member_review_inbox.json()["summary"]["assigned_to_me_count"] == 1
         assert member_review_inbox.json()["tasks"][0]["presentation_title"] == "企业架构汇报"

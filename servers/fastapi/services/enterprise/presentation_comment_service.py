@@ -16,6 +16,7 @@ from models.sql.enterprise.presentation_entry import PresentationEntryModel
 from models.sql.slide import SlideModel
 from models.sql.user import User
 from services.enterprise.audit_service import record_audit_event
+from services.enterprise.notification_service import queue_notifications
 from services.enterprise.presentation_governance_service import (
     _presentation_snapshot,
     _require_entry,
@@ -83,6 +84,20 @@ async def create_comment_thread(
         **values,
     )
     session.add(thread)
+    if thread.assigned_to:
+        queue_notifications(
+            session,
+            recipient_ids={thread.assigned_to},
+            actor_id=principal.user_id,
+            workspace_id=workspace_id,
+            notification_type="presentation.comment_assigned",
+            title="收到新的演示整改任务",
+            body=f"{entry.title or '演示文稿'}：{thread.title}",
+            resource_type="presentation_comment_thread",
+            resource_id=thread.id,
+            action_url=f"/workspace/presentations/{entry.id}/review?workspace_id={workspace_id}",
+            metadata={"entry_id": str(entry.id), "due_at": thread.due_at.isoformat() if thread.due_at else None},
+        )
     record_audit_event(
         session,
         actor_id=principal.user_id,
@@ -140,10 +155,22 @@ async def add_comment_reply(
     await require_workspace_role(
         session, workspace_id=workspace_id, principal=principal, required_role=WorkspaceRole.REVIEWER
     )
-    await _require_entry(session, workspace_id=workspace_id, entry_id=entry_id)
+    entry = await _require_entry(session, workspace_id=workspace_id, entry_id=entry_id)
     thread = await _require_thread(session, entry_id=entry_id, thread_id=thread_id)
     reply = PresentationCommentReplyModel(thread_id=thread.id, body=body.strip(), created_by=principal.user_id)
     session.add(reply)
+    queue_notifications(
+        session,
+        recipient_ids={recipient for recipient in (thread.created_by, thread.assigned_to) if recipient},
+        actor_id=principal.user_id,
+        workspace_id=workspace_id,
+        notification_type="presentation.comment_replied",
+        title="演示整改任务有新回复",
+        body=f"{entry.title or '演示文稿'}：{thread.title}",
+        resource_type="presentation_comment_thread",
+        resource_id=thread.id,
+        action_url=f"/workspace/presentations/{entry.id}/review?workspace_id={workspace_id}",
+    )
     await session.commit()
     await session.refresh(reply)
     return reply
@@ -161,13 +188,25 @@ async def transition_comment_thread(
     await require_workspace_role(
         session, workspace_id=workspace_id, principal=principal, required_role=WorkspaceRole.REVIEWER
     )
-    await _require_entry(session, workspace_id=workspace_id, entry_id=entry_id)
+    entry = await _require_entry(session, workspace_id=workspace_id, entry_id=entry_id)
     thread = await _require_thread(session, entry_id=entry_id, thread_id=thread_id)
     resolved = action == "resolve"
     thread.status = PresentationCommentStatus.RESOLVED if resolved else PresentationCommentStatus.OPEN
     thread.resolved_by = principal.user_id if resolved else None
     thread.resolved_at = datetime.now(timezone.utc) if resolved else None
     session.add(thread)
+    queue_notifications(
+        session,
+        recipient_ids={recipient for recipient in (thread.created_by, thread.assigned_to) if recipient},
+        actor_id=principal.user_id,
+        workspace_id=workspace_id,
+        notification_type=f"presentation.comment_{'resolved' if resolved else 'reopened'}",
+        title="演示整改任务已解决" if resolved else "演示整改任务已重新打开",
+        body=f"{entry.title or '演示文稿'}：{thread.title}",
+        resource_type="presentation_comment_thread",
+        resource_id=thread.id,
+        action_url=f"/workspace/presentations/{entry.id}/review?workspace_id={workspace_id}",
+    )
     record_audit_event(
         session,
         actor_id=principal.user_id,

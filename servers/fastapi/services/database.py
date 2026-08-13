@@ -30,6 +30,7 @@ from models.sql.access_token import AccessToken
 from models.sql.provider_settings import ProviderSettings
 from models.sql.enterprise import (
     AuditEventModel,
+    EnterpriseNotificationModel,
     BidDeliveryArtifactModel,
     BidDownloadGrantModel,
     BidProjectDocumentModel,

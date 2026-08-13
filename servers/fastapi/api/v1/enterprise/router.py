@@ -42,6 +42,9 @@ from api.v1.enterprise.schemas import (
     BidStrategyUpdateRequest,
     FolderCreateRequest,
     FolderResponse,
+    EnterpriseNotificationListResponse,
+    EnterpriseNotificationReadAllResponse,
+    EnterpriseNotificationResponse,
     PresentationEntryResponse,
     PresentationCommentCreateRequest,
     PresentationCommentReplyCreateRequest,
@@ -105,6 +108,12 @@ from services.enterprise.presentation_delivery_service import (
     issue_presentation_download_grant,
     list_presentation_deliveries,
 )
+from services.enterprise.notification_service import (
+    list_notifications,
+    mark_all_notifications_read,
+    mark_notification_read,
+    refresh_due_notifications,
+)
 from services.enterprise.bid_project_service import (
     add_project_document,
     confirm_project_profile,
@@ -167,6 +176,31 @@ from services.enterprise.workspace_service import (
 API_V1_ENTERPRISE_ROUTER = APIRouter(
     prefix="/api/v1/enterprise", tags=["Enterprise Platform"]
 )
+
+
+@API_V1_ENTERPRISE_ROUTER.get(
+    "/notifications",
+    response_model=EnterpriseNotificationListResponse,
+)
+async def get_enterprise_notifications(workspace_id: uuid.UUID | None = Query(default=None), unread_only: bool = Query(default=False), limit: int = Query(default=30, ge=1, le=100), principal: AuthPrincipal = Depends(principal_from_request), session: AsyncSession = Depends(get_async_session)):
+    await refresh_due_notifications(session, principal=principal, workspace_id=workspace_id)
+    return await list_notifications(session, principal=principal, workspace_id=workspace_id, unread_only=unread_only, limit=limit)
+
+
+@API_V1_ENTERPRISE_ROUTER.post(
+    "/notifications/{notification_id}/read",
+    response_model=EnterpriseNotificationResponse,
+)
+async def post_enterprise_notification_read(notification_id: uuid.UUID, principal: AuthPrincipal = Depends(principal_from_request), session: AsyncSession = Depends(get_async_session)):
+    return await mark_notification_read(session, principal=principal, notification_id=notification_id)
+
+
+@API_V1_ENTERPRISE_ROUTER.post(
+    "/notifications/read-all",
+    response_model=EnterpriseNotificationReadAllResponse,
+)
+async def post_enterprise_notifications_read_all(workspace_id: uuid.UUID | None = Query(default=None), principal: AuthPrincipal = Depends(principal_from_request), session: AsyncSession = Depends(get_async_session)):
+    return {"updated_count": await mark_all_notifications_read(session, principal=principal, workspace_id=workspace_id)}
 
 
 @API_V1_ENTERPRISE_ROUTER.post("/bid/projects/{project_id}/releases/assemble", response_model=BidReleaseResponse, status_code=status.HTTP_201_CREATED)

@@ -414,6 +414,33 @@ class WorkspaceMemberResponse(BaseModel):
     created_at: datetime
 
 
+class EnterpriseNotificationResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: uuid.UUID
+    recipient_id: uuid.UUID
+    workspace_id: uuid.UUID | None
+    actor_id: uuid.UUID | None
+    notification_type: str
+    title: str
+    body: str
+    resource_type: str
+    resource_id: str
+    action_url: str | None
+    event_metadata: dict
+    is_read: bool
+    read_at: datetime | None
+    created_at: datetime
+
+
+class EnterpriseNotificationListResponse(BaseModel):
+    unread_count: int
+    notifications: list[EnterpriseNotificationResponse]
+
+
+class EnterpriseNotificationReadAllResponse(BaseModel):
+    updated_count: int
+
+
 class FolderCreateRequest(BaseModel):
     name: str = Field(min_length=1, max_length=200)
     parent_id: uuid.UUID | None = None

@@ -1134,6 +1134,19 @@ class PresentationDeliveryArtifactResponse(BaseModel):
     purged_at: datetime | None
 
 
+class PresentationDeliveryEvidenceResponse(BaseModel):
+    artifact: PresentationDeliveryArtifactResponse
+    snapshot_id: uuid.UUID
+    snapshot_version: int
+    snapshot_manifest_hash: str
+    citation_manifest_hash: str | None
+    citation_count: int
+    file_integrity: bool
+    snapshot_integrity: bool
+    citation_integrity: bool
+    credential_hash: str
+
+
 class PresentationQualityIssueResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: uuid.UUID

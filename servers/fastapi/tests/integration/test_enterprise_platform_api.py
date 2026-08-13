@@ -1023,6 +1023,9 @@ def test_presentation_registration_preserves_owner_and_allows_member_listing(tmp
             f"/api/v1/enterprise/workspaces/{workspace['id']}/presentations/{entry_id}/deliveries",
             json={"snapshot_id": frozen.json()["id"], "format": "pdf"},
         )
+        delivery_evidence = client.get(
+            f"/api/v1/enterprise/workspaces/{workspace['id']}/presentations/{entry_id}/deliveries/{delivery.json()['id']}/evidence"
+        )
         delivery_grant = client.post(
             f"/api/v1/enterprise/workspaces/{workspace['id']}/presentations/{entry_id}/deliveries/{delivery.json()['id']}/grants",
             json={"expires_in_minutes": 30, "max_downloads": 1},
@@ -1041,6 +1044,13 @@ def test_presentation_registration_preserves_owner_and_allows_member_listing(tmp
         revoked_delivery_grant_denied = client.post(
             f"/api/v1/enterprise/workspaces/{workspace['id']}/presentations/{entry_id}/deliveries/{delivery.json()['id']}/grants",
             json={"expires_in_minutes": 30, "max_downloads": 1},
+        )
+        delivery_activity = client.get(
+            f"/api/v1/enterprise/workspaces/{workspace['id']}/presentations/{entry_id}/deliveries/{delivery.json()['id']}/activity"
+        )
+        delivery_activity_denied = client.get(
+            f"/api/v1/enterprise/workspaces/{workspace['id']}/presentations/{entry_id}/deliveries/{delivery.json()['id']}/activity",
+            headers={"x-test-user": "member"},
         )
         governance = client.get(
             f"/api/v1/enterprise/workspaces/{workspace['id']}/presentations/{entry_id}/governance",
@@ -1089,6 +1099,11 @@ def test_presentation_registration_preserves_owner_and_allows_member_listing(tmp
         assert frozen.status_code == 200
         assert frozen_update_denied.status_code == 409
         assert delivery.status_code == 201
+        assert delivery_evidence.status_code == 200
+        assert delivery_evidence.json()["file_integrity"] is True
+        assert delivery_evidence.json()["snapshot_integrity"] is True
+        assert delivery_evidence.json()["citation_integrity"] is True
+        assert len(delivery_evidence.json()["credential_hash"]) == 64
         assert delivery.json()["watermark_text"] == "共享空间 · L2 · owner"
         assert "file_path" not in delivery.json()
         assert delivery_download.content == b"governed-general-pdf"
@@ -1096,6 +1111,14 @@ def test_presentation_registration_preserves_owner_and_allows_member_listing(tmp
         assert revoked_delivery.json()["revoked_at"]
         assert revoked_delivery_download.status_code == 404
         assert revoked_delivery_grant_denied.status_code == 409
+        assert delivery_activity.status_code == 200
+        assert {item["action"] for item in delivery_activity.json()} >= {
+            "presentation.delivery_exported",
+            "presentation.download_grant_issued",
+            "presentation.delivery_downloaded",
+            "presentation.delivery_revoked",
+        }
+        assert delivery_activity_denied.status_code == 404
         assert frozen.json()["version_no"] == 1
         assert frozen.json()["manifest"]["scene"]["type"] == "general"
         assert governance.json()["entry"]["status"] == "frozen"

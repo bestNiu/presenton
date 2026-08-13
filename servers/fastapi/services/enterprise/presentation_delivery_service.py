@@ -1,4 +1,6 @@
 from datetime import datetime, timedelta, timezone
+import hashlib
+import json
 import os
 import secrets
 import uuid
@@ -14,6 +16,7 @@ from domains.platform.enums import (
     WorkspaceRole,
 )
 from models.sql.enterprise.presentation_entry import PresentationEntryModel
+from models.sql.enterprise.audit_event import AuditEventModel
 from models.sql.enterprise.presentation_governance import (
     PresentationDeliveryArtifactModel,
     PresentationDownloadGrantModel,
@@ -140,6 +143,67 @@ async def list_presentation_deliveries(session: AsyncSession, *, workspace_id: u
     return list((await session.scalars(select(PresentationDeliveryArtifactModel).join(PresentationSnapshotModel, PresentationSnapshotModel.id == PresentationDeliveryArtifactModel.snapshot_id).where(PresentationSnapshotModel.presentation_entry_id == entry.id).order_by(PresentationDeliveryArtifactModel.created_at.desc()))).all())
 
 
+def _canonical_hash(value: object) -> str:
+    payload = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+async def get_presentation_delivery_evidence(
+    session: AsyncSession,
+    *,
+    workspace_id: uuid.UUID,
+    entry_id: uuid.UUID,
+    artifact_id: uuid.UUID,
+    principal: AuthPrincipal,
+) -> dict:
+    await require_workspace_role(session, workspace_id=workspace_id, principal=principal)
+    artifact = await session.get(PresentationDeliveryArtifactModel, artifact_id)
+    snapshot = await session.get(PresentationSnapshotModel, artifact.snapshot_id) if artifact else None
+    entry = await session.get(PresentationEntryModel, entry_id)
+    if artifact is None or snapshot is None or entry is None or entry.workspace_id != workspace_id or snapshot.presentation_entry_id != entry.id:
+        raise HTTPException(status_code=404, detail="Presentation delivery not found")
+    manifest = snapshot.manifest or {}
+    citations = manifest.get("citation_manifest")
+    citations = citations if isinstance(citations, list) else []
+    citation_hash = manifest.get("citation_manifest_hash")
+    snapshot_integrity = _canonical_hash(manifest) == snapshot.manifest_hash
+    citation_integrity = isinstance(citation_hash, str) and _canonical_hash(citations) == citation_hash
+    file_integrity = False
+    if artifact.object_key or artifact.file_path:
+        try:
+            await get_enterprise_object_storage().verify(
+                StoredObjectLocation(object_key=artifact.object_key, legacy_path=artifact.file_path),
+                expected_sha256=artifact.sha256,
+                expected_size=artifact.size_bytes,
+            )
+            file_integrity = True
+        except HTTPException:
+            file_integrity = False
+    credential = {
+        "credential_version": "1.0",
+        "artifact_id": str(artifact.id),
+        "artifact_sha256": artifact.sha256,
+        "artifact_size_bytes": artifact.size_bytes,
+        "snapshot_id": str(snapshot.id),
+        "snapshot_version": snapshot.version_no,
+        "snapshot_manifest_hash": snapshot.manifest_hash,
+        "citation_manifest_hash": citation_hash,
+        "citation_count": len(citations),
+    }
+    return {
+        "artifact": artifact,
+        "snapshot_id": snapshot.id,
+        "snapshot_version": snapshot.version_no,
+        "snapshot_manifest_hash": snapshot.manifest_hash,
+        "citation_manifest_hash": citation_hash,
+        "citation_count": len(citations),
+        "file_integrity": file_integrity,
+        "snapshot_integrity": snapshot_integrity,
+        "citation_integrity": citation_integrity,
+        "credential_hash": _canonical_hash(credential),
+    }
+
+
 async def issue_presentation_download_grant(session: AsyncSession, *, workspace_id: uuid.UUID, entry_id: uuid.UUID, artifact_id: uuid.UUID, principal: AuthPrincipal, expires_in_minutes: int, max_downloads: int) -> tuple[PresentationDownloadGrantModel, str]:
     await require_workspace_role(session, workspace_id=workspace_id, principal=principal, required_role=WorkspaceRole.ADMIN)
     artifact = await session.get(PresentationDeliveryArtifactModel, artifact_id)
@@ -180,9 +244,54 @@ async def consume_presentation_download_grant(session: AsyncSession, *, token: s
     grant.download_count += 1
     grant.last_downloaded_at = datetime.now(timezone.utc)
     session.add(grant)
-    record_audit_event(session, actor_id=None, action="presentation.delivery_downloaded", resource_type="presentation_delivery_artifact", resource_id=artifact.id, metadata={"grant_id": str(grant.id), "download_count": grant.download_count})
+    snapshot = await session.get(PresentationSnapshotModel, artifact.snapshot_id)
+    entry = await session.get(PresentationEntryModel, snapshot.presentation_entry_id) if snapshot else None
+    record_audit_event(session, actor_id=None, workspace_id=entry.workspace_id if entry else None, action="presentation.delivery_downloaded", resource_type="presentation_delivery_artifact", resource_id=artifact.id, metadata={"grant_id": str(grant.id), "download_count": grant.download_count})
     await session.commit()
     return artifact, location
+
+
+async def list_presentation_delivery_activity(
+    session: AsyncSession,
+    *,
+    workspace_id: uuid.UUID,
+    entry_id: uuid.UUID,
+    artifact_id: uuid.UUID,
+    principal: AuthPrincipal,
+) -> list[AuditEventModel]:
+    await require_workspace_role(session, workspace_id=workspace_id, principal=principal, required_role=WorkspaceRole.ADMIN)
+    artifact = await session.get(PresentationDeliveryArtifactModel, artifact_id)
+    snapshot = await session.get(PresentationSnapshotModel, artifact.snapshot_id) if artifact else None
+    entry = await session.get(PresentationEntryModel, entry_id)
+    if artifact is None or snapshot is None or entry is None or entry.workspace_id != workspace_id or snapshot.presentation_entry_id != entry.id:
+        raise HTTPException(status_code=404, detail="Presentation delivery not found")
+    grant_ids = {
+        str(item)
+        for item in (
+            await session.scalars(
+                select(PresentationDownloadGrantModel.id).where(
+                    PresentationDownloadGrantModel.artifact_id == artifact.id
+                )
+            )
+        ).all()
+    }
+    candidate_ids = grant_ids | {str(artifact.id)}
+    events = list(
+        (
+            await session.scalars(
+                select(AuditEventModel)
+                .where(AuditEventModel.workspace_id == workspace_id)
+                .order_by(AuditEventModel.created_at.desc())
+                .limit(1000)
+            )
+        ).all()
+    )
+    return [
+        event
+        for event in events
+        if event.resource_id in candidate_ids
+        or str((event.event_metadata or {}).get("artifact_id", "")) == str(artifact.id)
+    ]
 
 
 async def revoke_presentation_delivery(

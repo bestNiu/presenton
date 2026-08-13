@@ -104,6 +104,7 @@ from api.v1.enterprise.schemas import (
     PresentationSourceCitationSummaryResponse,
     PresentationDeliveryCreateRequest,
     PresentationDeliveryArtifactResponse,
+    PresentationDeliveryEvidenceResponse,
     PresentationRegisterRequest,
     PresentationReviewDecisionRequest,
     PresentationReviewResponse,
@@ -161,8 +162,10 @@ from services.enterprise.presentation_quality_service import (
 from services.enterprise.presentation_delivery_service import (
     consume_presentation_download_grant,
     create_presentation_delivery,
+    get_presentation_delivery_evidence,
     issue_presentation_download_grant,
     list_presentation_deliveries,
+    list_presentation_delivery_activity,
     revoke_presentation_delivery,
 )
 from services.enterprise.notification_service import (
@@ -1820,6 +1823,16 @@ async def post_presentation_delivery(request: Request, workspace_id: uuid.UUID, 
 @API_V1_ENTERPRISE_ROUTER.get("/workspaces/{workspace_id}/presentations/{entry_id}/deliveries", response_model=list[PresentationDeliveryArtifactResponse])
 async def get_presentation_deliveries(workspace_id: uuid.UUID, entry_id: uuid.UUID, principal: AuthPrincipal = Depends(principal_from_request), session: AsyncSession = Depends(get_async_session)):
     return await list_presentation_deliveries(session, workspace_id=workspace_id, entry_id=entry_id, principal=principal)
+
+
+@API_V1_ENTERPRISE_ROUTER.get("/workspaces/{workspace_id}/presentations/{entry_id}/deliveries/{artifact_id}/evidence", response_model=PresentationDeliveryEvidenceResponse)
+async def get_presentation_delivery_evidence_record(workspace_id: uuid.UUID, entry_id: uuid.UUID, artifact_id: uuid.UUID, principal: AuthPrincipal = Depends(principal_from_request), session: AsyncSession = Depends(get_async_session)):
+    return await get_presentation_delivery_evidence(session, workspace_id=workspace_id, entry_id=entry_id, artifact_id=artifact_id, principal=principal)
+
+
+@API_V1_ENTERPRISE_ROUTER.get("/workspaces/{workspace_id}/presentations/{entry_id}/deliveries/{artifact_id}/activity", response_model=list[AuditEventResponse])
+async def get_presentation_delivery_activity(workspace_id: uuid.UUID, entry_id: uuid.UUID, artifact_id: uuid.UUID, principal: AuthPrincipal = Depends(principal_from_request), session: AsyncSession = Depends(get_async_session)):
+    return await list_presentation_delivery_activity(session, workspace_id=workspace_id, entry_id=entry_id, artifact_id=artifact_id, principal=principal)
 
 
 @API_V1_ENTERPRISE_ROUTER.post("/workspaces/{workspace_id}/presentations/{entry_id}/deliveries/{artifact_id}/grants", response_model=BidDownloadGrantResponse, status_code=status.HTTP_201_CREATED)

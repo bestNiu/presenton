@@ -481,6 +481,31 @@ export interface PresentationDeliveryArtifactResponse {
   purged_at: string | null;
 }
 
+export interface PresentationDeliveryEvidenceResponse {
+  artifact: PresentationDeliveryArtifactResponse;
+  snapshot_id: string;
+  snapshot_version: number;
+  snapshot_manifest_hash: string;
+  citation_manifest_hash: string | null;
+  citation_count: number;
+  file_integrity: boolean;
+  snapshot_integrity: boolean;
+  citation_integrity: boolean;
+  credential_hash: string;
+}
+
+export interface AuditEventResponse {
+  id: string;
+  actor_id: string | null;
+  workspace_id: string | null;
+  action: string;
+  resource_type: string;
+  resource_id: string;
+  result: string;
+  event_metadata: Record<string, unknown>;
+  created_at: string;
+}
+
 export interface TemplatePublicationResponse {
   id: string;
   publication_key: string;
@@ -1217,6 +1242,21 @@ export class EnterpriseApi {
   static async createPresentationDelivery(workspaceId: string, entryId: string, snapshotId: string, format: "pptx" | "pdf"): Promise<PresentationDeliveryArtifactResponse> {
     const response = await fetch(getApiUrl(`/api/v1/enterprise/workspaces/${encodeURIComponent(workspaceId)}/presentations/${encodeURIComponent(entryId)}/deliveries`), { method: "POST", credentials: "include", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ snapshot_id: snapshotId, format }) });
     return ApiResponseHandler.handleResponse(response, "Failed to export governed presentation");
+  }
+
+  static async getPresentationDeliveries(workspaceId: string, entryId: string): Promise<PresentationDeliveryArtifactResponse[]> {
+    const response = await fetch(getApiUrl(`/api/v1/enterprise/workspaces/${encodeURIComponent(workspaceId)}/presentations/${encodeURIComponent(entryId)}/deliveries`), { credentials: "include", cache: "no-store" });
+    return ApiResponseHandler.handleResponse(response, "Failed to load governed deliveries");
+  }
+
+  static async getPresentationDeliveryEvidence(workspaceId: string, entryId: string, artifactId: string): Promise<PresentationDeliveryEvidenceResponse> {
+    const response = await fetch(getApiUrl(`/api/v1/enterprise/workspaces/${encodeURIComponent(workspaceId)}/presentations/${encodeURIComponent(entryId)}/deliveries/${encodeURIComponent(artifactId)}/evidence`), { credentials: "include", cache: "no-store" });
+    return ApiResponseHandler.handleResponse(response, "Failed to verify delivery evidence");
+  }
+
+  static async getPresentationDeliveryActivity(workspaceId: string, entryId: string, artifactId: string): Promise<AuditEventResponse[]> {
+    const response = await fetch(getApiUrl(`/api/v1/enterprise/workspaces/${encodeURIComponent(workspaceId)}/presentations/${encodeURIComponent(entryId)}/deliveries/${encodeURIComponent(artifactId)}/activity`), { credentials: "include", cache: "no-store" });
+    return ApiResponseHandler.handleResponse(response, "Failed to load delivery activity");
   }
 
   static async issuePresentationDownloadGrant(workspaceId: string, entryId: string, artifactId: string): Promise<BidDownloadGrantResponse> {

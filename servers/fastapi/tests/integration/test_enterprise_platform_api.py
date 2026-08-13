@@ -32,6 +32,8 @@ from models.sql.enterprise import (
     PresentationEntryModel,
     PresentationDeliveryArtifactModel,
     PresentationDownloadGrantModel,
+    PresentationCommentReplyModel,
+    PresentationCommentThreadModel,
     PresentationQualityIssueModel,
     PresentationQualityRunModel,
     PresentationReviewModel,
@@ -97,6 +99,8 @@ def _build_client(tmp_path):
                 WorkspaceFolderModel.__table__,
                 SceneDefinitionModel.__table__,
                 PresentationEntryModel.__table__,
+                PresentationCommentThreadModel.__table__,
+                PresentationCommentReplyModel.__table__,
                 PresentationReviewModel.__table__,
                 PresentationSnapshotModel.__table__,
                 PresentationDeliveryArtifactModel.__table__,
@@ -289,7 +293,7 @@ def test_presentation_registration_preserves_owner_and_allows_member_listing(tmp
         ).json()
         client.put(
             f"/api/v1/enterprise/workspaces/{workspace['id']}/members/{users['member'].id}",
-            json={"user_id": str(users["member"].id), "role": "editor"},
+            json={"user_id": str(users["member"].id), "role": "reviewer"},
         )
         registered = client.post(
             "/api/v1/enterprise/presentations",
@@ -328,6 +332,24 @@ def test_presentation_registration_preserves_owner_and_allows_member_listing(tmp
         quality = client.post(
             f"/api/v1/enterprise/workspaces/{workspace['id']}/presentations/{entry_id}/quality-runs"
         )
+        blocking_comment = client.post(
+            f"/api/v1/enterprise/workspaces/{workspace['id']}/presentations/{entry_id}/comment-threads",
+            json={"slide_index": 0, "title": "补充数据口径", "body": "明确架构收益的统计口径", "is_blocking": True, "assigned_to": str(users["member"].id)},
+        )
+        approval_comment_blocked = client.post(
+            f"/api/v1/enterprise/workspaces/{workspace['id']}/presentations/{entry_id}/review/decision",
+            json={"action": "approve"},
+            headers={"x-test-user": "member"},
+        )
+        comment_reply = client.post(
+            f"/api/v1/enterprise/workspaces/{workspace['id']}/presentations/{entry_id}/comment-threads/{blocking_comment.json()['id']}/replies",
+            json={"body": "已按统一口径补充说明"},
+            headers={"x-test-user": "member"},
+        )
+        resolved_comment = client.post(
+            f"/api/v1/enterprise/workspaces/{workspace['id']}/presentations/{entry_id}/comment-threads/{blocking_comment.json()['id']}/resolve",
+            headers={"x-test-user": "member"},
+        )
         approved = client.post(
             f"/api/v1/enterprise/workspaces/{workspace['id']}/presentations/{entry_id}/review/decision",
             json={"action": "approve", "comment": "内容与品牌规范检查通过"},
@@ -363,6 +385,15 @@ def test_presentation_registration_preserves_owner_and_allows_member_listing(tmp
             f"/api/v1/enterprise/workspaces/{workspace['id']}/presentations/{entry_id}/governance",
             headers={"x-test-user": "member"},
         )
+        comments = client.get(
+            f"/api/v1/enterprise/workspaces/{workspace['id']}/presentations/{entry_id}/comment-threads",
+            headers={"x-test-user": "member"},
+        )
+        snapshot_diff = client.get(
+            f"/api/v1/enterprise/workspaces/{workspace['id']}/presentations/{entry_id}/snapshot-diff",
+            params={"from_snapshot_id": frozen.json()["id"], "to_snapshot_id": frozen.json()["id"]},
+            headers={"x-test-user": "member"},
+        )
         shared_read = client.get(
             f"/api/v1/ppt/presentation/{presentation_id}",
             headers={"x-test-user": "member"},
@@ -379,6 +410,11 @@ def test_presentation_registration_preserves_owner_and_allows_member_listing(tmp
         assert self_review_denied.status_code == 409
         assert approval_quality_blocked.status_code == 409
         assert quality.json()["status"] == "passed"
+        assert blocking_comment.status_code == 201
+        assert blocking_comment.json()["slide_index"] == 0
+        assert approval_comment_blocked.status_code == 409
+        assert comment_reply.status_code == 201
+        assert resolved_comment.json()["status"] == "resolved"
         assert approved.json()["status"] == "approved"
         assert frozen.status_code == 200
         assert frozen_update_denied.status_code == 409
@@ -391,6 +427,8 @@ def test_presentation_registration_preserves_owner_and_allows_member_listing(tmp
         assert governance.json()["entry"]["status"] == "frozen"
         assert len(governance.json()["reviews"]) == 1
         assert len(governance.json()["snapshots"]) == 1
+        assert comments.json()[0]["replies"][0]["body"] == "已按统一口径补充说明"
+        assert snapshot_diff.json()["unchanged"] == 1
         assert shared_read.status_code == 200
         assert shared_read.json()["slides"][0]["ui"]["id"] == "slide-1"
     finally:

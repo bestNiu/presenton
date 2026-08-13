@@ -1,12 +1,13 @@
 from datetime import datetime
 import uuid
 
-from sqlalchemy import Column, DateTime, ForeignKey, Integer, JSON, String, UniqueConstraint
+from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, JSON, String, Text, UniqueConstraint
 from sqlmodel import Field, SQLModel
 
 from domains.platform.enums import (
     PresentationDeliveryFormat,
     PresentationDeliveryStatus,
+    PresentationCommentStatus,
     PresentationReviewStatus,
     PresentationQualitySeverity,
     PresentationQualityStatus,
@@ -44,6 +45,7 @@ class PresentationSnapshotModel(SQLModel, table=True):
     quality_run_id: uuid.UUID | None = Field(default=None, sa_column=Column(ForeignKey("enterprise_presentation_quality_runs.id", ondelete="RESTRICT"), index=True))
     version_no: int = Field(sa_column=Column(Integer, nullable=False))
     manifest: dict = Field(default_factory=dict, sa_column=Column(JSON, nullable=False))
+    content_snapshot: dict = Field(default_factory=dict, sa_column=Column(JSON, nullable=False))
     manifest_hash: str = Field(sa_column=Column(String(64), nullable=False, index=True))
     slide_snapshot_hash: str = Field(sa_column=Column(String(64), nullable=False))
     frozen_by: uuid.UUID | None = Field(default=None, sa_column=Column(ForeignKey("user.id", ondelete="SET NULL"), index=True))
@@ -121,5 +123,37 @@ class PresentationSourceCitationModel(SQLModel, table=True):
     source_version: str | None = Field(default=None, sa_column=Column(String(100)))
     locator: str | None = Field(default=None, sa_column=Column(String(500)))
     excerpt: str | None = Field(default=None, sa_column=Column(String(2000)))
+    created_by: uuid.UUID | None = Field(default=None, sa_column=Column(ForeignKey("user.id", ondelete="SET NULL"), index=True))
+    created_at: datetime = Field(sa_column=Column(DateTime(timezone=True), default=get_current_utc_datetime))
+
+
+class PresentationCommentThreadModel(SQLModel, table=True):
+    __tablename__ = "enterprise_presentation_comment_threads"
+
+    id: uuid.UUID = Field(primary_key=True, default_factory=uuid.uuid4)
+    presentation_entry_id: uuid.UUID = Field(sa_column=Column(ForeignKey("enterprise_presentation_entries.id", ondelete="CASCADE"), nullable=False, index=True))
+    slide_id: uuid.UUID | None = Field(default=None, sa_column=Column(ForeignKey("slides.id", ondelete="SET NULL"), index=True))
+    slide_index: int | None = Field(default=None, sa_column=Column(Integer))
+    element_ref: str | None = Field(default=None, sa_column=Column(String(500)))
+    title: str = Field(sa_column=Column(String(300), nullable=False))
+    body: str = Field(sa_column=Column(Text, nullable=False))
+    is_blocking: bool = Field(default=False, sa_column=Column(Boolean, nullable=False, default=False, index=True))
+    status: PresentationCommentStatus = Field(default=PresentationCommentStatus.OPEN, sa_column=Column(String(32), nullable=False, index=True))
+    assigned_to: uuid.UUID | None = Field(default=None, sa_column=Column(ForeignKey("user.id", ondelete="SET NULL"), index=True))
+    due_at: datetime | None = Field(default=None, sa_column=Column(DateTime(timezone=True), index=True))
+    slide_snapshot_hash: str = Field(sa_column=Column(String(64), nullable=False, index=True))
+    created_by: uuid.UUID | None = Field(default=None, sa_column=Column(ForeignKey("user.id", ondelete="SET NULL"), index=True))
+    resolved_by: uuid.UUID | None = Field(default=None, sa_column=Column(ForeignKey("user.id", ondelete="SET NULL"), index=True))
+    resolved_at: datetime | None = Field(default=None, sa_column=Column(DateTime(timezone=True)))
+    created_at: datetime = Field(sa_column=Column(DateTime(timezone=True), default=get_current_utc_datetime, index=True))
+    updated_at: datetime = Field(sa_column=Column(DateTime(timezone=True), default=get_current_utc_datetime, onupdate=get_current_utc_datetime))
+
+
+class PresentationCommentReplyModel(SQLModel, table=True):
+    __tablename__ = "enterprise_presentation_comment_replies"
+
+    id: uuid.UUID = Field(primary_key=True, default_factory=uuid.uuid4)
+    thread_id: uuid.UUID = Field(sa_column=Column(ForeignKey("enterprise_presentation_comment_threads.id", ondelete="CASCADE"), nullable=False, index=True))
+    body: str = Field(sa_column=Column(Text, nullable=False))
     created_by: uuid.UUID | None = Field(default=None, sa_column=Column(ForeignKey("user.id", ondelete="SET NULL"), index=True))
     created_at: datetime = Field(sa_column=Column(DateTime(timezone=True), default=get_current_utc_datetime))

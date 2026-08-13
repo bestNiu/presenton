@@ -39,7 +39,8 @@ REVISION_BID_ASSEMBLY = "a0e4c8d2f6b7"
 REVISION_BID_DELIVERY = "b1f5d9e3a7c8"
 REVISION_PRESENTATION_GOVERNANCE = "c2a6e0f4b8d9"
 REVISION_PRESENTATION_QUALITY = "d3b7f1a5c9e0"
-REVISION_HEAD = REVISION_PRESENTATION_QUALITY
+REVISION_PRESENTATION_REVIEW_COLLABORATION = "e4c8a2b6d0f1"
+REVISION_HEAD = REVISION_PRESENTATION_REVIEW_COLLABORATION
 
 
 async def migrate_database_on_startup() -> None:
@@ -134,6 +135,8 @@ def _infer_revision_from_schema(
         "enterprise_audit_events",
     }
     if enterprise_tables.issubset(tables):
+        if "enterprise_presentation_comment_threads" in tables:
+            return REVISION_PRESENTATION_REVIEW_COLLABORATION
         if "enterprise_presentation_quality_runs" in tables:
             return REVISION_PRESENTATION_QUALITY
         if "enterprise_presentation_reviews" in tables:

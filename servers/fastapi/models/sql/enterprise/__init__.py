@@ -18,6 +18,8 @@ from models.sql.enterprise.presentation_entry import PresentationEntryModel
 from models.sql.enterprise.presentation_governance import (
     PresentationDeliveryArtifactModel,
     PresentationDownloadGrantModel,
+    PresentationCommentReplyModel,
+    PresentationCommentThreadModel,
     PresentationQualityIssueModel,
     PresentationQualityRunModel,
     PresentationReviewModel,
@@ -50,6 +52,8 @@ __all__ = [
     "PresentationEntryModel",
     "PresentationDeliveryArtifactModel",
     "PresentationDownloadGrantModel",
+    "PresentationCommentReplyModel",
+    "PresentationCommentThreadModel",
     "PresentationQualityIssueModel",
     "PresentationQualityRunModel",
     "PresentationReviewModel",

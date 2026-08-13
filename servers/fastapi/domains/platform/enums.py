@@ -65,6 +65,11 @@ class PresentationQualitySeverity(str, Enum):
     WARNING = "warning"
 
 
+class PresentationCommentStatus(str, Enum):
+    OPEN = "open"
+    RESOLVED = "resolved"
+
+
 class TemplateScopeType(str, Enum):
     ENTERPRISE = "enterprise"
     WORKSPACE = "workspace"

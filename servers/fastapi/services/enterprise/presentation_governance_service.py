@@ -46,6 +46,13 @@ async def _require_entry(
 async def _presentation_snapshot(
     session: AsyncSession, entry: PresentationEntryModel
 ) -> tuple[str, dict]:
+    slide_hash, manifest, _ = await _presentation_state(session, entry)
+    return slide_hash, manifest
+
+
+async def _presentation_state(
+    session: AsyncSession, entry: PresentationEntryModel
+) -> tuple[str, dict, dict]:
     presentation = await session.scalar(
         select(PresentationModel)
         .execution_options(skip_owner_scope=True)
@@ -86,7 +93,35 @@ async def _presentation_snapshot(
         "slide_count": len(slides),
         "slide_snapshot_hash": slide_hash,
     }
-    return slide_hash, manifest
+    content_snapshot = {
+        "snapshot_format": "presentation-slides-v1",
+        "slides": slide_payload,
+    }
+    return slide_hash, manifest, content_snapshot
+
+
+def compare_snapshot_content(from_snapshot: dict, to_snapshot: dict) -> dict:
+    from_slides = {slide["id"]: slide for slide in from_snapshot.get("slides", [])}
+    to_slides = {slide["id"]: slide for slide in to_snapshot.get("slides", [])}
+    changes = []
+    for slide_id in sorted(set(from_slides) | set(to_slides), key=lambda value: (to_slides.get(value) or from_slides[value]).get("index", 0)):
+        before = from_slides.get(slide_id)
+        after = to_slides.get(slide_id)
+        change_type = "added" if before is None else "removed" if after is None else "unchanged" if _canonical_hash(before) == _canonical_hash(after) else "changed"
+        changes.append({
+            "slide_id": slide_id,
+            "before_index": before.get("index") if before else None,
+            "after_index": after.get("index") if after else None,
+            "change_type": change_type,
+            "changed_fields": [] if before is None or after is None else [field for field in ("index", "ui", "content", "speaker_note") if _canonical_hash(before.get(field)) != _canonical_hash(after.get(field))],
+        })
+    return {
+        "added": sum(change["change_type"] == "added" for change in changes),
+        "removed": sum(change["change_type"] == "removed" for change in changes),
+        "changed": sum(change["change_type"] == "changed" for change in changes),
+        "unchanged": sum(change["change_type"] == "unchanged" for change in changes),
+        "slides": changes,
+    }
 
 
 async def submit_presentation_review(
@@ -186,6 +221,10 @@ async def decide_presentation_review(
         )
         if quality_run is None or PresentationQualityStatus(quality_run.status) != PresentationQualityStatus.PASSED or quality_run.slide_snapshot_hash != current_hash:
             raise HTTPException(status_code=409, detail="Latest quality check must pass before approval")
+    if action == "approve":
+        from services.enterprise.presentation_comment_service import count_open_blocking_comments
+        if await count_open_blocking_comments(session, entry_id=entry.id):
+            raise HTTPException(status_code=409, detail="Resolve blocking review comments before approval")
     if action == "reject" and not (comment or "").strip():
         raise HTTPException(status_code=422, detail="Rejection comment is required")
     review.status = (
@@ -252,7 +291,7 @@ async def freeze_presentation(
             raise HTTPException(status_code=409, detail="Approved review not found")
     elif PresentationEntryStatus(entry.status) != PresentationEntryStatus.DRAFT:
         raise HTTPException(status_code=409, detail="Only draft presentation can be frozen without review")
-    slide_hash, manifest = await _presentation_snapshot(session, entry)
+    slide_hash, manifest, content_snapshot = await _presentation_state(session, entry)
     if review is not None and slide_hash != review.slide_snapshot_hash:
         raise HTTPException(status_code=409, detail="Approved presentation changed; reopen review")
     if review is None:
@@ -285,6 +324,9 @@ async def freeze_presentation(
         )
         if quality_run is None or PresentationQualityStatus(quality_run.status) != PresentationQualityStatus.PASSED or quality_run.slide_snapshot_hash != slide_hash:
             raise HTTPException(status_code=409, detail="Latest quality check must pass for the current presentation")
+    from services.enterprise.presentation_comment_service import count_open_blocking_comments
+    if await count_open_blocking_comments(session, entry_id=entry.id):
+        raise HTTPException(status_code=409, detail="Resolve blocking review comments before freeze")
     version_no = (
         await session.scalar(
             select(func.max(PresentationSnapshotModel.version_no)).where(
@@ -302,6 +344,7 @@ async def freeze_presentation(
         quality_run_id=quality_run.id if quality_run else None,
         version_no=version_no,
         manifest=manifest,
+        content_snapshot=content_snapshot,
         manifest_hash=_canonical_hash(manifest),
         slide_snapshot_hash=slide_hash,
         frozen_by=principal.user_id,
@@ -337,8 +380,8 @@ async def reopen_presentation_review(
         required_role=WorkspaceRole.EDITOR,
     )
     entry = await _require_entry(session, workspace_id=workspace_id, entry_id=entry_id)
-    if PresentationEntryStatus(entry.status) != PresentationEntryStatus.APPROVED:
-        raise HTTPException(status_code=409, detail="Only approved presentation can be reopened")
+    if PresentationEntryStatus(entry.status) not in (PresentationEntryStatus.APPROVED, PresentationEntryStatus.FROZEN):
+        raise HTTPException(status_code=409, detail="Only approved or frozen presentation can be reopened")
     entry.status = PresentationEntryStatus.DRAFT
     entry.row_version += 1
     session.add(entry)
@@ -360,3 +403,32 @@ async def get_presentation_governance(
     reviews = list((await session.scalars(select(PresentationReviewModel).where(PresentationReviewModel.presentation_entry_id == entry.id).order_by(PresentationReviewModel.submission_no.desc()))).all())
     snapshots = list((await session.scalars(select(PresentationSnapshotModel).where(PresentationSnapshotModel.presentation_entry_id == entry.id).order_by(PresentationSnapshotModel.version_no.desc()))).all())
     return {"entry": entry, "reviews": reviews, "snapshots": snapshots}
+
+
+async def compare_presentation_snapshots(
+    session: AsyncSession,
+    *,
+    workspace_id: uuid.UUID,
+    entry_id: uuid.UUID,
+    from_snapshot_id: uuid.UUID,
+    to_snapshot_id: uuid.UUID,
+    principal: AuthPrincipal,
+) -> dict:
+    await require_workspace_role(session, workspace_id=workspace_id, principal=principal)
+    await _require_entry(session, workspace_id=workspace_id, entry_id=entry_id)
+    snapshots = list((await session.scalars(select(PresentationSnapshotModel).where(
+        PresentationSnapshotModel.presentation_entry_id == entry_id,
+        PresentationSnapshotModel.id.in_([from_snapshot_id, to_snapshot_id]),
+    ))).all())
+    by_id = {snapshot.id: snapshot for snapshot in snapshots}
+    if from_snapshot_id not in by_id or to_snapshot_id not in by_id:
+        raise HTTPException(status_code=404, detail="Presentation snapshot not found")
+    before, after = by_id[from_snapshot_id], by_id[to_snapshot_id]
+    result = compare_snapshot_content(before.content_snapshot or {}, after.content_snapshot or {})
+    return {
+        "from_snapshot_id": before.id,
+        "from_version_no": before.version_no,
+        "to_snapshot_id": after.id,
+        "to_version_no": after.version_no,
+        **result,
+    }

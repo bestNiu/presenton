@@ -46,6 +46,8 @@ from models.sql.enterprise import (
     PresentationEntryModel,
     PresentationDeliveryArtifactModel,
     PresentationDownloadGrantModel,
+    PresentationCommentReplyModel,
+    PresentationCommentThreadModel,
     PresentationQualityIssueModel,
     PresentationQualityRunModel,
     PresentationReviewModel,

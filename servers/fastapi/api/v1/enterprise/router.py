@@ -43,6 +43,10 @@ from api.v1.enterprise.schemas import (
     FolderCreateRequest,
     FolderResponse,
     PresentationEntryResponse,
+    PresentationCommentCreateRequest,
+    PresentationCommentReplyCreateRequest,
+    PresentationCommentReplyResponse,
+    PresentationCommentThreadResponse,
     PresentationGovernanceResponse,
     PresentationQualityReportResponse,
     PresentationQualityRunResponse,
@@ -54,6 +58,7 @@ from api.v1.enterprise.schemas import (
     PresentationReviewDecisionRequest,
     PresentationReviewResponse,
     PresentationSnapshotResponse,
+    PresentationSnapshotDiffResponse,
     SceneDefinitionResponse,
     SceneRuntimeResponse,
     TemplatePublicationCreateRequest,
@@ -73,11 +78,18 @@ from services.enterprise.presentation_workspace_service import (
     register_presentation,
 )
 from services.enterprise.presentation_governance_service import (
+    compare_presentation_snapshots,
     decide_presentation_review,
     freeze_presentation,
     get_presentation_governance,
     reopen_presentation_review,
     submit_presentation_review,
+)
+from services.enterprise.presentation_comment_service import (
+    add_comment_reply,
+    create_comment_thread,
+    list_comment_threads,
+    transition_comment_thread,
 )
 from services.enterprise.presentation_quality_service import (
     create_source_citation,
@@ -758,6 +770,51 @@ async def get_presentation_entries(
 )
 async def get_presentation_entry_governance(workspace_id: uuid.UUID, entry_id: uuid.UUID, principal: AuthPrincipal = Depends(principal_from_request), session: AsyncSession = Depends(get_async_session)):
     return await get_presentation_governance(session, workspace_id=workspace_id, entry_id=entry_id, principal=principal)
+
+
+@API_V1_ENTERPRISE_ROUTER.post(
+    "/workspaces/{workspace_id}/presentations/{entry_id}/comment-threads",
+    response_model=PresentationCommentThreadResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def post_presentation_comment_thread(workspace_id: uuid.UUID, entry_id: uuid.UUID, body: PresentationCommentCreateRequest, principal: AuthPrincipal = Depends(principal_from_request), session: AsyncSession = Depends(get_async_session)):
+    return await create_comment_thread(session, workspace_id=workspace_id, entry_id=entry_id, principal=principal, values=body.model_dump())
+
+
+@API_V1_ENTERPRISE_ROUTER.get(
+    "/workspaces/{workspace_id}/presentations/{entry_id}/comment-threads",
+    response_model=list[PresentationCommentThreadResponse],
+)
+async def get_presentation_comment_threads(workspace_id: uuid.UUID, entry_id: uuid.UUID, principal: AuthPrincipal = Depends(principal_from_request), session: AsyncSession = Depends(get_async_session)):
+    rows = await list_comment_threads(session, workspace_id=workspace_id, entry_id=entry_id, principal=principal)
+    return [PresentationCommentThreadResponse.model_validate(row["thread"]).model_copy(update={"replies": row["replies"]}) for row in rows]
+
+
+@API_V1_ENTERPRISE_ROUTER.post(
+    "/workspaces/{workspace_id}/presentations/{entry_id}/comment-threads/{thread_id}/replies",
+    response_model=PresentationCommentReplyResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def post_presentation_comment_reply(workspace_id: uuid.UUID, entry_id: uuid.UUID, thread_id: uuid.UUID, body: PresentationCommentReplyCreateRequest, principal: AuthPrincipal = Depends(principal_from_request), session: AsyncSession = Depends(get_async_session)):
+    return await add_comment_reply(session, workspace_id=workspace_id, entry_id=entry_id, thread_id=thread_id, principal=principal, body=body.body)
+
+
+@API_V1_ENTERPRISE_ROUTER.post(
+    "/workspaces/{workspace_id}/presentations/{entry_id}/comment-threads/{thread_id}/{action}",
+    response_model=PresentationCommentThreadResponse,
+)
+async def post_presentation_comment_transition(workspace_id: uuid.UUID, entry_id: uuid.UUID, thread_id: uuid.UUID, action: str, principal: AuthPrincipal = Depends(principal_from_request), session: AsyncSession = Depends(get_async_session)):
+    if action not in {"resolve", "reopen"}:
+        raise HTTPException(status_code=404, detail="Comment action not found")
+    return await transition_comment_thread(session, workspace_id=workspace_id, entry_id=entry_id, thread_id=thread_id, principal=principal, action=action)
+
+
+@API_V1_ENTERPRISE_ROUTER.get(
+    "/workspaces/{workspace_id}/presentations/{entry_id}/snapshot-diff",
+    response_model=PresentationSnapshotDiffResponse,
+)
+async def get_presentation_snapshot_diff(workspace_id: uuid.UUID, entry_id: uuid.UUID, from_snapshot_id: uuid.UUID = Query(), to_snapshot_id: uuid.UUID = Query(), principal: AuthPrincipal = Depends(principal_from_request), session: AsyncSession = Depends(get_async_session)):
+    return await compare_presentation_snapshots(session, workspace_id=workspace_id, entry_id=entry_id, from_snapshot_id=from_snapshot_id, to_snapshot_id=to_snapshot_id, principal=principal)
 
 
 @API_V1_ENTERPRISE_ROUTER.post(

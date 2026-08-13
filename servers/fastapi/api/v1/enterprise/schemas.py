@@ -20,6 +20,7 @@ from domains.platform.enums import (
     BidDeliveryStatus,
     ConfidentialityLevel,
     PresentationCreationMode,
+    PresentationCommentStatus,
     PresentationEntryStatus,
     PresentationDeliveryFormat,
     PresentationDeliveryStatus,
@@ -508,6 +509,72 @@ class PresentationGovernanceResponse(BaseModel):
     entry: PresentationEntryResponse
     reviews: list[PresentationReviewResponse]
     snapshots: list[PresentationSnapshotResponse]
+
+
+class PresentationCommentCreateRequest(BaseModel):
+    slide_id: uuid.UUID | None = None
+    slide_index: int | None = Field(default=None, ge=0)
+    element_ref: str | None = Field(default=None, max_length=500)
+    title: str = Field(min_length=1, max_length=300)
+    body: str = Field(min_length=1, max_length=10000)
+    is_blocking: bool = False
+    assigned_to: uuid.UUID | None = None
+    due_at: datetime | None = None
+
+
+class PresentationCommentReplyCreateRequest(BaseModel):
+    body: str = Field(min_length=1, max_length=10000)
+
+
+class PresentationCommentReplyResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: uuid.UUID
+    thread_id: uuid.UUID
+    body: str
+    created_by: uuid.UUID | None
+    created_at: datetime
+
+
+class PresentationCommentThreadResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: uuid.UUID
+    presentation_entry_id: uuid.UUID
+    slide_id: uuid.UUID | None
+    slide_index: int | None
+    element_ref: str | None
+    title: str
+    body: str
+    is_blocking: bool
+    status: PresentationCommentStatus
+    assigned_to: uuid.UUID | None
+    due_at: datetime | None
+    slide_snapshot_hash: str
+    created_by: uuid.UUID | None
+    resolved_by: uuid.UUID | None
+    resolved_at: datetime | None
+    created_at: datetime
+    updated_at: datetime
+    replies: list[PresentationCommentReplyResponse] = Field(default_factory=list)
+
+
+class PresentationSnapshotSlideDiffResponse(BaseModel):
+    slide_id: str
+    before_index: int | None
+    after_index: int | None
+    change_type: str
+    changed_fields: list[str]
+
+
+class PresentationSnapshotDiffResponse(BaseModel):
+    from_snapshot_id: uuid.UUID
+    from_version_no: int
+    to_snapshot_id: uuid.UUID
+    to_version_no: int
+    added: int
+    removed: int
+    changed: int
+    unchanged: int
+    slides: list[PresentationSnapshotSlideDiffResponse]
 
 
 class PresentationDeliveryCreateRequest(BaseModel):

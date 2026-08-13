@@ -51,6 +51,8 @@ from models.sql.enterprise import (  # noqa: F401, E402
     PresentationEntryModel,
     PresentationDeliveryArtifactModel,
     PresentationDownloadGrantModel,
+    PresentationCommentReplyModel,
+    PresentationCommentThreadModel,
     PresentationQualityIssueModel,
     PresentationQualityRunModel,
     PresentationReviewModel,

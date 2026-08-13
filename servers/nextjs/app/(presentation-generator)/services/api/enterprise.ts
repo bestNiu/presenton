@@ -22,6 +22,14 @@ export interface WorkspaceResponse {
   updated_at: string;
 }
 
+export interface WorkspaceMemberResponse {
+  id: string;
+  user_id: string;
+  username: string;
+  role: WorkspaceRole;
+  created_at: string;
+}
+
 export interface SceneDefinitionResponse {
   id: string;
   scene_type: string;
@@ -227,7 +235,52 @@ export interface PresentationGovernanceResponse {
     id: string;
     version_no: number;
     manifest_hash: string;
+    slide_snapshot_hash: string;
     frozen_at: string;
+  }>;
+}
+
+export interface PresentationCommentThreadResponse {
+  id: string;
+  presentation_entry_id: string;
+  slide_id: string | null;
+  slide_index: number | null;
+  element_ref: string | null;
+  title: string;
+  body: string;
+  is_blocking: boolean;
+  status: "open" | "resolved";
+  assigned_to: string | null;
+  due_at: string | null;
+  slide_snapshot_hash: string;
+  created_by: string | null;
+  resolved_by: string | null;
+  resolved_at: string | null;
+  created_at: string;
+  updated_at: string;
+  replies: Array<{
+    id: string;
+    body: string;
+    created_by: string | null;
+    created_at: string;
+  }>;
+}
+
+export interface PresentationSnapshotDiffResponse {
+  from_snapshot_id: string;
+  from_version_no: number;
+  to_snapshot_id: string;
+  to_version_no: number;
+  added: number;
+  removed: number;
+  changed: number;
+  unchanged: number;
+  slides: Array<{
+    slide_id: string;
+    before_index: number | null;
+    after_index: number | null;
+    change_type: "added" | "removed" | "changed" | "unchanged";
+    changed_fields: string[];
   }>;
 }
 
@@ -311,6 +364,11 @@ export class EnterpriseApi {
       response,
       "Failed to load workspaces"
     );
+  }
+
+  static async getWorkspaceMembers(workspaceId: string): Promise<WorkspaceMemberResponse[]> {
+    const response = await fetch(getApiUrl(`/api/v1/enterprise/workspaces/${encodeURIComponent(workspaceId)}/members`), { credentials: "include", cache: "no-store" });
+    return ApiResponseHandler.handleResponse(response, "Failed to load workspace members");
   }
 
   static async createWorkspace(input: {
@@ -397,6 +455,32 @@ export class EnterpriseApi {
   static async getPresentationGovernance(workspaceId: string, entryId: string): Promise<PresentationGovernanceResponse> {
     const response = await fetch(getApiUrl(`/api/v1/enterprise/workspaces/${encodeURIComponent(workspaceId)}/presentations/${encodeURIComponent(entryId)}/governance`), { credentials: "include", cache: "no-store" });
     return ApiResponseHandler.handleResponse(response, "Failed to load presentation governance");
+  }
+
+  static async getPresentationComments(workspaceId: string, entryId: string): Promise<PresentationCommentThreadResponse[]> {
+    const response = await fetch(getApiUrl(`/api/v1/enterprise/workspaces/${encodeURIComponent(workspaceId)}/presentations/${encodeURIComponent(entryId)}/comment-threads`), { credentials: "include", cache: "no-store" });
+    return ApiResponseHandler.handleResponse(response, "Failed to load presentation comments");
+  }
+
+  static async createPresentationComment(workspaceId: string, entryId: string, input: { slide_id?: string; slide_index?: number; title: string; body: string; is_blocking: boolean; assigned_to?: string; due_at?: string }): Promise<PresentationCommentThreadResponse> {
+    const response = await fetch(getApiUrl(`/api/v1/enterprise/workspaces/${encodeURIComponent(workspaceId)}/presentations/${encodeURIComponent(entryId)}/comment-threads`), { method: "POST", credentials: "include", headers: { "Content-Type": "application/json" }, body: JSON.stringify(input) });
+    return ApiResponseHandler.handleResponse(response, "Failed to create presentation comment");
+  }
+
+  static async replyPresentationComment(workspaceId: string, entryId: string, threadId: string, body: string) {
+    const response = await fetch(getApiUrl(`/api/v1/enterprise/workspaces/${encodeURIComponent(workspaceId)}/presentations/${encodeURIComponent(entryId)}/comment-threads/${encodeURIComponent(threadId)}/replies`), { method: "POST", credentials: "include", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ body }) });
+    return ApiResponseHandler.handleResponse(response, "Failed to reply to presentation comment");
+  }
+
+  static async transitionPresentationComment(workspaceId: string, entryId: string, threadId: string, action: "resolve" | "reopen"): Promise<PresentationCommentThreadResponse> {
+    const response = await fetch(getApiUrl(`/api/v1/enterprise/workspaces/${encodeURIComponent(workspaceId)}/presentations/${encodeURIComponent(entryId)}/comment-threads/${encodeURIComponent(threadId)}/${action}`), { method: "POST", credentials: "include" });
+    return ApiResponseHandler.handleResponse(response, "Failed to update presentation comment");
+  }
+
+  static async comparePresentationSnapshots(workspaceId: string, entryId: string, fromSnapshotId: string, toSnapshotId: string): Promise<PresentationSnapshotDiffResponse> {
+    const params = new URLSearchParams({ from_snapshot_id: fromSnapshotId, to_snapshot_id: toSnapshotId });
+    const response = await fetch(getApiUrl(`/api/v1/enterprise/workspaces/${encodeURIComponent(workspaceId)}/presentations/${encodeURIComponent(entryId)}/snapshot-diff?${params.toString()}`), { credentials: "include", cache: "no-store" });
+    return ApiResponseHandler.handleResponse(response, "Failed to compare presentation snapshots");
   }
 
   static async runPresentationQuality(workspaceId: string, entryId: string): Promise<PresentationQualityRunResponse> {

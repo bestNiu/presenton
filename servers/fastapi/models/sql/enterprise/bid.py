@@ -28,6 +28,9 @@ from domains.platform.enums import (
     BidProjectRole,
     BidProjectStatus,
     BidRequirementStatus,
+    BidReleaseStatus,
+    BidDeliveryFormat,
+    BidDeliveryStatus,
     ConfidentialityLevel,
 )
 from utils.datetime_utils import get_current_utc_datetime
@@ -320,3 +323,57 @@ class BidReviewIssueModel(SQLModel, table=True):
     resolution: str | None = Field(default=None, sa_column=Column(Text))
     created_at: datetime = Field(sa_column=Column(DateTime(timezone=True), default=get_current_utc_datetime))
     updated_at: datetime = Field(sa_column=Column(DateTime(timezone=True), default=get_current_utc_datetime, onupdate=get_current_utc_datetime))
+
+
+class BidPresentationReleaseModel(SQLModel, table=True):
+    __tablename__ = "enterprise_bid_presentation_releases"
+    __table_args__ = (UniqueConstraint("project_id", "release_type", "version_no", name="uq_bid_release_version"),)
+
+    id: uuid.UUID = Field(primary_key=True, default_factory=uuid.uuid4)
+    project_id: uuid.UUID = Field(sa_column=Column(ForeignKey("enterprise_bid_projects.id", ondelete="CASCADE"), nullable=False, index=True))
+    presentation_entry_id: uuid.UUID = Field(sa_column=Column(ForeignKey("enterprise_presentation_entries.id", ondelete="RESTRICT"), nullable=False, index=True))
+    template_publication_id: uuid.UUID = Field(sa_column=Column(ForeignKey("enterprise_template_publications.id", ondelete="RESTRICT"), nullable=False, index=True))
+    release_type: str = Field(default="management-summary", sa_column=Column(String(64), nullable=False, index=True))
+    version_no: int = Field(default=1, sa_column=Column(Integer, nullable=False))
+    manifest: dict = Field(default_factory=dict, sa_column=Column(JSON, nullable=False))
+    manifest_hash: str = Field(sa_column=Column(String(64), nullable=False, index=True))
+    slide_snapshot_hash: str = Field(sa_column=Column(String(64), nullable=False))
+    status: BidReleaseStatus = Field(default=BidReleaseStatus.DRAFT, sa_column=Column(String(32), nullable=False, index=True))
+    created_by: uuid.UUID | None = Field(default=None, sa_column=Column(ForeignKey("user.id", ondelete="SET NULL")))
+    frozen_by: uuid.UUID | None = Field(default=None, sa_column=Column(ForeignKey("user.id", ondelete="SET NULL")))
+    frozen_at: datetime | None = Field(default=None, sa_column=Column(DateTime(timezone=True)))
+    created_at: datetime = Field(sa_column=Column(DateTime(timezone=True), default=get_current_utc_datetime))
+    updated_at: datetime = Field(sa_column=Column(DateTime(timezone=True), default=get_current_utc_datetime, onupdate=get_current_utc_datetime))
+
+
+class BidDeliveryArtifactModel(SQLModel, table=True):
+    __tablename__ = "enterprise_bid_delivery_artifacts"
+
+    id: uuid.UUID = Field(primary_key=True, default_factory=uuid.uuid4)
+    release_id: uuid.UUID = Field(sa_column=Column(ForeignKey("enterprise_bid_presentation_releases.id", ondelete="CASCADE"), nullable=False, index=True))
+    derived_presentation_id: uuid.UUID | None = Field(default=None, sa_column=Column(ForeignKey("presentations.id", ondelete="SET NULL"), index=True))
+    format: BidDeliveryFormat = Field(sa_column=Column(String(16), nullable=False, index=True))
+    watermark_text: str = Field(sa_column=Column(String(300), nullable=False))
+    file_path: str = Field(sa_column=Column(String(2000), nullable=False))
+    file_name: str = Field(sa_column=Column(String(500), nullable=False))
+    sha256: str = Field(sa_column=Column(String(64), nullable=False, index=True))
+    size_bytes: int = Field(sa_column=Column(Integer, nullable=False))
+    status: BidDeliveryStatus = Field(default=BidDeliveryStatus.READY, sa_column=Column(String(32), nullable=False, index=True))
+    created_by: uuid.UUID | None = Field(default=None, sa_column=Column(ForeignKey("user.id", ondelete="SET NULL")))
+    created_at: datetime = Field(sa_column=Column(DateTime(timezone=True), default=get_current_utc_datetime))
+    revoked_at: datetime | None = Field(default=None, sa_column=Column(DateTime(timezone=True)))
+
+
+class BidDownloadGrantModel(SQLModel, table=True):
+    __tablename__ = "enterprise_bid_download_grants"
+
+    id: uuid.UUID = Field(primary_key=True, default_factory=uuid.uuid4)
+    artifact_id: uuid.UUID = Field(sa_column=Column(ForeignKey("enterprise_bid_delivery_artifacts.id", ondelete="CASCADE"), nullable=False, index=True))
+    token_hash: str = Field(sa_column=Column(String(64), nullable=False, unique=True, index=True))
+    expires_at: datetime = Field(sa_column=Column(DateTime(timezone=True), nullable=False, index=True))
+    max_downloads: int = Field(default=1, sa_column=Column(Integer, nullable=False))
+    download_count: int = Field(default=0, sa_column=Column(Integer, nullable=False))
+    created_by: uuid.UUID | None = Field(default=None, sa_column=Column(ForeignKey("user.id", ondelete="SET NULL")))
+    created_at: datetime = Field(sa_column=Column(DateTime(timezone=True), default=get_current_utc_datetime))
+    last_downloaded_at: datetime | None = Field(default=None, sa_column=Column(DateTime(timezone=True)))
+    revoked_at: datetime | None = Field(default=None, sa_column=Column(DateTime(timezone=True)))

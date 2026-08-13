@@ -139,7 +139,7 @@ export interface BidCommitmentResponse {
 
 export interface BidGateResponse {
   id: string;
-  gate_type: "gate_1" | "gate_2";
+  gate_type: "gate_1" | "gate_2" | "gate_3";
   status: "locked" | "open" | "blocked" | "passed";
   issues: Array<{ id: string; title: string; status: "open" | "resolved" }>;
 }
@@ -148,6 +148,42 @@ export interface BidCollaborationResponse {
   modules: BidModuleResponse[];
   commitments: BidCommitmentResponse[];
   gates: BidGateResponse[];
+}
+
+export interface BidReleaseResponse {
+  id: string;
+  project_id: string;
+  presentation_entry_id: string;
+  template_publication_id: string;
+  release_type: string;
+  version_no: number;
+  manifest: Record<string, unknown> & { presentation_id?: string };
+  manifest_hash: string;
+  slide_snapshot_hash: string;
+  status: "draft" | "frozen" | "archived";
+  frozen_at: string | null;
+  created_at: string;
+}
+
+export interface BidDeliveryArtifactResponse {
+  id: string;
+  release_id: string;
+  derived_presentation_id: string | null;
+  format: "pptx" | "pdf";
+  watermark_text: string;
+  file_name: string;
+  sha256: string;
+  size_bytes: number;
+  status: "ready" | "revoked";
+  created_at: string;
+}
+
+export interface BidDownloadGrantResponse {
+  grant_id: string;
+  artifact_id: string;
+  download_url: string;
+  expires_at: string;
+  max_downloads: number;
 }
 
 export type PresentationCreationMode =
@@ -540,8 +576,44 @@ export class EnterpriseApi {
     return ApiResponseHandler.handleResponse(response, "Failed to update commitment");
   }
 
-  static async actOnBidGate(projectId: string, gateType: "gate_1" | "gate_2", action: "open" | "pass"): Promise<BidGateResponse> {
+  static async actOnBidGate(projectId: string, gateType: "gate_1" | "gate_2" | "gate_3", action: "open" | "pass"): Promise<BidGateResponse> {
     const response = await fetch(getApiUrl(`/api/v1/enterprise/bid/projects/${encodeURIComponent(projectId)}/gates/${gateType}/action`), { method: "POST", credentials: "include", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action }) });
     return ApiResponseHandler.handleResponse(response, "Failed to update review gate");
+  }
+
+  static async getBidReleases(projectId: string): Promise<BidReleaseResponse[]> {
+    const response = await fetch(getApiUrl(`/api/v1/enterprise/bid/projects/${encodeURIComponent(projectId)}/releases`), { credentials: "include", cache: "no-store" });
+    return ApiResponseHandler.handleResponse(response, "Failed to load bid releases");
+  }
+
+  static async assembleBidRelease(projectId: string, templatePublicationId: string): Promise<BidReleaseResponse> {
+    const response = await fetch(getApiUrl(`/api/v1/enterprise/bid/projects/${encodeURIComponent(projectId)}/releases/assemble`), { method: "POST", credentials: "include", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ template_publication_id: templatePublicationId, release_type: "management-summary" }) });
+    return ApiResponseHandler.handleResponse(response, "Failed to assemble bid summary");
+  }
+
+  static async freezeBidRelease(projectId: string, releaseId: string): Promise<BidReleaseResponse> {
+    const response = await fetch(getApiUrl(`/api/v1/enterprise/bid/projects/${encodeURIComponent(projectId)}/releases/${encodeURIComponent(releaseId)}/freeze`), { method: "POST", credentials: "include" });
+    return ApiResponseHandler.handleResponse(response, "Failed to freeze bid release");
+  }
+
+  static async archiveBidRelease(projectId: string, releaseId: string): Promise<BidReleaseResponse> {
+    const response = await fetch(getApiUrl(`/api/v1/enterprise/bid/projects/${encodeURIComponent(projectId)}/releases/${encodeURIComponent(releaseId)}/archive`), { method: "POST", credentials: "include" });
+    return ApiResponseHandler.handleResponse(response, "Failed to archive bid release");
+  }
+
+  static async getBidDeliveries(projectId: string, releaseId: string): Promise<BidDeliveryArtifactResponse[]> {
+    const response = await fetch(getApiUrl(`/api/v1/enterprise/bid/projects/${encodeURIComponent(projectId)}/releases/${encodeURIComponent(releaseId)}/deliveries`), { credentials: "include", cache: "no-store" });
+    return ApiResponseHandler.handleResponse(response, "Failed to load delivery artifacts");
+  }
+
+  static async createBidDelivery(projectId: string, releaseId: string, format: "pptx" | "pdf"): Promise<BidDeliveryArtifactResponse> {
+    const response = await fetch(getApiUrl(`/api/v1/enterprise/bid/projects/${encodeURIComponent(projectId)}/releases/${encodeURIComponent(releaseId)}/deliveries`), { method: "POST", credentials: "include", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ format }) });
+    return ApiResponseHandler.handleResponse(response, "Failed to export delivery artifact");
+  }
+
+  static async issueBidDownloadGrant(projectId: string, artifactId: string): Promise<BidDownloadGrantResponse> {
+    const response = await fetch(getApiUrl(`/api/v1/enterprise/bid/projects/${encodeURIComponent(projectId)}/deliveries/${encodeURIComponent(artifactId)}/grants`), { method: "POST", credentials: "include", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ expires_in_minutes: 30, max_downloads: 1 }) });
+    const grant = await ApiResponseHandler.handleResponse(response, "Failed to authorize delivery download") as BidDownloadGrantResponse;
+    return { ...grant, download_url: getApiUrl(grant.download_url) };
   }
 }

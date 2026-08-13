@@ -7,6 +7,7 @@ import {
   AlertTriangle,
   ArrowLeft,
   CheckCircle2,
+  Download,
   FilePlus2,
   FileText,
   Loader2,
@@ -19,6 +20,9 @@ import {
   EnterpriseApi,
   type BidProjectDashboardResponse,
   type BidCollaborationResponse,
+  type BidReleaseResponse,
+  type BidDeliveryArtifactResponse,
+  type TemplatePublicationResponse,
   type BidRequirementResponse,
 } from "@/app/(presentation-generator)/services/api/enterprise";
 
@@ -81,6 +85,10 @@ function BidProjectDashboardPage() {
   const params = useParams<{ projectId: string }>();
   const [dashboard, setDashboard] = useState<BidProjectDashboardResponse | null>(null);
   const [collaboration, setCollaboration] = useState<BidCollaborationResponse>({ modules: [], commitments: [], gates: [] });
+  const [releases, setReleases] = useState<BidReleaseResponse[]>([]);
+  const [deliveries, setDeliveries] = useState<Record<string, BidDeliveryArtifactResponse[]>>({});
+  const [templates, setTemplates] = useState<TemplatePublicationResponse[]>([]);
+  const [templatePublicationId, setTemplatePublicationId] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState("");
   const [profileDraft, setProfileDraft] = useState<FactDraft>({});
@@ -113,6 +121,12 @@ function BidProjectDashboardPage() {
     );
     setCollaboration(collaborationRows);
     setModuleDrafts(Object.fromEntries(collaborationRows.modules.map((module) => [module.id, String(module.content.summary || "")])));
+    const [releaseRows, templateRows] = await Promise.all([EnterpriseApi.getBidReleases(params.projectId), EnterpriseApi.getPublishedTemplates(next.project.workspace_id)]);
+    setReleases(releaseRows);
+    const deliveryRows = await Promise.all(releaseRows.map((release) => EnterpriseApi.getBidDeliveries(params.projectId, release.id)));
+    setDeliveries(Object.fromEntries(releaseRows.map((release, index) => [release.id, deliveryRows[index]])));
+    setTemplates(templateRows);
+    setTemplatePublicationId((current) => current || templateRows.find((item) => item.scene_type === "bid")?.id || templateRows[0]?.id || "");
   }, [params.projectId]);
 
   useEffect(() => {
@@ -231,6 +245,19 @@ function BidProjectDashboardPage() {
     if (succeeded) setCommitmentDraft({ content: "", commitment_type: "timeline", evidence_ref: "", risk_level: "medium" });
   };
 
+  const downloadDelivery = async (artifactId: string) => {
+    setPending(`download-${artifactId}`);
+    setError(null);
+    try {
+      const grant = await EnterpriseApi.issueBidDownloadGrant(project.id, artifactId);
+      window.location.assign(grant.download_url);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "下载授权失败");
+    } finally {
+      setPending("");
+    }
+  };
+
   return (
     <main className="min-h-screen bg-[#F7F8FC] px-5 py-8 sm:px-8 lg:px-10">
       <div className="mx-auto max-w-[1240px]">
@@ -290,8 +317,13 @@ function BidProjectDashboardPage() {
 
         <div className="mt-5 grid gap-5 lg:grid-cols-[1.2fr_1fr]">
           <section className="rounded-2xl border border-[#E3E4EA] bg-white p-6"><h2 className="font-semibold text-[#101828]">服务承诺审批</h2>{canContribute && <form onSubmit={createCommitment} className="mt-4 grid gap-2"><input value={commitmentDraft.content} onChange={(event) => setCommitmentDraft({ ...commitmentDraft, content: event.target.value })} placeholder="承诺内容" className="h-10 rounded-lg border border-[#D9DCE3] px-3 text-sm" /><div className="grid gap-2 sm:grid-cols-[140px_1fr_auto]"><select value={commitmentDraft.commitment_type} onChange={(event) => setCommitmentDraft({ ...commitmentDraft, commitment_type: event.target.value })} className="h-9 rounded-lg border border-[#D9DCE3] bg-white px-2 text-sm"><option value="timeline">周期</option><option value="quality">质量</option><option value="resource">资源</option></select><input value={commitmentDraft.evidence_ref} onChange={(event) => setCommitmentDraft({ ...commitmentDraft, evidence_ref: event.target.value })} placeholder="历史依据/证据引用" className="h-9 rounded-lg border border-[#D9DCE3] px-3 text-sm" /><button disabled={!commitmentDraft.content.trim()} className="h-9 rounded-lg bg-[#17171B] px-3 text-xs text-white disabled:opacity-40">添加候选</button></div></form>}<div className="mt-4 grid gap-2">{collaboration.commitments.map((item) => <article key={item.id} className="rounded-lg bg-[#F8F9FC] p-3"><div className="flex items-start justify-between gap-3"><p className="text-sm text-[#101828]">{item.content}</p><span className="text-xs text-[#667085]">{item.status}</span></div><p className="mt-1 text-xs text-[#98A2B3]">依据：{item.evidence_ref || "未填写"}</p><div className="mt-2 flex justify-end gap-2">{canContribute && item.status === "candidate" && <button onClick={() => void execute(`commitment-${item.id}`, () => EnterpriseApi.actOnBidCommitment(project.id, item.id, "submit"))} className="text-xs text-[#635BFF]">提交审批</button>}{canConfirmStrategy && item.status === "pending" && <button onClick={() => void execute(`commitment-${item.id}`, () => EnterpriseApi.actOnBidCommitment(project.id, item.id, "approve"))} className="text-xs text-[#027A48]">批准</button>}</div></article>)}</div></section>
-          <section className="rounded-2xl border border-[#E3E4EA] bg-white p-6"><h2 className="font-semibold text-[#101828]">Gate 1 / Gate 2</h2><div className="mt-4 grid gap-3">{collaboration.gates.map((gate) => <article key={gate.id} className="rounded-xl border border-[#EAECF0] p-4"><div className="flex items-center justify-between"><div><p className="text-sm font-semibold text-[#101828]">{gate.gate_type === "gate_1" ? "Gate 1 专业正确性" : "Gate 2 客户决策逻辑"}</p><p className="mt-1 text-xs text-[#667085]">{gate.status}</p></div>{canReview && gate.status !== "passed" && <div className="flex gap-2"><button onClick={() => void execute(`${gate.id}-open`, () => EnterpriseApi.actOnBidGate(project.id, gate.gate_type, "open"))} className="h-8 rounded-lg border border-[#D9DCE3] px-2 text-xs">检查</button><button onClick={() => void execute(`${gate.id}-pass`, () => EnterpriseApi.actOnBidGate(project.id, gate.gate_type, "pass"))} className="h-8 rounded-lg bg-[#027A48] px-2 text-xs text-white">通过</button></div>}</div></article>)}</div></section>
+          <section className="rounded-2xl border border-[#E3E4EA] bg-white p-6"><h2 className="font-semibold text-[#101828]">Gate 1 / Gate 2 / Gate 3</h2><div className="mt-4 grid gap-3">{collaboration.gates.map((gate) => <article key={gate.id} className="rounded-xl border border-[#EAECF0] p-4"><div className="flex items-center justify-between"><div><p className="text-sm font-semibold text-[#101828]">{{ gate_1: "Gate 1 专业正确性", gate_2: "Gate 2 客户决策逻辑", gate_3: "Gate 3 演练与冻结" }[gate.gate_type]}</p><p className="mt-1 text-xs text-[#667085]">{gate.status}</p></div>{canReview && gate.status !== "passed" && <div className="flex gap-2"><button onClick={() => void execute(`${gate.id}-open`, () => EnterpriseApi.actOnBidGate(project.id, gate.gate_type, "open"))} className="h-8 rounded-lg border border-[#D9DCE3] px-2 text-xs">检查</button><button onClick={() => void execute(`${gate.id}-pass`, () => EnterpriseApi.actOnBidGate(project.id, gate.gate_type, "pass"))} className="h-8 rounded-lg bg-[#027A48] px-2 text-xs text-white">通过</button></div>}</div></article>)}</div></section>
         </div>
+
+        <section className="mt-5 rounded-2xl border border-[#E3E4EA] bg-white p-6">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"><div><h2 className="font-semibold text-[#101828]">专业组装与冻结版本</h2><p className="mt-1 text-xs text-[#667085]">仅使用已批准模块、承诺和已发布模板生成可重现摘要。</p></div>{canConfirmStrategy && <div className="flex gap-2"><select value={templatePublicationId} onChange={(event) => setTemplatePublicationId(event.target.value)} className="h-9 rounded-lg border border-[#D9DCE3] bg-white px-2 text-xs">{templates.map((item) => <option key={item.id} value={item.id}>{item.display_name} · v{item.version}</option>)}</select><button type="button" disabled={!templatePublicationId || collaboration.gates.find((gate) => gate.gate_type === "gate_2")?.status !== "passed"} onClick={() => void execute("assemble", () => EnterpriseApi.assembleBidRelease(project.id, templatePublicationId))} className="h-9 rounded-lg bg-[#635BFF] px-3 text-xs font-medium text-white disabled:opacity-40">生成管理层摘要</button></div>}</div>
+          <div className="mt-4 grid gap-3">{releases.map((release) => <article key={release.id} className="rounded-xl border border-[#EAECF0] p-4"><div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"><div><div className="flex items-center gap-2"><span className="text-sm font-semibold text-[#101828]">管理层摘要 v{release.version_no}</span><span className="rounded-full bg-[#F2F4F7] px-2 py-1 text-[11px]">{release.status}</span></div><p className="mt-1 font-mono text-[11px] text-[#98A2B3]">manifest {release.manifest_hash.slice(0, 16)}…</p></div><div className="flex flex-wrap gap-2">{release.manifest.presentation_id && <Link href={`/presentation?id=${encodeURIComponent(release.manifest.presentation_id)}&type=standard`} className="inline-flex h-8 items-center rounded-lg border border-[#D9DCE3] px-2.5 text-xs">打开预览</Link>}{canConfirmStrategy && release.status === "draft" && <button type="button" disabled={collaboration.gates.find((gate) => gate.gate_type === "gate_3")?.status !== "passed"} onClick={() => void execute(`freeze-${release.id}`, () => EnterpriseApi.freezeBidRelease(project.id, release.id))} className="h-8 rounded-lg bg-[#17171B] px-2.5 text-xs text-white disabled:opacity-40">冻结版本</button>}{canConfirmStrategy && ["frozen", "archived"].includes(release.status) && <><button type="button" disabled={pending === `export-pptx-${release.id}`} onClick={() => void execute(`export-pptx-${release.id}`, () => EnterpriseApi.createBidDelivery(project.id, release.id, "pptx"))} className="h-8 rounded-lg bg-[#635BFF] px-2.5 text-xs text-white disabled:opacity-40">导出 PPTX</button><button type="button" disabled={pending === `export-pdf-${release.id}`} onClick={() => void execute(`export-pdf-${release.id}`, () => EnterpriseApi.createBidDelivery(project.id, release.id, "pdf"))} className="h-8 rounded-lg border border-[#635BFF] px-2.5 text-xs text-[#4238CA] disabled:opacity-40">导出 PDF</button></>}{canConfirmStrategy && release.status === "frozen" && (deliveries[release.id]?.length || 0) > 0 && <button type="button" onClick={() => void execute(`archive-${release.id}`, () => EnterpriseApi.archiveBidRelease(project.id, release.id))} className="h-8 rounded-lg border border-[#D9DCE3] px-2.5 text-xs">归档</button>}</div></div>{(deliveries[release.id]?.length || 0) > 0 && <div className="mt-3 grid gap-2 border-t border-[#EAECF0] pt-3">{deliveries[release.id].map((artifact) => <div key={artifact.id} className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-[#F8F9FC] px-3 py-2"><div><p className="text-xs font-medium uppercase text-[#344054]">{artifact.format} · {(artifact.size_bytes / 1024).toFixed(1)} KB</p><p className="mt-0.5 font-mono text-[10px] text-[#98A2B3]">SHA-256 {artifact.sha256.slice(0, 16)}… · 水印：{artifact.watermark_text}</p></div><button type="button" disabled={pending === `download-${artifact.id}`} onClick={() => void downloadDelivery(artifact.id)} className="inline-flex h-8 items-center gap-1 rounded-lg border border-[#D9DCE3] bg-white px-2.5 text-xs disabled:opacity-40"><Download className="h-3.5 w-3.5" />授权下载</button></div>)}</div>}</article>)}{releases.length === 0 && <p className="py-8 text-center text-sm text-[#98A2B3]">Gate 2 通过后可生成第一版摘要。</p>}</div>
+        </section>
       </div>
     </main>
   );

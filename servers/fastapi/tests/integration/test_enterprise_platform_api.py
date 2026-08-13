@@ -1,5 +1,9 @@
 import asyncio
+import hashlib
+import json
 import uuid
+from datetime import datetime, timezone
+from types import SimpleNamespace
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.testclient import TestClient
@@ -12,9 +16,12 @@ from api.v1.ppt.endpoints.template import TEMPLATE_ROUTER
 from domains.platform.enums import SceneStatus
 from models.sql.enterprise import (
     AuditEventModel,
+    BidDeliveryArtifactModel,
+    BidDownloadGrantModel,
     BidProjectDocumentModel,
     BidCommitmentModel,
     BidProfessionalModuleModel,
+    BidPresentationReleaseModel,
     BidProjectMemberModel,
     BidProjectModel,
     BidProjectProfileModel,
@@ -95,6 +102,9 @@ def _build_client(tmp_path):
                 BidCommitmentModel.__table__,
                 BidReviewGateModel.__table__,
                 BidReviewIssueModel.__table__,
+                BidPresentationReleaseModel.__table__,
+                BidDeliveryArtifactModel.__table__,
+                BidDownloadGrantModel.__table__,
             ):
                 await connection.run_sync(table.create)
         async with session_maker() as session:
@@ -487,13 +497,23 @@ def test_template_publication_lifecycle_default_and_immutability(tmp_path):
         asyncio.run(engine.dispose())
 
 
-def test_bid_understanding_flow_enforces_project_access_and_strategy_gate(tmp_path):
-    client, engine, _, users = _build_client(tmp_path)
+def test_bid_understanding_flow_enforces_project_access_and_strategy_gate(tmp_path, monkeypatch):
+    client, engine, session_maker, users = _build_client(tmp_path)
     try:
         workspace = client.post(
             "/api/v1/enterprise/workspaces",
             json={"name": "竞标项目空间", "workspace_type": "team"},
         ).json()
+        template_id = str(uuid.uuid4())
+        publication_id = uuid.uuid4()
+
+        async def seed_bid_template():
+            async with session_maker() as session:
+                session.add(TemplateV2(id=template_id, name="竞标摘要模板", layouts={"layouts": [{"id": "summary"}]}, assets={"slide_image_urls": ["/bid-preview.png"]}))
+                session.add(TemplatePublicationModel(id=publication_id, publication_key="bid-summary", template_id=template_id, workspace_id=uuid.UUID(workspace["id"]), created_by=users["owner"].id, scope_type="scene", scene_type="bid", version=1, status="published", display_name="竞标摘要模板", compatibility={"pptx": True}, preview_url="/bid-preview.png", published_at=datetime.now(timezone.utc)))
+                await session.commit()
+
+        asyncio.run(seed_bid_template())
         client.put(
             f"/api/v1/enterprise/workspaces/{workspace['id']}/members/{users['member'].id}",
             json={"user_id": str(users["member"].id), "role": "editor"},
@@ -687,6 +707,54 @@ def test_bid_understanding_flow_enforces_project_access_and_strategy_gate(tmp_pa
             json={"action": "pass"},
             headers={"x-test-user": "member"},
         )
+        assembled = client.post(
+            f"/api/v1/enterprise/bid/projects/{project_id}/releases/assemble",
+            json={"template_publication_id": str(publication_id)},
+        )
+        release = assembled.json()
+        freeze_blocked = client.post(
+            f"/api/v1/enterprise/bid/projects/{project_id}/releases/{release['id']}/freeze"
+        )
+        gate3_opened = client.post(
+            f"/api/v1/enterprise/bid/projects/{project_id}/gates/gate_3/action",
+            json={"action": "open"},
+            headers={"x-test-user": "member"},
+        )
+        gate3_passed = client.post(
+            f"/api/v1/enterprise/bid/projects/{project_id}/gates/gate_3/action",
+            json={"action": "pass"},
+            headers={"x-test-user": "member"},
+        )
+        frozen = client.post(
+            f"/api/v1/enterprise/bid/projects/{project_id}/releases/{release['id']}/freeze"
+        )
+        delivery_path = tmp_path / "bid-delivery.pptx"
+        delivery_path.write_bytes(b"watermarked-pptx-delivery")
+
+        async def fake_export_presentation(*_args, **_kwargs):
+            return SimpleNamespace(path=str(delivery_path))
+
+        monkeypatch.setattr(
+            "services.enterprise.bid_delivery_service.export_presentation",
+            fake_export_presentation,
+        )
+        delivery = client.post(
+            f"/api/v1/enterprise/bid/projects/{project_id}/releases/{release['id']}/deliveries",
+            json={"format": "pptx"},
+        )
+        outsider_deliveries = client.get(
+            f"/api/v1/enterprise/bid/projects/{project_id}/releases/{release['id']}/deliveries",
+            headers={"x-test-user": "outsider"},
+        )
+        grant = client.post(
+            f"/api/v1/enterprise/bid/projects/{project_id}/deliveries/{delivery.json()['id']}/grants",
+            json={"expires_in_minutes": 30, "max_downloads": 1},
+        )
+        downloaded = client.get(grant.json()["download_url"])
+        exhausted = client.get(grant.json()["download_url"])
+        archived = client.post(
+            f"/api/v1/enterprise/bid/projects/{project_id}/releases/{release['id']}/archive"
+        )
         reopened_profile = client.put(
             f"/api/v1/enterprise/bid/projects/{project_id}/profile",
             json={
@@ -733,6 +801,25 @@ def test_bid_understanding_flow_enforces_project_access_and_strategy_gate(tmp_pa
         assert commitment_approved.json()["status"] == "approved"
         assert gate2_opened.json()["status"] == "open"
         assert gate2_passed.json()["status"] == "passed"
+        assert assembled.status_code == 201
+        expected_manifest_hash = hashlib.sha256(
+            json.dumps(release["manifest"], ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()
+        assert release["manifest_hash"] == expected_manifest_hash
+        assert len(release["manifest"]["sources"]) == 4
+        assert freeze_blocked.status_code == 409
+        assert gate3_opened.json()["status"] == "open"
+        assert gate3_passed.json()["status"] == "passed"
+        assert frozen.json()["status"] == "frozen"
+        assert delivery.status_code == 201
+        assert delivery.json()["watermark_text"] == "BID-2026-001 · L3 · owner"
+        assert delivery.json()["sha256"] == hashlib.sha256(b"watermarked-pptx-delivery").hexdigest()
+        assert "file_path" not in delivery.json()
+        assert outsider_deliveries.status_code == 404
+        assert grant.status_code == 201
+        assert downloaded.content == b"watermarked-pptx-delivery"
+        assert exhausted.status_code == 410
+        assert archived.json()["status"] == "archived"
         assert reopened_profile.status_code == 200
         assert reopened_dashboard.json()["strategy"]["version_no"] == 2
         assert reopened_dashboard.json()["strategy"]["status"] == "draft"

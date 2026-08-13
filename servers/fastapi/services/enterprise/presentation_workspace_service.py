@@ -67,6 +67,7 @@ async def attach_presentation_to_workspace(
     folder_id: uuid.UUID | None,
     scene_type: str,
     creation_mode: PresentationCreationMode,
+    allow_dedicated_scene: bool = False,
 ) -> PresentationEntryModel:
     """Attach a presentation inside the caller's transaction.
 
@@ -88,7 +89,8 @@ async def attach_presentation_to_workspace(
     scene = await get_active_scene(session, scene_type)
     if scene is None:
         raise HTTPException(status_code=422, detail="Scene is not active")
-    require_direct_presentation_creation(scene)
+    if not allow_dedicated_scene:
+        require_direct_presentation_creation(scene)
     entry = PresentationEntryModel(
         workspace_id=workspace_id,
         folder_id=folder_id,

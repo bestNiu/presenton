@@ -39,7 +39,7 @@ async def initialize_modules(session: AsyncSession, *, project_id: uuid.UUID, pr
         snapshot = {"strategy_id": str(strategy.id), "strategy_version": strategy.version_no}
         existing = [BidProfessionalModuleModel(project_id=project_id, module_type=kind, input_snapshot=snapshot, created_by=principal.user_id, updated_by=principal.user_id) for kind in BidModuleType]
         session.add_all(existing)
-        session.add_all([BidReviewGateModel(project_id=project_id, gate_type=BidGateType.GATE_1), BidReviewGateModel(project_id=project_id, gate_type=BidGateType.GATE_2)])
+        session.add_all([BidReviewGateModel(project_id=project_id, gate_type=gate_type) for gate_type in BidGateType])
         record_audit_event(session, actor_id=principal.user_id, workspace_id=project.workspace_id, action="bid.modules_initialized", resource_type="bid_project", resource_id=project_id)
         await session.commit()
     return await list_collaboration(session, project_id=project_id, principal=principal)
@@ -131,6 +131,9 @@ async def act_on_gate(session: AsyncSession, *, project_id: uuid.UUID, gate_type
         if gate_type == BidGateType.GATE_2:
             gate1 = await session.scalar(select(BidReviewGateModel).where(BidReviewGateModel.project_id == project_id, BidReviewGateModel.gate_type == BidGateType.GATE_1))
             if gate1 is None or BidGateStatus(gate1.status) != BidGateStatus.PASSED: blockers.append("Gate 1 尚未通过")
+        if gate_type == BidGateType.GATE_3:
+            gate2 = await session.scalar(select(BidReviewGateModel).where(BidReviewGateModel.project_id == project_id, BidReviewGateModel.gate_type == BidGateType.GATE_2))
+            if gate2 is None or BidGateStatus(gate2.status) != BidGateStatus.PASSED: blockers.append("Gate 2 尚未通过")
         gate.status = BidGateStatus.BLOCKED if blockers else BidGateStatus.OPEN; gate.opened_by = principal.user_id; gate.opened_at = now
     else:
         if blockers: raise HTTPException(status_code=409, detail={"message": "Gate is blocked", "blockers": blockers})
@@ -145,11 +148,19 @@ async def gate_blockers(session: AsyncSession, project_id: uuid.UUID, gate_type:
         modules = list((await session.scalars(select(BidProfessionalModuleModel).where(BidProfessionalModuleModel.project_id == project_id))).all())
         missing = [kind.value for kind in BidModuleType if not any(m.module_type == kind and m.status == BidModuleStatus.APPROVED for m in modules)]
         if missing: blockers.append(f"专业模块未批准：{', '.join(missing)}")
-    else:
+    elif gate_type == BidGateType.GATE_2:
+        gate1 = await session.scalar(select(BidReviewGateModel).where(BidReviewGateModel.project_id == project_id, BidReviewGateModel.gate_type == BidGateType.GATE_1))
+        if gate1 is None or BidGateStatus(gate1.status) != BidGateStatus.PASSED: blockers.append("Gate 1 尚未通过")
         open_required = await session.scalar(select(func.count(BidRequirementModel.id)).where(BidRequirementModel.project_id == project_id, BidRequirementModel.mandatory.is_(True), BidRequirementModel.status.not_in([BidRequirementStatus.ANSWERED, BidRequirementStatus.VERIFIED])))
         if open_required: blockers.append(f"仍有 {open_required} 个必答需求未覆盖")
         undecided = await session.scalar(select(func.count(BidCommitmentModel.id)).where(BidCommitmentModel.project_id == project_id, BidCommitmentModel.status.in_([BidCommitmentStatus.CANDIDATE, BidCommitmentStatus.PENDING])))
         if undecided: blockers.append(f"仍有 {undecided} 个承诺未完成审批")
+    else:
+        from models.sql.enterprise.bid import BidPresentationReleaseModel
+        gate2 = await session.scalar(select(BidReviewGateModel).where(BidReviewGateModel.project_id == project_id, BidReviewGateModel.gate_type == BidGateType.GATE_2))
+        if gate2 is None or BidGateStatus(gate2.status) != BidGateStatus.PASSED: blockers.append("Gate 2 尚未通过")
+        releases = await session.scalar(select(func.count(BidPresentationReleaseModel.id)).where(BidPresentationReleaseModel.project_id == project_id, BidPresentationReleaseModel.status == "draft"))
+        if not releases: blockers.append("尚未生成待演练的竞标摘要版本")
     gate = await session.scalar(select(BidReviewGateModel).where(BidReviewGateModel.project_id == project_id, BidReviewGateModel.gate_type == gate_type))
     if gate:
         open_issues = await session.scalar(select(func.count(BidReviewIssueModel.id)).where(BidReviewIssueModel.gate_id == gate.id, BidReviewIssueModel.status == BidIssueStatus.OPEN, BidReviewIssueModel.severity == "blocking"))

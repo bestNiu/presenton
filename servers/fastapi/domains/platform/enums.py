@@ -114,6 +114,7 @@ class BidCommitmentStatus(str, Enum):
 class BidGateType(str, Enum):
     GATE_1 = "gate_1"
     GATE_2 = "gate_2"
+    GATE_3 = "gate_3"
 
 
 class BidGateStatus(str, Enum):
@@ -126,6 +127,22 @@ class BidGateStatus(str, Enum):
 class BidIssueStatus(str, Enum):
     OPEN = "open"
     RESOLVED = "resolved"
+
+
+class BidReleaseStatus(str, Enum):
+    DRAFT = "draft"
+    FROZEN = "frozen"
+    ARCHIVED = "archived"
+
+
+class BidDeliveryFormat(str, Enum):
+    PPTX = "pptx"
+    PDF = "pdf"
+
+
+class BidDeliveryStatus(str, Enum):
+    READY = "ready"
+    REVOKED = "revoked"
 
 
 class AuditResult(str, Enum):

@@ -1,7 +1,10 @@
 from models.sql.enterprise.audit_event import AuditEventModel
 from models.sql.enterprise.bid import (
+    BidDeliveryArtifactModel,
+    BidDownloadGrantModel,
     BidCommitmentModel,
     BidProfessionalModuleModel,
+    BidPresentationReleaseModel,
     BidProjectDocumentModel,
     BidProjectMemberModel,
     BidProjectModel,
@@ -22,8 +25,11 @@ from models.sql.enterprise.workspace import (
 
 __all__ = [
     "AuditEventModel",
+    "BidDeliveryArtifactModel",
+    "BidDownloadGrantModel",
     "BidCommitmentModel",
     "BidProfessionalModuleModel",
+    "BidPresentationReleaseModel",
     "BidProjectDocumentModel",
     "BidProjectMemberModel",
     "BidProjectModel",

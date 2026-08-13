@@ -1,6 +1,7 @@
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
+from fastapi.responses import FileResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -21,6 +22,12 @@ from api.v1.enterprise.schemas import (
     BidModuleResponse,
     BidModuleReviewRequest,
     BidModuleUpdateRequest,
+    BidAssemblyRequest,
+    BidReleaseResponse,
+    BidDeliveryCreateRequest,
+    BidDeliveryArtifactResponse,
+    BidDownloadGrantRequest,
+    BidDownloadGrantResponse,
     BidProfileResponse,
     BidProfileUpdateRequest,
     BidProjectCreateRequest,
@@ -79,6 +86,18 @@ from services.enterprise.bid_collaboration_service import (
     submit_module,
     update_module,
 )
+from services.enterprise.bid_assembly_service import (
+    assemble_management_summary,
+    freeze_release,
+    list_releases,
+)
+from services.enterprise.bid_delivery_service import (
+    archive_release,
+    consume_download_grant,
+    create_delivery_artifact,
+    issue_download_grant,
+    list_delivery_artifacts,
+)
 from services.enterprise.scene_service import list_active_scenes
 from services.enterprise.scene_registry_service import resolve_scene_runtime
 from services.enterprise.template_publication_service import (
@@ -103,6 +122,50 @@ from services.enterprise.workspace_service import (
 API_V1_ENTERPRISE_ROUTER = APIRouter(
     prefix="/api/v1/enterprise", tags=["Enterprise Platform"]
 )
+
+
+@API_V1_ENTERPRISE_ROUTER.post("/bid/projects/{project_id}/releases/assemble", response_model=BidReleaseResponse, status_code=status.HTTP_201_CREATED)
+async def post_bid_release_assemble(project_id: uuid.UUID, body: BidAssemblyRequest, principal: AuthPrincipal = Depends(principal_from_request), session: AsyncSession = Depends(get_async_session)):
+    return await assemble_management_summary(session, project_id=project_id, principal=principal, **body.model_dump())
+
+
+@API_V1_ENTERPRISE_ROUTER.get("/bid/projects/{project_id}/releases", response_model=list[BidReleaseResponse])
+async def get_bid_releases(project_id: uuid.UUID, principal: AuthPrincipal = Depends(principal_from_request), session: AsyncSession = Depends(get_async_session)):
+    return await list_releases(session, project_id=project_id, principal=principal)
+
+
+@API_V1_ENTERPRISE_ROUTER.post("/bid/projects/{project_id}/releases/{release_id}/freeze", response_model=BidReleaseResponse)
+async def post_bid_release_freeze(project_id: uuid.UUID, release_id: uuid.UUID, principal: AuthPrincipal = Depends(principal_from_request), session: AsyncSession = Depends(get_async_session)):
+    return await freeze_release(session, project_id=project_id, release_id=release_id, principal=principal)
+
+
+@API_V1_ENTERPRISE_ROUTER.post("/bid/projects/{project_id}/releases/{release_id}/archive", response_model=BidReleaseResponse)
+async def post_bid_release_archive(project_id: uuid.UUID, release_id: uuid.UUID, principal: AuthPrincipal = Depends(principal_from_request), session: AsyncSession = Depends(get_async_session)):
+    return await archive_release(session, project_id=project_id, release_id=release_id, principal=principal)
+
+
+@API_V1_ENTERPRISE_ROUTER.post("/bid/projects/{project_id}/releases/{release_id}/deliveries", response_model=BidDeliveryArtifactResponse, status_code=status.HTTP_201_CREATED)
+async def post_bid_delivery(request: Request, project_id: uuid.UUID, release_id: uuid.UUID, body: BidDeliveryCreateRequest, principal: AuthPrincipal = Depends(principal_from_request), session: AsyncSession = Depends(get_async_session)):
+    return await create_delivery_artifact(session, project_id=project_id, release_id=release_id, principal=principal, cookie_header=request.headers.get("cookie"), **body.model_dump())
+
+
+@API_V1_ENTERPRISE_ROUTER.get("/bid/projects/{project_id}/releases/{release_id}/deliveries", response_model=list[BidDeliveryArtifactResponse])
+async def get_bid_deliveries(project_id: uuid.UUID, release_id: uuid.UUID, principal: AuthPrincipal = Depends(principal_from_request), session: AsyncSession = Depends(get_async_session)):
+    return await list_delivery_artifacts(session, project_id=project_id, release_id=release_id, principal=principal)
+
+
+@API_V1_ENTERPRISE_ROUTER.post("/bid/projects/{project_id}/deliveries/{artifact_id}/grants", response_model=BidDownloadGrantResponse, status_code=status.HTTP_201_CREATED)
+async def post_bid_download_grant(project_id: uuid.UUID, artifact_id: uuid.UUID, body: BidDownloadGrantRequest, principal: AuthPrincipal = Depends(principal_from_request), session: AsyncSession = Depends(get_async_session)):
+    grant, token = await issue_download_grant(session, project_id=project_id, artifact_id=artifact_id, principal=principal, **body.model_dump())
+    return BidDownloadGrantResponse(grant_id=grant.id, artifact_id=grant.artifact_id, download_url=f"/api/v1/enterprise/bid/deliveries/download/{token}", expires_at=grant.expires_at, max_downloads=grant.max_downloads)
+
+
+@API_V1_ENTERPRISE_ROUTER.get("/bid/deliveries/download/{token}")
+async def get_bid_delivery_download(token: str, session: AsyncSession = Depends(get_async_session)):
+    artifact, file_path = await consume_download_grant(session, token=token)
+    artifact_format = getattr(artifact.format, "value", artifact.format)
+    media_type = "application/pdf" if artifact_format == "pdf" else "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+    return FileResponse(file_path, filename=artifact.file_name, media_type=media_type)
 
 
 def _collaboration_response(rows: dict) -> dict:

@@ -15,6 +15,9 @@ from domains.platform.enums import (
     BidProjectRole,
     BidProjectStatus,
     BidRequirementStatus,
+    BidReleaseStatus,
+    BidDeliveryFormat,
+    BidDeliveryStatus,
     ConfidentialityLevel,
     PresentationCreationMode,
     PresentationEntryStatus,
@@ -297,6 +300,64 @@ class BidCollaborationResponse(BaseModel):
     modules: list[BidModuleResponse]
     commitments: list[BidCommitmentResponse]
     gates: list[BidGateResponse]
+
+
+class BidAssemblyRequest(BaseModel):
+    template_publication_id: uuid.UUID
+    release_type: str = Field(default="management-summary", pattern="^(management-summary)$")
+
+
+class BidReleaseResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: uuid.UUID
+    project_id: uuid.UUID
+    presentation_entry_id: uuid.UUID
+    template_publication_id: uuid.UUID
+    release_type: str
+    version_no: int
+    manifest: dict
+    manifest_hash: str
+    slide_snapshot_hash: str
+    status: BidReleaseStatus
+    created_by: uuid.UUID | None
+    frozen_by: uuid.UUID | None
+    frozen_at: datetime | None
+    created_at: datetime
+    updated_at: datetime
+
+
+class BidDeliveryCreateRequest(BaseModel):
+    format: BidDeliveryFormat = BidDeliveryFormat.PPTX
+    watermark_text: str | None = Field(default=None, max_length=300)
+
+
+class BidDeliveryArtifactResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: uuid.UUID
+    release_id: uuid.UUID
+    derived_presentation_id: uuid.UUID | None
+    format: BidDeliveryFormat
+    watermark_text: str
+    file_name: str
+    sha256: str
+    size_bytes: int
+    status: BidDeliveryStatus
+    created_by: uuid.UUID | None
+    created_at: datetime
+    revoked_at: datetime | None
+
+
+class BidDownloadGrantRequest(BaseModel):
+    expires_in_minutes: int = Field(default=30, ge=1, le=1440)
+    max_downloads: int = Field(default=1, ge=1, le=20)
+
+
+class BidDownloadGrantResponse(BaseModel):
+    grant_id: uuid.UUID
+    artifact_id: uuid.UUID
+    download_url: str
+    expires_at: datetime
+    max_downloads: int
 
 
 class WorkspaceCreateRequest(BaseModel):

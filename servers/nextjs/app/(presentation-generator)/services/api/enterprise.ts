@@ -312,6 +312,12 @@ export interface EnterpriseKnowledgeOutlineResponse {
   updated_at: string;
 }
 
+export interface EnterpriseKnowledgePresentationResponse {
+  presentation_id: string;
+  presentation_entry_id: string;
+  outline: EnterpriseKnowledgeOutlineResponse;
+}
+
 export interface PresentationGovernanceResponse {
   entry: PresentationEntryResponse;
   reviews: Array<{
@@ -650,6 +656,11 @@ export class EnterpriseApi {
   static async createKnowledgeOutline(workspaceId: string, input: { topic: string; query?: string; audience?: string; nSlides: number; documentIds: string[] }): Promise<EnterpriseKnowledgeOutlineResponse> {
     const response = await fetch(getApiUrl("/api/v1/enterprise/knowledge/outlines"), { method: "POST", credentials: "include", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ topic: input.topic, query: input.query || input.topic, audience: input.audience || undefined, n_slides: input.nSlides, document_ids: input.documentIds, scope_type: "workspace", workspace_id: workspaceId, language: "Chinese" }) });
     return ApiResponseHandler.handleResponse(response, "Failed to create knowledge outline");
+  }
+
+  static async createKnowledgePresentation(workspaceId: string, input: { topic: string; query?: string; audience?: string; nSlides: number; documentIds: string[] }, idempotencyKey: string): Promise<EnterpriseKnowledgePresentationResponse> {
+    const response = await fetch(getApiUrl("/api/v1/enterprise/knowledge/presentations"), { method: "POST", credentials: "include", headers: { "Content-Type": "application/json", "Idempotency-Key": idempotencyKey }, body: JSON.stringify({ topic: input.topic, query: input.query || input.topic, audience: input.audience || undefined, n_slides: input.nSlides, document_ids: input.documentIds, workspace_id: workspaceId, language: "Chinese" }) });
+    return ApiResponseHandler.handleResponse(response, "Failed to create knowledge presentation");
   }
 
   static async getKnowledgeOutline(outlineId: string): Promise<EnterpriseKnowledgeOutlineResponse> {

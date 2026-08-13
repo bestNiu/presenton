@@ -527,6 +527,14 @@ sequenceDiagram
 
 首批 hybrid 排序以词法覆盖、标题/文档元数据权重和字符三元组相似度组合，返回 lexical/semantic 分数组成，便于调参和问题定位。管理员评测接口接收脱敏黄金集排序结果，计算 Hit Rate、Recall@K 与 MRR。三元组相似度是无外部模型依赖的试点基线；生产数据量和黄金集稳定后，可将 semantic 分量替换为 embedding adapter，并继续复用 ACL、过滤、引用与评测契约。
 
+### 11.8 资料驱动 PPT 创建编排（T34）
+
+`POST /api/v1/enterprise/knowledge/presentations` 在同一业务请求内创建标准 `PresentationModel`、企业 `PresentationEntry`、知识大纲和异步任务。请求必须指定至少一个当前有效且解析完成的空间文档版本；服务端保存 `document_id/version_group_id/version_no/sha256` 输入 manifest 及其哈希。接口支持 `Idempotency-Key`，同一用户和相同请求返回原文稿，复用同一键提交不同参数返回 409。
+
+知识大纲任务完成后自动写入现有 Presentation 大纲字段，用户继续使用原有大纲确认、模板选择、`prepare` 和页面流式生成能力，不复制生成内核。文档中心的“创建资料驱动文稿”直接创建新文稿并跳转现有大纲页面，同时保留将独立知识大纲应用到已有文稿的能力。
+
+标准页面流完成 Slide 落库后，通过已关联的知识大纲自动物化页面级 `PresentationSourceCitation`；重复生成或重连保持幂等。物化前重新检查输入版本组的最新版本：若上传了替代版本，知识大纲的 `input_status` 更新为 `stale`，但仍保留原版本引用供审计和人工复核；资料已撤销或失效时引用物化失败，不能形成看似有效的来源。
+
 ---
 
 ## 12. AI 编排架构

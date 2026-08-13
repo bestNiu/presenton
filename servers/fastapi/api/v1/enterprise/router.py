@@ -86,6 +86,8 @@ from api.v1.enterprise.schemas import (
     EnterpriseKnowledgeOutlineResponse,
     EnterpriseKnowledgeEvaluationRequest,
     EnterpriseKnowledgeEvaluationResponse,
+    EnterpriseKnowledgePresentationCreateRequest,
+    EnterpriseKnowledgePresentationResponse,
     PresentationEntryResponse,
     PresentationCommentCreateRequest,
     PresentationCommentReplyCreateRequest,
@@ -170,6 +172,7 @@ from services.enterprise.document_service import (
 from services.enterprise.knowledge_service import search_enterprise_knowledge
 from services.enterprise.knowledge_outline_service import (
     apply_knowledge_outline_to_presentation,
+    create_knowledge_presentation,
     create_knowledge_outline,
     get_knowledge_outline,
     materialize_knowledge_outline_citations,
@@ -456,6 +459,36 @@ async def post_enterprise_knowledge_outline(
     )
     background_tasks.add_task(run_knowledge_outline_task, outline.id, task.id)
     return outline
+
+
+@API_V1_ENTERPRISE_ROUTER.post(
+    "/knowledge/presentations",
+    response_model=EnterpriseKnowledgePresentationResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def post_enterprise_knowledge_presentation(
+    body: EnterpriseKnowledgePresentationCreateRequest,
+    background_tasks: BackgroundTasks,
+    request: Request,
+    response: Response,
+    principal: AuthPrincipal = Depends(principal_from_request),
+    session: AsyncSession = Depends(get_async_session),
+):
+    presentation, entry, outline, task, replayed = await create_knowledge_presentation(
+        session,
+        principal=principal,
+        values=body.model_dump(),
+        idempotency_key=request.headers.get("Idempotency-Key"),
+    )
+    if replayed:
+        response.headers["Idempotency-Replayed"] = "true"
+    elif outline.status == "queued":
+        background_tasks.add_task(run_knowledge_outline_task, outline.id, task.id)
+    return EnterpriseKnowledgePresentationResponse(
+        presentation_id=presentation.id,
+        presentation_entry_id=entry.id,
+        outline=outline,
+    )
 
 
 @API_V1_ENTERPRISE_ROUTER.get(

@@ -1,9 +1,12 @@
 import os
 import uuid
+import hashlib
+import json
 
 import dirtyjson
 from fastapi import HTTPException
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.v1.auth.principal import AuthPrincipal
@@ -11,10 +14,12 @@ from constants.presentation import MAX_NUMBER_OF_SLIDES
 from enums.async_task_status import AsyncTaskStatus
 from models.presentation_outline_model import PresentationOutlineModel
 from models.sql.async_task import AsyncTaskModel
+from models.sql.enterprise.document import EnterpriseDocumentModel
 from models.sql.enterprise.knowledge_outline import EnterpriseKnowledgeOutlineModel
 from models.sql.enterprise.presentation_entry import PresentationEntryModel
 from models.sql.enterprise.presentation_governance import PresentationSourceCitationModel
 from models.sql.presentation import PresentationModel
+from models.sql.presentation import PresentationVersion
 from models.sql.slide import SlideModel
 from services.database import async_session_maker
 from services.enterprise.audit_service import record_audit_event
@@ -22,6 +27,7 @@ from services.enterprise.document_service import authorize_document_scope
 from services.enterprise.document_service import get_enterprise_document
 from services.enterprise.knowledge_service import _terms, search_enterprise_knowledge
 from services.enterprise.workspace_service import require_workspace_role
+from services.enterprise.presentation_workspace_service import attach_presentation_to_workspace
 from domains.platform.enums import PresentationCreationMode, WorkspaceRole
 from utils.llm_calls.generate_presentation_outlines import generate_ppt_outline
 from utils.outline_limits import normalize_outline_payload
@@ -140,6 +146,10 @@ async def create_knowledge_outline(
         language=values.get("language") or "Chinese",
         n_slides=values["n_slides"],
         document_ids=[str(item) for item in values.get("document_ids", [])],
+        presentation_entry_id=values.get("presentation_entry_id"),
+        idempotency_key=values.get("idempotency_key"),
+        input_manifest_hash=values.get("input_manifest_hash"),
+        input_manifest=values.get("input_manifest", []),
     )
     task = AsyncTaskModel(
         owner_id=principal.user_id,
@@ -149,6 +159,7 @@ async def create_knowledge_outline(
         data={
             "outline_id": str(outline.id),
             "instructions": values.get("instructions"),
+            "request_fingerprint": values.get("request_fingerprint"),
         },
     )
     outline.task_id = task.id
@@ -230,6 +241,33 @@ async def run_knowledge_outline_task(outline_id: uuid.UUID, task_id: str) -> Non
             outline.error = None
             task.status = AsyncTaskStatus.COMPLETED
             task.message = "Knowledge-backed outline is ready"
+            if outline.presentation_entry_id is not None:
+                entry = await session.get(
+                    PresentationEntryModel, outline.presentation_entry_id
+                )
+                presentation = (
+                    await session.scalar(
+                        select(PresentationModel)
+                        .execution_options(skip_owner_scope=True)
+                        .where(PresentationModel.id == entry.presentation_id)
+                    )
+                    if entry is not None
+                    else None
+                )
+                if presentation is None:
+                    raise ValueError("Linked enterprise presentation no longer exists")
+                presentation.outlines = {
+                    "slides": [
+                        {"content": item["content"]}
+                        for item in outline.outline["slides"]
+                    ]
+                }
+                presentation.n_slides = len(presentation.outlines["slides"])
+                presentation.title = outline.topic
+                entry.title = outline.topic
+                entry.creation_mode = PresentationCreationMode.DOCUMENT
+                entry.row_version += 1
+                session.add_all([presentation, entry])
             record_audit_event(
                 session,
                 actor_id=outline.created_by,
@@ -268,6 +306,151 @@ async def get_knowledge_outline(
         write=False,
     )
     return outline
+
+
+async def create_knowledge_presentation(
+    session: AsyncSession,
+    *,
+    principal: AuthPrincipal,
+    values: dict,
+    idempotency_key: str | None,
+) -> tuple[PresentationModel, PresentationEntryModel, EnterpriseKnowledgeOutlineModel, AsyncTaskModel, bool]:
+    normalized_key = (idempotency_key or "").strip() or None
+    if normalized_key and len(normalized_key) > 200:
+        raise HTTPException(status_code=422, detail="Idempotency-Key is too long")
+    request_fingerprint = hashlib.sha256(
+        json.dumps(values, sort_keys=True, default=str).encode("utf-8")
+    ).hexdigest()
+    if normalized_key:
+        existing = await session.scalar(
+            select(EnterpriseKnowledgeOutlineModel).where(
+                EnterpriseKnowledgeOutlineModel.created_by == principal.user_id,
+                EnterpriseKnowledgeOutlineModel.idempotency_key == normalized_key,
+            )
+        )
+        if existing is not None and existing.presentation_entry_id is not None:
+            entry = await session.get(
+                PresentationEntryModel, existing.presentation_entry_id
+            )
+            presentation = await session.scalar(
+                select(PresentationModel)
+                .execution_options(skip_owner_scope=True)
+                .where(PresentationModel.id == entry.presentation_id)
+            )
+            task = await session.get(AsyncTaskModel, existing.task_id)
+            if (task.data or {}).get("request_fingerprint") != request_fingerprint:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Idempotency-Key was already used with another request",
+                )
+            return presentation, entry, existing, task, True
+
+    workspace_id = values["workspace_id"]
+    await authorize_document_scope(
+        session,
+        principal=principal,
+        scope_type="workspace",
+        workspace_id=workspace_id,
+        project_id=None,
+        write=True,
+    )
+    snapshots = []
+    for document_id in values["document_ids"]:
+        document = await get_enterprise_document(
+            session, document_id=document_id, principal=principal
+        )
+        if document.scope_type != "workspace" or document.workspace_id != workspace_id:
+            raise HTTPException(
+                status_code=422, detail="Selected document belongs to another scope"
+            )
+        if (
+            document.parse_status != "ready"
+            or document.authorization_status == "revoked"
+            or not document.is_latest
+        ):
+            raise HTTPException(
+                status_code=409, detail="Selected document is not ready or current"
+            )
+        snapshots.append(
+            {
+                "document_id": str(document.id),
+                "version_group_id": str(document.version_group_id),
+                "version_no": document.version_no,
+                "sha256": document.sha256,
+            }
+        )
+    manifest_hash = hashlib.sha256(
+        json.dumps(snapshots, sort_keys=True).encode("utf-8")
+    ).hexdigest()
+    presentation = PresentationModel(
+        owner_id=principal.user_id,
+        version=PresentationVersion.V2_STANDARD,
+        content=values["topic"].strip(),
+        n_slides=values["n_slides"],
+        language=values.get("language") or "Chinese",
+        title=values["topic"].strip(),
+        instructions=values.get("instructions"),
+        include_title_slide=True,
+        include_table_of_contents=False,
+        web_search=False,
+    )
+    session.add(presentation)
+    entry = await attach_presentation_to_workspace(
+        session,
+        principal=principal,
+        workspace_id=workspace_id,
+        presentation=presentation,
+        folder_id=values.get("folder_id"),
+        scene_type="general",
+        creation_mode=PresentationCreationMode.DOCUMENT,
+    )
+    outline_values = {
+        "topic": values["topic"],
+        "query": values.get("query") or values["topic"],
+        "scope_type": "workspace",
+        "workspace_id": workspace_id,
+        "project_id": None,
+        "document_ids": values["document_ids"],
+        "audience": values.get("audience"),
+        "language": values.get("language") or "Chinese",
+        "n_slides": values["n_slides"],
+        "instructions": values.get("instructions"),
+        "presentation_entry_id": entry.id,
+        "idempotency_key": normalized_key,
+        "input_manifest_hash": manifest_hash,
+        "input_manifest": snapshots,
+        "request_fingerprint": request_fingerprint,
+    }
+    try:
+        outline, task = await create_knowledge_outline(
+            session, principal=principal, values=outline_values
+        )
+    except IntegrityError:
+        await session.rollback()
+        if normalized_key is None:
+            raise
+        existing = await session.scalar(
+            select(EnterpriseKnowledgeOutlineModel).where(
+                EnterpriseKnowledgeOutlineModel.created_by == principal.user_id,
+                EnterpriseKnowledgeOutlineModel.idempotency_key == normalized_key,
+            )
+        )
+        if existing is None or existing.presentation_entry_id is None:
+            raise
+        task = await session.get(AsyncTaskModel, existing.task_id)
+        if (task.data or {}).get("request_fingerprint") != request_fingerprint:
+            raise HTTPException(
+                status_code=409,
+                detail="Idempotency-Key was already used with another request",
+            )
+        entry = await session.get(PresentationEntryModel, existing.presentation_entry_id)
+        presentation = await session.scalar(
+            select(PresentationModel)
+            .execution_options(skip_owner_scope=True)
+            .where(PresentationModel.id == entry.presentation_id)
+        )
+        return presentation, entry, existing, task, True
+    return presentation, entry, outline, task, False
 
 
 async def apply_knowledge_outline_to_presentation(
@@ -349,6 +532,18 @@ async def materialize_knowledge_outline_citations(
     entry = await session.get(PresentationEntryModel, entry_id)
     if entry is None or entry.workspace_id != workspace_id:
         raise HTTPException(status_code=404, detail="Presentation entry not found")
+    for item in outline.input_manifest:
+        latest = await session.scalar(
+            select(EnterpriseDocumentModel).where(
+                EnterpriseDocumentModel.version_group_id
+                == uuid.UUID(item["version_group_id"]),
+                EnterpriseDocumentModel.is_latest.is_(True),
+            )
+        )
+        if latest is None or str(latest.id) != item["document_id"]:
+            outline.input_status = "stale"
+            session.add(outline)
+            break
     slides = list(
         (
             await session.scalars(
@@ -420,3 +615,40 @@ async def materialize_knowledge_outline_citations(
     )
     await session.commit()
     return created
+
+
+async def materialize_linked_knowledge_citations_for_presentation(
+    session: AsyncSession,
+    *,
+    presentation_id: uuid.UUID,
+) -> list[PresentationSourceCitationModel]:
+    entry = await session.scalar(
+        select(PresentationEntryModel).where(
+            PresentationEntryModel.presentation_id == presentation_id
+        )
+    )
+    if entry is None:
+        return []
+    outline = await session.scalar(
+        select(EnterpriseKnowledgeOutlineModel)
+        .where(
+            EnterpriseKnowledgeOutlineModel.presentation_entry_id == entry.id,
+            EnterpriseKnowledgeOutlineModel.status == "ready",
+        )
+        .order_by(EnterpriseKnowledgeOutlineModel.updated_at.desc())
+    )
+    if outline is None or outline.created_by is None:
+        return []
+    principal = AuthPrincipal(
+        user_id=outline.created_by,
+        username="knowledge-presentation-worker",
+        is_admin=outline.scope_type == "enterprise",
+        method="jwt",
+    )
+    return await materialize_knowledge_outline_citations(
+        session,
+        principal=principal,
+        outline_id=outline.id,
+        workspace_id=entry.workspace_id,
+        entry_id=entry.id,
+    )

@@ -1,7 +1,7 @@
 from datetime import datetime
 import uuid
 
-from sqlalchemy import Column, DateTime, ForeignKey, Integer, JSON, String, Text
+from sqlalchemy import Column, DateTime, ForeignKey, Integer, JSON, String, Text, UniqueConstraint
 from sqlmodel import Field, SQLModel
 
 from utils.datetime_utils import get_current_utc_datetime
@@ -9,6 +9,13 @@ from utils.datetime_utils import get_current_utc_datetime
 
 class EnterpriseKnowledgeOutlineModel(SQLModel, table=True):
     __tablename__ = "enterprise_knowledge_outlines"
+    __table_args__ = (
+        UniqueConstraint(
+            "created_by",
+            "idempotency_key",
+            name="uq_enterprise_knowledge_outline_idempotency",
+        ),
+    )
 
     id: uuid.UUID = Field(primary_key=True, default_factory=uuid.uuid4)
     workspace_id: uuid.UUID | None = Field(
@@ -44,6 +51,10 @@ class EnterpriseKnowledgeOutlineModel(SQLModel, table=True):
         default=None,
         sa_column=Column(ForeignKey("async_tasks.id", ondelete="SET NULL"), index=True),
     )
+    idempotency_key: str | None = Field(default=None, sa_column=Column(String(200), index=True))
+    input_manifest_hash: str | None = Field(default=None, sa_column=Column(String(64), index=True))
+    input_manifest: list = Field(default_factory=list, sa_column=Column(JSON, nullable=False))
+    input_status: str = Field(default="current", sa_column=Column(String(32), nullable=False, index=True))
     query: str = Field(sa_column=Column(String(500), nullable=False))
     document_ids: list = Field(default_factory=list, sa_column=Column(JSON, nullable=False))
     context_manifest: list = Field(default_factory=list, sa_column=Column(JSON, nullable=False))

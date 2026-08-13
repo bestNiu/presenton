@@ -49,6 +49,9 @@ from services.image_generation_service import ImageGenerationService
 from services.mem0_presentation_memory_service import (
     MEM0_PRESENTATION_MEMORY_SERVICE,
 )
+from services.enterprise.knowledge_outline_service import (
+    materialize_linked_knowledge_citations_for_presentation,
+)
 from utils.dict_utils import deep_update
 from utils.export_utils import export_presentation
 from utils.llm_calls.generate_presentation_outlines import (
@@ -2215,6 +2218,10 @@ async def stream_presentation(
         sql_session.add_all(slides)
         sql_session.add_all(generated_assets)
         await sql_session.commit()
+
+        await materialize_linked_knowledge_citations_for_presentation(
+            sql_session, presentation_id=id
+        )
 
         response = PresentationWithSlides(
             **_presentation_response_data(presentation),

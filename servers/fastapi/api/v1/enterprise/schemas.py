@@ -173,6 +173,10 @@ class EnterpriseKnowledgeOutlineResponse(BaseModel):
     n_slides: int
     status: str
     task_id: str | None
+    idempotency_key: str | None
+    input_manifest_hash: str | None
+    input_manifest: list
+    input_status: str
     query: str
     document_ids: list
     context_manifest: list
@@ -182,6 +186,24 @@ class EnterpriseKnowledgeOutlineResponse(BaseModel):
     error: str | None
     created_at: datetime
     updated_at: datetime
+
+
+class EnterpriseKnowledgePresentationCreateRequest(BaseModel):
+    workspace_id: uuid.UUID
+    topic: str = Field(min_length=1, max_length=500)
+    query: str | None = Field(default=None, max_length=500)
+    document_ids: list[uuid.UUID] = Field(min_length=1, max_length=100)
+    audience: str | None = Field(default=None, max_length=300)
+    language: str = Field(default="Chinese", min_length=1, max_length=64)
+    n_slides: int = Field(default=8, ge=1, le=30)
+    instructions: str | None = Field(default=None, max_length=2000)
+    folder_id: uuid.UUID | None = None
+
+
+class EnterpriseKnowledgePresentationResponse(BaseModel):
+    presentation_id: uuid.UUID
+    presentation_entry_id: uuid.UUID
+    outline: EnterpriseKnowledgeOutlineResponse
 
 
 class EnterpriseKnowledgeEvaluationCase(BaseModel):

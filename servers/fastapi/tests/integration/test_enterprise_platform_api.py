@@ -641,6 +641,106 @@ def test_enterprise_document_upload_versions_parse_access_and_storage_protection
         assert materialized.status_code == 200
         assert len(materialized.json()) == 1
         assert materialized_again.json()[0]["id"] == materialized.json()[0]["id"]
+
+        knowledge_presentation_payload = {
+            "workspace_id": workspace["id"],
+            "topic": "资料驱动企业汇报",
+            "query": "产品能力",
+            "document_ids": [second.json()["id"]],
+            "audience": "管理层",
+            "language": "Chinese",
+            "n_slides": 2,
+        }
+        knowledge_presentation = client.post(
+            "/api/v1/enterprise/knowledge/presentations",
+            json=knowledge_presentation_payload,
+            headers={"Idempotency-Key": "knowledge-presentation-case-1"},
+        )
+        knowledge_presentation_replayed = client.post(
+            "/api/v1/enterprise/knowledge/presentations",
+            json=knowledge_presentation_payload,
+            headers={"Idempotency-Key": "knowledge-presentation-case-1"},
+        )
+        knowledge_presentation_conflict = client.post(
+            "/api/v1/enterprise/knowledge/presentations",
+            json={**knowledge_presentation_payload, "topic": "另一个主题"},
+            headers={"Idempotency-Key": "knowledge-presentation-case-1"},
+        )
+        assert knowledge_presentation.status_code == 202, knowledge_presentation.text
+        assert knowledge_presentation.json()["outline"]["status"] == "queued"
+        assert knowledge_presentation.json()["outline"]["input_status"] == "current"
+        assert len(knowledge_presentation.json()["outline"]["input_manifest"]) == 1
+        assert len(knowledge_presentation.json()["outline"]["input_manifest_hash"]) == 64
+        assert knowledge_presentation_replayed.status_code == 202
+        assert knowledge_presentation_conflict.status_code == 409
+        assert knowledge_presentation_replayed.headers["Idempotency-Replayed"] == "true"
+        assert knowledge_presentation_replayed.json()["presentation_id"] == knowledge_presentation.json()["presentation_id"]
+        generated_outline = client.get(
+            f"/api/v1/enterprise/knowledge/outlines/{knowledge_presentation.json()['outline']['id']}"
+        )
+        async def load_generated_core_outline():
+            async with session_maker() as session:
+                presentation = await session.get(
+                    PresentationModel,
+                    uuid.UUID(knowledge_presentation.json()["presentation_id"]),
+                )
+                return presentation.outlines
+
+        generated_core_outline = asyncio.run(load_generated_core_outline())
+        assert generated_outline.json()["status"] == "ready"
+        assert generated_outline.json()["presentation_entry_id"] == knowledge_presentation.json()["presentation_entry_id"]
+        assert len(generated_core_outline["slides"]) == 2
+
+        async def seed_generated_slides_and_materialize():
+            async with session_maker() as session:
+                generated_presentation_id = uuid.UUID(
+                    knowledge_presentation.json()["presentation_id"]
+                )
+                session.add_all(
+                    [
+                        SlideModel(
+                            owner_id=users["owner"].id,
+                            presentation=generated_presentation_id,
+                            layout_group="general",
+                            layout="general-1",
+                            index=index,
+                            content={"title": f"知识页面 {index + 1}"},
+                            ui={"id": f"knowledge-slide-{index}", "elements": []},
+                        )
+                        for index in range(2)
+                    ]
+                )
+                await session.commit()
+                return await knowledge_outline_service.materialize_linked_knowledge_citations_for_presentation(
+                    session, presentation_id=generated_presentation_id
+                )
+
+        auto_citations = asyncio.run(seed_generated_slides_and_materialize())
+        assert len(auto_citations) == 2
+
+        third = client.post(
+            "/api/v1/enterprise/documents",
+            data=form,
+            files={"file": ("company.md", b"third version", "text/markdown")},
+        )
+        assert third.status_code == 201
+
+        async def refresh_input_status():
+            async with session_maker() as session:
+                await knowledge_outline_service.materialize_linked_knowledge_citations_for_presentation(
+                    session,
+                    presentation_id=uuid.UUID(
+                        knowledge_presentation.json()["presentation_id"]
+                    ),
+                )
+                refreshed = await session.get(
+                    EnterpriseKnowledgeOutlineModel,
+                    uuid.UUID(knowledge_presentation.json()["outline"]["id"]),
+                )
+                return refreshed.input_status
+
+        assert asyncio.run(refresh_input_status()) == "stale"
+
         evaluation_denied = client.post(
             "/api/v1/enterprise/knowledge/evaluations",
             json={"cases": [{"case_id": "c1", "expected_document_ids": [second.json()["id"]], "ranked_document_ids": [second.json()["id"]]}]},
@@ -684,7 +784,7 @@ def test_enterprise_document_upload_versions_parse_access_and_storage_protection
         )
         assert lifecycle.status_code == 200
         assert lifecycle.json()["candidate_count"] == 0
-        assert lifecycle.json()["protected_count"] == 3
+        assert lifecycle.json()["protected_count"] == 4
     finally:
         asyncio.run(engine.dispose())
 

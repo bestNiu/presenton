@@ -5,7 +5,13 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from domains.platform.enums import (
     BidContentStatus,
+    BidCommitmentStatus,
     BidDocumentStatus,
+    BidGateStatus,
+    BidGateType,
+    BidIssueStatus,
+    BidModuleStatus,
+    BidModuleType,
     BidProjectRole,
     BidProjectStatus,
     BidRequirementStatus,
@@ -182,6 +188,115 @@ class BidProjectDashboardResponse(BaseModel):
     strategy: BidStrategyResponse
     mandatory_requirement_coverage: float
     strategy_blockers: list[str]
+
+
+class BidModuleUpdateRequest(BaseModel):
+    content: dict = Field(default_factory=dict)
+    row_version: int = Field(ge=1)
+
+
+class BidModuleReviewRequest(BaseModel):
+    action: str = Field(pattern="^(approve|reject)$")
+    comment: str | None = Field(default=None, max_length=2000)
+
+
+class BidModuleResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: uuid.UUID
+    project_id: uuid.UUID
+    module_type: BidModuleType
+    version_no: int
+    input_snapshot: dict
+    content: dict
+    status: BidModuleStatus
+    row_version: int
+    created_by: uuid.UUID | None
+    updated_by: uuid.UUID | None
+    reviewed_by: uuid.UUID | None
+    review_comment: str | None
+    created_at: datetime
+    updated_at: datetime
+
+
+class BidCommitmentCreateRequest(BaseModel):
+    content: str = Field(min_length=1, max_length=10000)
+    commitment_type: str = Field(min_length=1, max_length=64)
+    conditions: str | None = Field(default=None, max_length=10000)
+    evidence_ref: str | None = Field(default=None, max_length=1000)
+    risk_level: str = Field(default="medium", pattern="^(low|medium|high)$")
+
+
+class BidCommitmentActionRequest(BaseModel):
+    action: str = Field(pattern="^(submit|approve|reject|revoke)$")
+    comment: str | None = Field(default=None, max_length=2000)
+
+
+class BidCommitmentResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: uuid.UUID
+    project_id: uuid.UUID
+    content: str
+    commitment_type: str
+    conditions: str | None
+    evidence_ref: str | None
+    risk_level: str
+    status: BidCommitmentStatus
+    row_version: int
+    proposed_by: uuid.UUID | None
+    decided_by: uuid.UUID | None
+    decision_comment: str | None
+    created_at: datetime
+    updated_at: datetime
+
+
+class BidGateActionRequest(BaseModel):
+    action: str = Field(pattern="^(open|pass)$")
+
+
+class BidIssueCreateRequest(BaseModel):
+    title: str = Field(min_length=1, max_length=300)
+    description: str | None = Field(default=None, max_length=10000)
+    severity: str = Field(default="blocking", pattern="^(blocking|warning)$")
+    owner_id: uuid.UUID | None = None
+
+
+class BidIssueResolveRequest(BaseModel):
+    resolution: str = Field(min_length=1, max_length=10000)
+
+
+class BidIssueResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: uuid.UUID
+    gate_id: uuid.UUID
+    title: str
+    description: str | None
+    severity: str
+    status: BidIssueStatus
+    owner_id: uuid.UUID | None
+    created_by: uuid.UUID | None
+    resolved_by: uuid.UUID | None
+    resolution: str | None
+    created_at: datetime
+    updated_at: datetime
+
+
+class BidGateResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: uuid.UUID
+    project_id: uuid.UUID
+    gate_type: BidGateType
+    status: BidGateStatus
+    opened_by: uuid.UUID | None
+    passed_by: uuid.UUID | None
+    opened_at: datetime | None
+    passed_at: datetime | None
+    issues: list[BidIssueResponse] = Field(default_factory=list)
+
+
+class BidCollaborationResponse(BaseModel):
+    modules: list[BidModuleResponse]
+    commitments: list[BidCommitmentResponse]
+    gates: list[BidGateResponse]
 
 
 class WorkspaceCreateRequest(BaseModel):
@@ -377,3 +492,8 @@ class TemplatePublicationResponse(BaseModel):
     offline_at: datetime | None
     created_at: datetime
     updated_at: datetime
+    BidGateStatus,
+    BidGateType,
+    BidIssueStatus,
+    BidModuleStatus,
+    BidModuleType,

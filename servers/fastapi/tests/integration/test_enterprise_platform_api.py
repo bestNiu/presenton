@@ -13,10 +13,14 @@ from domains.platform.enums import SceneStatus
 from models.sql.enterprise import (
     AuditEventModel,
     BidProjectDocumentModel,
+    BidCommitmentModel,
+    BidProfessionalModuleModel,
     BidProjectMemberModel,
     BidProjectModel,
     BidProjectProfileModel,
     BidRequirementModel,
+    BidReviewGateModel,
+    BidReviewIssueModel,
     BidStrategyModel,
     PresentationEntryModel,
     SceneDefinitionModel,
@@ -87,6 +91,10 @@ def _build_client(tmp_path):
                 BidProjectProfileModel.__table__,
                 BidRequirementModel.__table__,
                 BidStrategyModel.__table__,
+                BidProfessionalModuleModel.__table__,
+                BidCommitmentModel.__table__,
+                BidReviewGateModel.__table__,
+                BidReviewIssueModel.__table__,
             ):
                 await connection.run_sync(table.create)
         async with session_maker() as session:
@@ -600,6 +608,85 @@ def test_bid_understanding_flow_enforces_project_access_and_strategy_gate(tmp_pa
             f"/api/v1/enterprise/bid/projects/{project_id}/strategy/confirm"
         )
         dashboard = client.get(f"/api/v1/enterprise/bid/projects/{project_id}")
+        collaboration = client.post(
+            f"/api/v1/enterprise/bid/projects/{project_id}/modules/initialize"
+        )
+        gate1_blocked = client.post(
+            f"/api/v1/enterprise/bid/projects/{project_id}/gates/gate_1/action",
+            json={"action": "pass"},
+            headers={"x-test-user": "member"},
+        )
+        reviewed_modules = []
+        for module in collaboration.json()["modules"]:
+            updated_module = client.put(
+                f"/api/v1/enterprise/bid/projects/{project_id}/modules/{module['id']}",
+                json={
+                    "content": {
+                        "summary": f"{module['module_type']} 专业方案",
+                        "sources": ["protocol-summary:p2"],
+                    },
+                    "row_version": module["row_version"],
+                },
+            ).json()
+            submitted_module = client.post(
+                f"/api/v1/enterprise/bid/projects/{project_id}/modules/{module['id']}/submit"
+            ).json()
+            reviewed_modules.append(
+                client.post(
+                    f"/api/v1/enterprise/bid/projects/{project_id}/modules/{module['id']}/review",
+                    json={"action": "approve", "comment": "专业审核通过"},
+                    headers={"x-test-user": "member"},
+                )
+            )
+            assert updated_module["status"] == "draft"
+            assert submitted_module["status"] == "in_review"
+        gate1_opened = client.post(
+            f"/api/v1/enterprise/bid/projects/{project_id}/gates/gate_1/action",
+            json={"action": "open"},
+            headers={"x-test-user": "member"},
+        )
+        gate1_passed = client.post(
+            f"/api/v1/enterprise/bid/projects/{project_id}/gates/gate_1/action",
+            json={"action": "pass"},
+            headers={"x-test-user": "member"},
+        )
+        commitment = client.post(
+            f"/api/v1/enterprise/bid/projects/{project_id}/commitments",
+            json={
+                "content": "承诺在约定条件下完成首批中心启动",
+                "commitment_type": "timeline",
+                "conditions": "客户按时确认中心名单",
+                "evidence_ref": "historical-case:001",
+                "risk_level": "high",
+            },
+        ).json()
+        client.post(
+            f"/api/v1/enterprise/bid/projects/{project_id}/commitments/{commitment['id']}/action",
+            json={"action": "submit"},
+        )
+        self_approval_denied = client.post(
+            f"/api/v1/enterprise/bid/projects/{project_id}/commitments/{commitment['id']}/action",
+            json={"action": "approve"},
+        )
+        client.put(
+            f"/api/v1/enterprise/bid/projects/{project_id}/members/{users['member'].id}",
+            json={"user_id": str(users["member"].id), "role": "bid_manager"},
+        )
+        commitment_approved = client.post(
+            f"/api/v1/enterprise/bid/projects/{project_id}/commitments/{commitment['id']}/action",
+            json={"action": "approve", "comment": "依据充分"},
+            headers={"x-test-user": "member"},
+        )
+        gate2_opened = client.post(
+            f"/api/v1/enterprise/bid/projects/{project_id}/gates/gate_2/action",
+            json={"action": "open"},
+            headers={"x-test-user": "member"},
+        )
+        gate2_passed = client.post(
+            f"/api/v1/enterprise/bid/projects/{project_id}/gates/gate_2/action",
+            json={"action": "pass"},
+            headers={"x-test-user": "member"},
+        )
         reopened_profile = client.put(
             f"/api/v1/enterprise/bid/projects/{project_id}/profile",
             json={
@@ -636,6 +723,16 @@ def test_bid_understanding_flow_enforces_project_access_and_strategy_gate(tmp_pa
         assert dashboard.json()["project"]["status"] == "strategy_confirmed"
         assert dashboard.json()["mandatory_requirement_coverage"] == 100.0
         assert dashboard.json()["strategy_blockers"] == []
+        assert collaboration.status_code == 200
+        assert len(collaboration.json()["modules"]) == 3
+        assert gate1_blocked.status_code == 409
+        assert all(response.json()["status"] == "approved" for response in reviewed_modules)
+        assert gate1_opened.json()["status"] == "open"
+        assert gate1_passed.json()["status"] == "passed"
+        assert self_approval_denied.status_code == 409
+        assert commitment_approved.json()["status"] == "approved"
+        assert gate2_opened.json()["status"] == "open"
+        assert gate2_passed.json()["status"] == "passed"
         assert reopened_profile.status_code == 200
         assert reopened_dashboard.json()["strategy"]["version_no"] == 2
         assert reopened_dashboard.json()["strategy"]["status"] == "draft"

@@ -31,10 +31,14 @@ from models.sql.provider_settings import ProviderSettings
 from models.sql.enterprise import (
     AuditEventModel,
     BidProjectDocumentModel,
+    BidCommitmentModel,
+    BidProfessionalModuleModel,
     BidProjectMemberModel,
     BidProjectModel,
     BidProjectProfileModel,
     BidRequirementModel,
+    BidReviewGateModel,
+    BidReviewIssueModel,
     BidStrategyModel,
     PresentationEntryModel,
     SceneDefinitionModel,
@@ -172,6 +176,10 @@ async def create_db_and_tables():
                         BidProjectProfileModel.__table__,
                         BidRequirementModel.__table__,
                         BidStrategyModel.__table__,
+                        BidProfessionalModuleModel.__table__,
+                        BidCommitmentModel.__table__,
+                        BidReviewGateModel.__table__,
+                        BidReviewIssueModel.__table__,
                     ],
                 )
             )

@@ -89,6 +89,45 @@ class BidDocumentStatus(str, Enum):
     SUPERSEDED = "superseded"
 
 
+class BidModuleType(str, Enum):
+    MEDICAL = "medical"
+    OPERATIONS = "operations"
+    STATISTICS = "statistics"
+
+
+class BidModuleStatus(str, Enum):
+    DRAFT = "draft"
+    IN_REVIEW = "in_review"
+    APPROVED = "approved"
+    REJECTED = "rejected"
+    STALE = "stale"
+
+
+class BidCommitmentStatus(str, Enum):
+    CANDIDATE = "candidate"
+    PENDING = "pending"
+    APPROVED = "approved"
+    REJECTED = "rejected"
+    REVOKED = "revoked"
+
+
+class BidGateType(str, Enum):
+    GATE_1 = "gate_1"
+    GATE_2 = "gate_2"
+
+
+class BidGateStatus(str, Enum):
+    LOCKED = "locked"
+    OPEN = "open"
+    BLOCKED = "blocked"
+    PASSED = "passed"
+
+
+class BidIssueStatus(str, Enum):
+    OPEN = "open"
+    RESOLVED = "resolved"
+
+
 class AuditResult(str, Enum):
     SUCCESS = "success"
     DENIED = "denied"

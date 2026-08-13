@@ -9,6 +9,18 @@ from api.v1.enterprise.schemas import (
     AuditEventResponse,
     BidDocumentCreateRequest,
     BidDocumentResponse,
+    BidCollaborationResponse,
+    BidCommitmentActionRequest,
+    BidCommitmentCreateRequest,
+    BidCommitmentResponse,
+    BidGateActionRequest,
+    BidGateResponse,
+    BidIssueCreateRequest,
+    BidIssueResolveRequest,
+    BidIssueResponse,
+    BidModuleResponse,
+    BidModuleReviewRequest,
+    BidModuleUpdateRequest,
     BidProfileResponse,
     BidProfileUpdateRequest,
     BidProjectCreateRequest,
@@ -34,7 +46,7 @@ from api.v1.enterprise.schemas import (
     WorkspaceMemberUpsertRequest,
     WorkspaceResponse,
 )
-from domains.platform.enums import TemplatePublicationStatus, WorkspaceRole
+from domains.platform.enums import BidGateType, TemplatePublicationStatus, WorkspaceRole
 from models.sql.enterprise.audit_event import AuditEventModel
 from models.sql.user import User
 from services.database import get_async_session
@@ -54,6 +66,18 @@ from services.enterprise.bid_project_service import (
     update_requirement,
     update_strategy,
     upsert_project_member,
+)
+from services.enterprise.bid_collaboration_service import (
+    act_on_commitment,
+    act_on_gate,
+    create_commitment,
+    create_gate_issue,
+    initialize_modules,
+    list_collaboration,
+    review_module,
+    resolve_gate_issue,
+    submit_module,
+    update_module,
 )
 from services.enterprise.scene_service import list_active_scenes
 from services.enterprise.scene_registry_service import resolve_scene_runtime
@@ -79,6 +103,65 @@ from services.enterprise.workspace_service import (
 API_V1_ENTERPRISE_ROUTER = APIRouter(
     prefix="/api/v1/enterprise", tags=["Enterprise Platform"]
 )
+
+
+def _collaboration_response(rows: dict) -> dict:
+    return {
+        "modules": rows["modules"],
+        "commitments": rows["commitments"],
+        "gates": [BidGateResponse.model_validate(item["gate"]).model_copy(update={"issues": item["issues"]}) for item in rows["gates"]],
+    }
+
+
+@API_V1_ENTERPRISE_ROUTER.post("/bid/projects/{project_id}/modules/initialize", response_model=BidCollaborationResponse)
+async def post_bid_modules_initialize(project_id: uuid.UUID, principal: AuthPrincipal = Depends(principal_from_request), session: AsyncSession = Depends(get_async_session)):
+    return _collaboration_response(await initialize_modules(session, project_id=project_id, principal=principal))
+
+
+@API_V1_ENTERPRISE_ROUTER.get("/bid/projects/{project_id}/collaboration", response_model=BidCollaborationResponse)
+async def get_bid_collaboration(project_id: uuid.UUID, principal: AuthPrincipal = Depends(principal_from_request), session: AsyncSession = Depends(get_async_session)):
+    return _collaboration_response(await list_collaboration(session, project_id=project_id, principal=principal))
+
+
+@API_V1_ENTERPRISE_ROUTER.put("/bid/projects/{project_id}/modules/{module_id}", response_model=BidModuleResponse)
+async def put_bid_module(project_id: uuid.UUID, module_id: uuid.UUID, body: BidModuleUpdateRequest, principal: AuthPrincipal = Depends(principal_from_request), session: AsyncSession = Depends(get_async_session)):
+    return await update_module(session, project_id=project_id, module_id=module_id, principal=principal, **body.model_dump())
+
+
+@API_V1_ENTERPRISE_ROUTER.post("/bid/projects/{project_id}/modules/{module_id}/submit", response_model=BidModuleResponse)
+async def post_bid_module_submit(project_id: uuid.UUID, module_id: uuid.UUID, principal: AuthPrincipal = Depends(principal_from_request), session: AsyncSession = Depends(get_async_session)):
+    return await submit_module(session, project_id=project_id, module_id=module_id, principal=principal)
+
+
+@API_V1_ENTERPRISE_ROUTER.post("/bid/projects/{project_id}/modules/{module_id}/review", response_model=BidModuleResponse)
+async def post_bid_module_review(project_id: uuid.UUID, module_id: uuid.UUID, body: BidModuleReviewRequest, principal: AuthPrincipal = Depends(principal_from_request), session: AsyncSession = Depends(get_async_session)):
+    return await review_module(session, project_id=project_id, module_id=module_id, principal=principal, **body.model_dump())
+
+
+@API_V1_ENTERPRISE_ROUTER.post("/bid/projects/{project_id}/commitments", response_model=BidCommitmentResponse, status_code=status.HTTP_201_CREATED)
+async def post_bid_commitment(project_id: uuid.UUID, body: BidCommitmentCreateRequest, principal: AuthPrincipal = Depends(principal_from_request), session: AsyncSession = Depends(get_async_session)):
+    return await create_commitment(session, project_id=project_id, principal=principal, values=body.model_dump())
+
+
+@API_V1_ENTERPRISE_ROUTER.post("/bid/projects/{project_id}/commitments/{commitment_id}/action", response_model=BidCommitmentResponse)
+async def post_bid_commitment_action(project_id: uuid.UUID, commitment_id: uuid.UUID, body: BidCommitmentActionRequest, principal: AuthPrincipal = Depends(principal_from_request), session: AsyncSession = Depends(get_async_session)):
+    return await act_on_commitment(session, project_id=project_id, commitment_id=commitment_id, principal=principal, **body.model_dump())
+
+
+@API_V1_ENTERPRISE_ROUTER.post("/bid/projects/{project_id}/gates/{gate_type}/action", response_model=BidGateResponse)
+async def post_bid_gate_action(project_id: uuid.UUID, gate_type: BidGateType, body: BidGateActionRequest, principal: AuthPrincipal = Depends(principal_from_request), session: AsyncSession = Depends(get_async_session)):
+    gate = await act_on_gate(session, project_id=project_id, gate_type=gate_type, principal=principal, action=body.action)
+    return BidGateResponse.model_validate(gate).model_copy(update={"issues": []})
+
+
+@API_V1_ENTERPRISE_ROUTER.post("/bid/projects/{project_id}/gates/{gate_type}/issues", response_model=BidIssueResponse, status_code=status.HTTP_201_CREATED)
+async def post_bid_gate_issue(project_id: uuid.UUID, gate_type: BidGateType, body: BidIssueCreateRequest, principal: AuthPrincipal = Depends(principal_from_request), session: AsyncSession = Depends(get_async_session)):
+    return await create_gate_issue(session, project_id=project_id, gate_type=gate_type, principal=principal, values=body.model_dump())
+
+
+@API_V1_ENTERPRISE_ROUTER.post("/bid/projects/{project_id}/gate-issues/{issue_id}/resolve", response_model=BidIssueResponse)
+async def post_bid_gate_issue_resolve(project_id: uuid.UUID, issue_id: uuid.UUID, body: BidIssueResolveRequest, principal: AuthPrincipal = Depends(principal_from_request), session: AsyncSession = Depends(get_async_session)):
+    return await resolve_gate_issue(session, project_id=project_id, issue_id=issue_id, principal=principal, resolution=body.resolution)
 
 
 @API_V1_ENTERPRISE_ROUTER.post(

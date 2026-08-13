@@ -34,7 +34,8 @@ REVISION_ENTERPRISE_CREATION_MODE = "b5f9d3e7a1c2"
 REVISION_TEMPLATE_PUBLICATION = "c6a0e4f8b2d3"
 REVISION_SCENE_RUNTIME = "d7b1f5a9c3e4"
 REVISION_BID_UNDERSTANDING = "e8c2a6b0d4f5"
-REVISION_HEAD = REVISION_BID_UNDERSTANDING
+REVISION_BID_COLLABORATION = "f9d3b7c1e5a6"
+REVISION_HEAD = REVISION_BID_COLLABORATION
 
 
 async def migrate_database_on_startup() -> None:
@@ -129,6 +130,8 @@ def _infer_revision_from_schema(
         "enterprise_audit_events",
     }
     if enterprise_tables.issubset(tables):
+        if "enterprise_bid_professional_modules" in tables:
+            return REVISION_BID_COLLABORATION
         if "enterprise_bid_projects" in tables:
             return REVISION_BID_UNDERSTANDING
         if "enterprise_template_publications" in tables:

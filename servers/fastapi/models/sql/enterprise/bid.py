@@ -17,8 +17,14 @@ from sqlalchemy import (
 from sqlmodel import Field, SQLModel
 
 from domains.platform.enums import (
+    BidCommitmentStatus,
     BidContentStatus,
     BidDocumentStatus,
+    BidGateStatus,
+    BidGateType,
+    BidIssueStatus,
+    BidModuleStatus,
+    BidModuleType,
     BidProjectRole,
     BidProjectStatus,
     BidRequirementStatus,
@@ -240,3 +246,77 @@ class BidStrategyModel(SQLModel, table=True):
             onupdate=get_current_utc_datetime,
         )
     )
+
+
+class BidProfessionalModuleModel(SQLModel, table=True):
+    __tablename__ = "enterprise_bid_professional_modules"
+    __table_args__ = (
+        UniqueConstraint("project_id", "module_type", "version_no", name="uq_bid_module_version"),
+    )
+
+    id: uuid.UUID = Field(primary_key=True, default_factory=uuid.uuid4)
+    project_id: uuid.UUID = Field(sa_column=Column(ForeignKey("enterprise_bid_projects.id", ondelete="CASCADE"), nullable=False, index=True))
+    module_type: BidModuleType = Field(sa_column=Column(String(32), nullable=False, index=True))
+    version_no: int = Field(default=1, sa_column=Column(Integer, nullable=False))
+    input_snapshot: dict = Field(default_factory=dict, sa_column=Column(JSON, nullable=False))
+    content: dict = Field(default_factory=dict, sa_column=Column(JSON, nullable=False))
+    status: BidModuleStatus = Field(default=BidModuleStatus.DRAFT, sa_column=Column(String(32), nullable=False, index=True))
+    row_version: int = Field(default=1, sa_column=Column(Integer, nullable=False))
+    created_by: uuid.UUID | None = Field(default=None, sa_column=Column(ForeignKey("user.id", ondelete="SET NULL")))
+    updated_by: uuid.UUID | None = Field(default=None, sa_column=Column(ForeignKey("user.id", ondelete="SET NULL")))
+    reviewed_by: uuid.UUID | None = Field(default=None, sa_column=Column(ForeignKey("user.id", ondelete="SET NULL")))
+    review_comment: str | None = Field(default=None, sa_column=Column(String(2000)))
+    created_at: datetime = Field(sa_column=Column(DateTime(timezone=True), default=get_current_utc_datetime))
+    updated_at: datetime = Field(sa_column=Column(DateTime(timezone=True), default=get_current_utc_datetime, onupdate=get_current_utc_datetime))
+
+
+class BidCommitmentModel(SQLModel, table=True):
+    __tablename__ = "enterprise_bid_commitments"
+
+    id: uuid.UUID = Field(primary_key=True, default_factory=uuid.uuid4)
+    project_id: uuid.UUID = Field(sa_column=Column(ForeignKey("enterprise_bid_projects.id", ondelete="CASCADE"), nullable=False, index=True))
+    content: str = Field(sa_column=Column(Text, nullable=False))
+    commitment_type: str = Field(sa_column=Column(String(64), nullable=False, index=True))
+    conditions: str | None = Field(default=None, sa_column=Column(Text))
+    evidence_ref: str | None = Field(default=None, sa_column=Column(String(1000)))
+    risk_level: str = Field(default="medium", sa_column=Column(String(16), nullable=False))
+    status: BidCommitmentStatus = Field(default=BidCommitmentStatus.CANDIDATE, sa_column=Column(String(32), nullable=False, index=True))
+    row_version: int = Field(default=1, sa_column=Column(Integer, nullable=False))
+    proposed_by: uuid.UUID | None = Field(default=None, sa_column=Column(ForeignKey("user.id", ondelete="SET NULL")))
+    decided_by: uuid.UUID | None = Field(default=None, sa_column=Column(ForeignKey("user.id", ondelete="SET NULL")))
+    decision_comment: str | None = Field(default=None, sa_column=Column(String(2000)))
+    created_at: datetime = Field(sa_column=Column(DateTime(timezone=True), default=get_current_utc_datetime))
+    updated_at: datetime = Field(sa_column=Column(DateTime(timezone=True), default=get_current_utc_datetime, onupdate=get_current_utc_datetime))
+
+
+class BidReviewGateModel(SQLModel, table=True):
+    __tablename__ = "enterprise_bid_review_gates"
+    __table_args__ = (UniqueConstraint("project_id", "gate_type", name="uq_bid_review_gate"),)
+
+    id: uuid.UUID = Field(primary_key=True, default_factory=uuid.uuid4)
+    project_id: uuid.UUID = Field(sa_column=Column(ForeignKey("enterprise_bid_projects.id", ondelete="CASCADE"), nullable=False, index=True))
+    gate_type: BidGateType = Field(sa_column=Column(String(32), nullable=False, index=True))
+    status: BidGateStatus = Field(default=BidGateStatus.LOCKED, sa_column=Column(String(32), nullable=False, index=True))
+    opened_by: uuid.UUID | None = Field(default=None, sa_column=Column(ForeignKey("user.id", ondelete="SET NULL")))
+    passed_by: uuid.UUID | None = Field(default=None, sa_column=Column(ForeignKey("user.id", ondelete="SET NULL")))
+    opened_at: datetime | None = Field(default=None, sa_column=Column(DateTime(timezone=True)))
+    passed_at: datetime | None = Field(default=None, sa_column=Column(DateTime(timezone=True)))
+    created_at: datetime = Field(sa_column=Column(DateTime(timezone=True), default=get_current_utc_datetime))
+    updated_at: datetime = Field(sa_column=Column(DateTime(timezone=True), default=get_current_utc_datetime, onupdate=get_current_utc_datetime))
+
+
+class BidReviewIssueModel(SQLModel, table=True):
+    __tablename__ = "enterprise_bid_review_issues"
+
+    id: uuid.UUID = Field(primary_key=True, default_factory=uuid.uuid4)
+    gate_id: uuid.UUID = Field(sa_column=Column(ForeignKey("enterprise_bid_review_gates.id", ondelete="CASCADE"), nullable=False, index=True))
+    title: str = Field(sa_column=Column(String(300), nullable=False))
+    description: str | None = Field(default=None, sa_column=Column(Text))
+    severity: str = Field(default="blocking", sa_column=Column(String(32), nullable=False, index=True))
+    status: BidIssueStatus = Field(default=BidIssueStatus.OPEN, sa_column=Column(String(32), nullable=False, index=True))
+    owner_id: uuid.UUID | None = Field(default=None, sa_column=Column(ForeignKey("user.id", ondelete="SET NULL")))
+    created_by: uuid.UUID | None = Field(default=None, sa_column=Column(ForeignKey("user.id", ondelete="SET NULL")))
+    resolved_by: uuid.UUID | None = Field(default=None, sa_column=Column(ForeignKey("user.id", ondelete="SET NULL")))
+    resolution: str | None = Field(default=None, sa_column=Column(Text))
+    created_at: datetime = Field(sa_column=Column(DateTime(timezone=True), default=get_current_utc_datetime))
+    updated_at: datetime = Field(sa_column=Column(DateTime(timezone=True), default=get_current_utc_datetime, onupdate=get_current_utc_datetime))

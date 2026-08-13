@@ -18,6 +18,7 @@ import {
 import {
   EnterpriseApi,
   type BidProjectDashboardResponse,
+  type BidCollaborationResponse,
   type BidRequirementResponse,
 } from "@/app/(presentation-generator)/services/api/enterprise";
 
@@ -79,6 +80,7 @@ function strategyDraftFromDashboard(
 function BidProjectDashboardPage() {
   const params = useParams<{ projectId: string }>();
   const [dashboard, setDashboard] = useState<BidProjectDashboardResponse | null>(null);
+  const [collaboration, setCollaboration] = useState<BidCollaborationResponse>({ modules: [], commitments: [], gates: [] });
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState("");
   const [profileDraft, setProfileDraft] = useState<FactDraft>({});
@@ -97,9 +99,11 @@ function BidProjectDashboardPage() {
     source_ref: "",
   });
   const [responses, setResponses] = useState<Record<string, string>>({});
+  const [moduleDrafts, setModuleDrafts] = useState<Record<string, string>>({});
+  const [commitmentDraft, setCommitmentDraft] = useState({ content: "", commitment_type: "timeline", evidence_ref: "", risk_level: "medium" });
 
   const load = useCallback(async () => {
-    const next = await EnterpriseApi.getBidProject(params.projectId);
+    const [next, collaborationRows] = await Promise.all([EnterpriseApi.getBidProject(params.projectId), EnterpriseApi.getBidCollaboration(params.projectId)]);
     setDashboard(next);
     setProfileDraft(factDraftFromDashboard(next));
     setConflictDraft(next.profile.conflicts.map(String).join("\n"));
@@ -107,6 +111,8 @@ function BidProjectDashboardPage() {
     setResponses(
       Object.fromEntries(next.requirements.map((item) => [item.id, item.response || ""]))
     );
+    setCollaboration(collaborationRows);
+    setModuleDrafts(Object.fromEntries(collaborationRows.modules.map((module) => [module.id, String(module.content.summary || "")])));
   }, [params.projectId]);
 
   useEffect(() => {
@@ -215,6 +221,16 @@ function BidProjectDashboardPage() {
     );
   };
 
+  const saveModule = async (moduleId: string, rowVersion: number) => {
+    await execute(`module-${moduleId}`, () => EnterpriseApi.updateBidModule(project.id, moduleId, { summary: moduleDrafts[moduleId] || "", sources: activeDocuments.map((item) => `${item.category}:v${item.version_no}`) }, rowVersion));
+  };
+
+  const createCommitment = async (event: FormEvent) => {
+    event.preventDefault();
+    const succeeded = await execute("commitment-create", () => EnterpriseApi.createBidCommitment(project.id, { ...commitmentDraft, evidence_ref: commitmentDraft.evidence_ref || undefined }));
+    if (succeeded) setCommitmentDraft({ content: "", commitment_type: "timeline", evidence_ref: "", risk_level: "medium" });
+  };
+
   return (
     <main className="min-h-screen bg-[#F7F8FC] px-5 py-8 sm:px-8 lg:px-10">
       <div className="mx-auto max-w-[1240px]">
@@ -266,6 +282,16 @@ function BidProjectDashboardPage() {
           <div className="mt-4 grid gap-4 md:grid-cols-2">{strategyFields.map(([key, label]) => <label key={key} className="grid gap-1.5 text-xs font-medium text-[#475467]">{label}<textarea disabled={!canContribute || strategy.status === "confirmed"} value={strategyDraft[key] || ""} onChange={(event) => setStrategyDraft({ ...strategyDraft, [key]: event.target.value })} rows={4} placeholder="每行填写一个要点" className="rounded-lg border border-[#D9DCE3] p-3 text-sm font-normal text-[#101828] disabled:bg-[#F8F9FC]" /></label>)}</div>
           <div className="mt-4 flex justify-end gap-2">{canContribute && strategy.status !== "confirmed" && <button type="button" onClick={() => void saveStrategy()} disabled={pending === "strategy-save"} className="inline-flex h-9 items-center gap-1 rounded-lg border border-[#D9DCE3] px-3 text-sm"><Save className="h-4 w-4" /> 保存草稿</button>}{canConfirmStrategy && strategy.status !== "confirmed" && <button type="button" onClick={() => void execute("strategy-confirm", () => EnterpriseApi.confirmBidStrategy(project.id))} disabled={pending === "strategy-confirm" || dashboard.strategy_blockers.length > 0} className="h-9 rounded-lg bg-[#17171B] px-4 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-40">确认策略纸</button>}</div>
         </section>
+
+        <section className="mt-5 rounded-2xl border border-[#E3E4EA] bg-white p-6">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"><div><h2 className="font-semibold text-[#101828]">专业模块协同</h2><p className="mt-1 text-xs text-[#667085]">医学、运营、数统共享同一策略和资料快照。</p></div>{collaboration.modules.length === 0 && canConfirmStrategy && <button type="button" disabled={strategy.status !== "confirmed" || pending === "modules-init"} onClick={() => void execute("modules-init", () => EnterpriseApi.initializeBidModules(project.id))} className="h-9 rounded-lg bg-[#635BFF] px-3 text-sm font-medium text-white disabled:opacity-40">初始化三模块</button>}</div>
+          <div className="mt-4 grid gap-4 lg:grid-cols-3">{collaboration.modules.map((module) => <article key={module.id} className="rounded-xl border border-[#EAECF0] p-4"><div className="flex items-center justify-between"><h3 className="text-sm font-semibold text-[#101828]">{{ medical: "医学方案", operations: "运营方案", statistics: "数统方案" }[module.module_type]}</h3><span className="rounded-full bg-[#F2F4F7] px-2 py-1 text-[11px]">{module.status}</span></div><textarea disabled={!canContribute || ["in_review", "approved"].includes(module.status)} value={moduleDrafts[module.id] || ""} onChange={(event) => setModuleDrafts({ ...moduleDrafts, [module.id]: event.target.value })} rows={6} placeholder="专业方案摘要、关键表格和页面建议" className="mt-3 w-full rounded-lg border border-[#D9DCE3] p-3 text-sm disabled:bg-[#F8F9FC]" /><div className="mt-3 flex flex-wrap justify-end gap-2">{canContribute && ["draft", "rejected"].includes(module.status) && <><button type="button" onClick={() => void saveModule(module.id, module.row_version)} className="h-8 rounded-lg border border-[#D9DCE3] px-2.5 text-xs">保存</button><button type="button" disabled={!moduleDrafts[module.id]?.trim()} onClick={() => void execute(`submit-${module.id}`, () => EnterpriseApi.submitBidModule(project.id, module.id))} className="h-8 rounded-lg bg-[#087BCB] px-2.5 text-xs text-white disabled:opacity-40">提交审核</button></>}{canReview && module.status === "in_review" && <><button type="button" onClick={() => void execute(`reject-${module.id}`, () => EnterpriseApi.reviewBidModule(project.id, module.id, "reject", "请修改后重新提交"))} className="h-8 rounded-lg border border-[#FDA29B] px-2.5 text-xs text-[#B42318]">退回</button><button type="button" onClick={() => void execute(`approve-${module.id}`, () => EnterpriseApi.reviewBidModule(project.id, module.id, "approve", "专业审核通过"))} className="h-8 rounded-lg bg-[#027A48] px-2.5 text-xs text-white">批准</button></>}</div></article>)}</div>
+        </section>
+
+        <div className="mt-5 grid gap-5 lg:grid-cols-[1.2fr_1fr]">
+          <section className="rounded-2xl border border-[#E3E4EA] bg-white p-6"><h2 className="font-semibold text-[#101828]">服务承诺审批</h2>{canContribute && <form onSubmit={createCommitment} className="mt-4 grid gap-2"><input value={commitmentDraft.content} onChange={(event) => setCommitmentDraft({ ...commitmentDraft, content: event.target.value })} placeholder="承诺内容" className="h-10 rounded-lg border border-[#D9DCE3] px-3 text-sm" /><div className="grid gap-2 sm:grid-cols-[140px_1fr_auto]"><select value={commitmentDraft.commitment_type} onChange={(event) => setCommitmentDraft({ ...commitmentDraft, commitment_type: event.target.value })} className="h-9 rounded-lg border border-[#D9DCE3] bg-white px-2 text-sm"><option value="timeline">周期</option><option value="quality">质量</option><option value="resource">资源</option></select><input value={commitmentDraft.evidence_ref} onChange={(event) => setCommitmentDraft({ ...commitmentDraft, evidence_ref: event.target.value })} placeholder="历史依据/证据引用" className="h-9 rounded-lg border border-[#D9DCE3] px-3 text-sm" /><button disabled={!commitmentDraft.content.trim()} className="h-9 rounded-lg bg-[#17171B] px-3 text-xs text-white disabled:opacity-40">添加候选</button></div></form>}<div className="mt-4 grid gap-2">{collaboration.commitments.map((item) => <article key={item.id} className="rounded-lg bg-[#F8F9FC] p-3"><div className="flex items-start justify-between gap-3"><p className="text-sm text-[#101828]">{item.content}</p><span className="text-xs text-[#667085]">{item.status}</span></div><p className="mt-1 text-xs text-[#98A2B3]">依据：{item.evidence_ref || "未填写"}</p><div className="mt-2 flex justify-end gap-2">{canContribute && item.status === "candidate" && <button onClick={() => void execute(`commitment-${item.id}`, () => EnterpriseApi.actOnBidCommitment(project.id, item.id, "submit"))} className="text-xs text-[#635BFF]">提交审批</button>}{canConfirmStrategy && item.status === "pending" && <button onClick={() => void execute(`commitment-${item.id}`, () => EnterpriseApi.actOnBidCommitment(project.id, item.id, "approve"))} className="text-xs text-[#027A48]">批准</button>}</div></article>)}</div></section>
+          <section className="rounded-2xl border border-[#E3E4EA] bg-white p-6"><h2 className="font-semibold text-[#101828]">Gate 1 / Gate 2</h2><div className="mt-4 grid gap-3">{collaboration.gates.map((gate) => <article key={gate.id} className="rounded-xl border border-[#EAECF0] p-4"><div className="flex items-center justify-between"><div><p className="text-sm font-semibold text-[#101828]">{gate.gate_type === "gate_1" ? "Gate 1 专业正确性" : "Gate 2 客户决策逻辑"}</p><p className="mt-1 text-xs text-[#667085]">{gate.status}</p></div>{canReview && gate.status !== "passed" && <div className="flex gap-2"><button onClick={() => void execute(`${gate.id}-open`, () => EnterpriseApi.actOnBidGate(project.id, gate.gate_type, "open"))} className="h-8 rounded-lg border border-[#D9DCE3] px-2 text-xs">检查</button><button onClick={() => void execute(`${gate.id}-pass`, () => EnterpriseApi.actOnBidGate(project.id, gate.gate_type, "pass"))} className="h-8 rounded-lg bg-[#027A48] px-2 text-xs text-white">通过</button></div>}</div></article>)}</div></section>
+        </div>
       </div>
     </main>
   );

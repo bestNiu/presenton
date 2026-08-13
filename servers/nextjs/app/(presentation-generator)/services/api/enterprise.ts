@@ -117,6 +117,39 @@ export interface BidProjectDashboardResponse {
   strategy_blockers: string[];
 }
 
+export interface BidModuleResponse {
+  id: string;
+  module_type: "medical" | "operations" | "statistics";
+  version_no: number;
+  content: Record<string, unknown>;
+  status: "draft" | "in_review" | "approved" | "rejected" | "stale";
+  row_version: number;
+  updated_by: string | null;
+  review_comment: string | null;
+}
+
+export interface BidCommitmentResponse {
+  id: string;
+  content: string;
+  commitment_type: string;
+  evidence_ref: string | null;
+  risk_level: string;
+  status: "candidate" | "pending" | "approved" | "rejected" | "revoked";
+}
+
+export interface BidGateResponse {
+  id: string;
+  gate_type: "gate_1" | "gate_2";
+  status: "locked" | "open" | "blocked" | "passed";
+  issues: Array<{ id: string; title: string; status: "open" | "resolved" }>;
+}
+
+export interface BidCollaborationResponse {
+  modules: BidModuleResponse[];
+  commitments: BidCommitmentResponse[];
+  gates: BidGateResponse[];
+}
+
 export type PresentationCreationMode =
   | "topic"
   | "document"
@@ -470,5 +503,45 @@ export class EnterpriseApi {
       { method: "POST", credentials: "include" }
     );
     return ApiResponseHandler.handleResponse(response, "Failed to confirm bid strategy");
+  }
+
+  static async getBidCollaboration(projectId: string): Promise<BidCollaborationResponse> {
+    const response = await fetch(getApiUrl(`/api/v1/enterprise/bid/projects/${encodeURIComponent(projectId)}/collaboration`), { credentials: "include", cache: "no-store" });
+    return ApiResponseHandler.handleResponse(response, "Failed to load professional collaboration");
+  }
+
+  static async initializeBidModules(projectId: string): Promise<BidCollaborationResponse> {
+    const response = await fetch(getApiUrl(`/api/v1/enterprise/bid/projects/${encodeURIComponent(projectId)}/modules/initialize`), { method: "POST", credentials: "include" });
+    return ApiResponseHandler.handleResponse(response, "Failed to initialize professional modules");
+  }
+
+  static async updateBidModule(projectId: string, moduleId: string, content: Record<string, unknown>, rowVersion: number): Promise<BidModuleResponse> {
+    const response = await fetch(getApiUrl(`/api/v1/enterprise/bid/projects/${encodeURIComponent(projectId)}/modules/${encodeURIComponent(moduleId)}`), { method: "PUT", credentials: "include", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ content, row_version: rowVersion }) });
+    return ApiResponseHandler.handleResponse(response, "Failed to update professional module");
+  }
+
+  static async submitBidModule(projectId: string, moduleId: string): Promise<BidModuleResponse> {
+    const response = await fetch(getApiUrl(`/api/v1/enterprise/bid/projects/${encodeURIComponent(projectId)}/modules/${encodeURIComponent(moduleId)}/submit`), { method: "POST", credentials: "include" });
+    return ApiResponseHandler.handleResponse(response, "Failed to submit professional module");
+  }
+
+  static async reviewBidModule(projectId: string, moduleId: string, action: "approve" | "reject", comment?: string): Promise<BidModuleResponse> {
+    const response = await fetch(getApiUrl(`/api/v1/enterprise/bid/projects/${encodeURIComponent(projectId)}/modules/${encodeURIComponent(moduleId)}/review`), { method: "POST", credentials: "include", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action, comment }) });
+    return ApiResponseHandler.handleResponse(response, "Failed to review professional module");
+  }
+
+  static async createBidCommitment(projectId: string, input: { content: string; commitment_type: string; evidence_ref?: string; risk_level: string }): Promise<BidCommitmentResponse> {
+    const response = await fetch(getApiUrl(`/api/v1/enterprise/bid/projects/${encodeURIComponent(projectId)}/commitments`), { method: "POST", credentials: "include", headers: { "Content-Type": "application/json" }, body: JSON.stringify(input) });
+    return ApiResponseHandler.handleResponse(response, "Failed to create commitment");
+  }
+
+  static async actOnBidCommitment(projectId: string, commitmentId: string, action: "submit" | "approve" | "reject" | "revoke"): Promise<BidCommitmentResponse> {
+    const response = await fetch(getApiUrl(`/api/v1/enterprise/bid/projects/${encodeURIComponent(projectId)}/commitments/${encodeURIComponent(commitmentId)}/action`), { method: "POST", credentials: "include", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action }) });
+    return ApiResponseHandler.handleResponse(response, "Failed to update commitment");
+  }
+
+  static async actOnBidGate(projectId: string, gateType: "gate_1" | "gate_2", action: "open" | "pass"): Promise<BidGateResponse> {
+    const response = await fetch(getApiUrl(`/api/v1/enterprise/bid/projects/${encodeURIComponent(projectId)}/gates/${gateType}/action`), { method: "POST", credentials: "include", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action }) });
+    return ApiResponseHandler.handleResponse(response, "Failed to update review gate");
   }
 }

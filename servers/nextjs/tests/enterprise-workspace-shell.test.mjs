@@ -42,3 +42,21 @@ test("enterprise resource pages consume the shared workspace context", async () 
     assert.match(source, /useEnterpriseWorkspace/);
   }
 });
+
+test("workspace home prioritizes work overview and removes management clutter", async () => {
+  const [page, overview] = await Promise.all([
+    readWorkspaceFile("page.tsx"),
+    readWorkspaceFile("components/WorkspaceHomeOverview.tsx"),
+  ]);
+
+  assert.match(page, /工作台总览/);
+  assert.match(page, /通用 PPT 创建/);
+  assert.match(page, /整改任务箱/);
+  assert.match(page, /最近文稿/);
+  assert.doesNotMatch(page, />我的空间</);
+  assert.doesNotMatch(page, />已发布模板</);
+  assert.match(overview, /今日工作概览/);
+  assert.match(overview, /待处理任务/);
+  assert.match(overview, /阻断与风险/);
+  assert.match(overview, /快捷入口/);
+});

@@ -9,15 +9,12 @@ import {
   Building2,
   FilePlus2,
   FileText,
-  FolderKanban,
   LayoutTemplate,
   Loader2,
   MonitorPlay,
   PenLine,
   Plus,
   RefreshCw,
-  ShieldCheck,
-  Users,
 } from "lucide-react";
 
 import {
@@ -28,17 +25,11 @@ import {
   type PresentationQualityRunResponse,
   type PresentationReviewInboxResponse,
   type SceneDefinitionResponse,
-  type TemplatePublicationResponse,
   type WorkspaceResponse,
 } from "@/app/(presentation-generator)/services/api/enterprise";
 import { PresentationGenerationApi } from "@/app/(presentation-generator)/services/api/presentation-generation";
 import { useEnterpriseWorkspace } from "./components/EnterpriseWorkspaceShell";
-
-const workspaceTypeLabel: Record<WorkspaceResponse["workspace_type"], string> = {
-  personal: "个人空间",
-  team: "团队空间",
-  department: "部门空间",
-};
+import WorkspaceHomeOverview from "./components/WorkspaceHomeOverview";
 
 const workspaceRoleLabel: Record<WorkspaceResponse["current_user_role"], string> = {
   owner: "所有者",
@@ -74,8 +65,6 @@ function WorkspacePage() {
   const [notifications, setNotifications] = useState<EnterpriseNotificationListResponse | null>(null);
   const [showNotifications, setShowNotifications] = useState(false);
   const [reviewInboxFilter, setReviewInboxFilter] = useState<"all" | "mine" | "overdue">("all");
-  const [publishedTemplates, setPublishedTemplates] =
-    useState<TemplatePublicationResponse[]>([]);
   const [activeWorkspaceId, setActiveWorkspaceId] = useState("");
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
@@ -122,18 +111,16 @@ function WorkspacePage() {
       setPresentations([]);
       setReviewInbox(null);
       setNotifications(null);
-      setPublishedTemplates([]);
       return;
     }
     setReviewInboxFilter("all");
     let active = true;
     Promise.allSettled([
       EnterpriseApi.getPresentations(activeWorkspaceId),
-      EnterpriseApi.getPublishedTemplates(activeWorkspaceId),
       EnterpriseApi.getPresentationReviewInbox(activeWorkspaceId),
       EnterpriseApi.getNotifications(activeWorkspaceId),
     ])
-      .then(([presentationResult, templateResult, inboxResult, notificationResult]) => {
+      .then(([presentationResult, inboxResult, notificationResult]) => {
         if (!active) return;
         const warnings: string[] = [];
         const presentationRows =
@@ -142,11 +129,6 @@ function WorkspacePage() {
             : [];
         setPresentations(presentationRows);
         if (presentationResult.status === "rejected") warnings.push("文稿列表");
-
-        setPublishedTemplates(
-          templateResult.status === "fulfilled" ? templateResult.value : []
-        );
-        if (templateResult.status === "rejected") warnings.push("已发布模板");
 
         setReviewInbox(inboxResult.status === "fulfilled" ? inboxResult.value : null);
         if (inboxResult.status === "rejected") warnings.push("整改任务");
@@ -266,21 +248,6 @@ function WorkspacePage() {
     setNotifications((current) => current ? { unread_count: 0, notifications: current.notifications.map((item) => ({ ...item, is_read: true })) } : current);
   };
 
-  const updateGovernancePolicy = async (
-    changes: Partial<WorkspaceResponse["governance_policy"]>
-  ) => {
-    if (!activeWorkspace) return;
-    setGovernancePending("workspace-policy");
-    try {
-      const updated = await EnterpriseApi.updateWorkspaceGovernancePolicy(activeWorkspace.id, { ...activeWorkspace.governance_policy, ...changes });
-      setWorkspaces((current) => current.map((item) => item.id === updated.id ? updated : item));
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "治理策略更新失败");
-    } finally {
-      setGovernancePending("");
-    }
-  };
-
   const exportGovernedPresentation = async (
     presentation: PresentationEntryResponse,
     format: "pptx" | "pdf"
@@ -369,7 +336,7 @@ function WorkspacePage() {
             企业 PPT 制作中台
           </div>
           <h1 className="font-syne text-3xl font-semibold tracking-[-0.04em] text-[#17171B]">
-            工作空间
+            工作台总览
           </h1>
           <p className="mt-2 max-w-2xl text-sm leading-6 text-[#667085]">
             从日常 PPT 快速创建开始，并通过独立场景工作台承载竞标等专业流程。
@@ -428,6 +395,15 @@ function WorkspacePage() {
           </div>
         ))}
 
+        <WorkspaceHomeOverview
+          workspace={activeWorkspace}
+          workspaceId={activeWorkspaceId}
+          presentations={presentations}
+          qualityReports={qualityReports}
+          reviewInbox={reviewInbox}
+          professionalSceneCount={professionalScenes.length}
+        />
+
         {showCreate && (
           <form
             onSubmit={handleCreate}
@@ -478,20 +454,11 @@ function WorkspacePage() {
                 选择归属空间后，从四种入口开始；创建记录和审计自动写入空间。
               </p>
             </div>
-            <label className="grid gap-1 text-xs font-medium text-[#475467]">
-              归属空间
-              <select
-                value={activeWorkspaceId}
-                onChange={(event) => setShellWorkspaceId(event.target.value)}
-                className="h-10 min-w-56 rounded-lg border border-[#D9DCE3] bg-white px-3 text-sm text-[#101828]"
-              >
-                {workspaces.map((workspace) => (
-                  <option key={workspace.id} value={workspace.id}>
-                    {workspace.name} · {workspace.confidentiality}
-                  </option>
-                ))}
-              </select>
-            </label>
+            {activeWorkspace && (
+              <span className="inline-flex h-9 items-center rounded-full bg-[#F2F1FF] px-3 text-xs font-medium text-[#5146E5]">
+                {activeWorkspace.name} · {activeWorkspace.confidentiality}
+              </span>
+            )}
           </div>
           {!canCreate && activeWorkspace && (
             <p className="mt-3 rounded-lg bg-[#FFF4E5] px-3 py-2 text-sm text-[#B54708]">
@@ -574,58 +541,6 @@ function WorkspacePage() {
           </div>
         </section>
 
-        {publishedTemplates.length > 0 && (
-          <section className="mt-9">
-            <div className="flex items-center justify-between">
-              <div>
-                <h2 className="text-base font-semibold text-[#1D2939]">已发布模板</h2>
-                <p className="mt-1 text-sm text-[#667085]">
-                  企业级和当前空间授权模板；发布版本不可原地覆盖。
-                </p>
-              </div>
-              <span className="text-sm text-[#667085]">
-                {publishedTemplates.length} 个模板
-              </span>
-            </div>
-            <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-              {publishedTemplates.map((template) => {
-                const params = new URLSearchParams({
-                  entry: "template",
-                  workspace_id: activeWorkspaceId,
-                  template: template.template_id,
-                });
-                return (
-                  <Link
-                    key={template.id}
-                    href={`/upload?${params.toString()}`}
-                    className="rounded-xl border border-[#E3E4EA] bg-white p-4 transition hover:border-[#A8DADC] hover:shadow-sm"
-                  >
-                    <div className="flex items-center justify-between gap-3">
-                      <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-[#EAF8F6] text-[#087E8B]">
-                        <LayoutTemplate className="h-4 w-4" />
-                      </div>
-                      {template.is_default && (
-                        <span className="rounded-full bg-[#ECFDF3] px-2 py-1 text-[11px] font-medium text-[#027A48]">
-                          默认
-                        </span>
-                      )}
-                    </div>
-                    <h3 className="mt-3 truncate text-sm font-semibold text-[#101828]">
-                      {template.display_name}
-                    </h3>
-                    <p className="mt-1 line-clamp-2 text-xs leading-5 text-[#667085]">
-                      {template.description || "企业授权模板"}
-                    </p>
-                    <p className="mt-3 text-xs text-[#98A2B3]">
-                      v{template.version} · {template.scope_type}
-                    </p>
-                  </Link>
-                );
-              })}
-            </div>
-          </section>
-        )}
-
         {reviewInbox && <section className="mt-9 rounded-2xl border border-[#E3E4EA] bg-white p-5">
           <div className="flex flex-wrap items-start justify-between gap-4"><div><h2 className="text-base font-semibold text-[#1D2939]">整改任务箱</h2><p className="mt-1 text-sm text-[#667085]">跨通用文稿与专业场景统一跟进评审责任和截止时间。</p></div><div className="flex flex-wrap gap-2 text-xs"><button type="button" onClick={() => void changeReviewInboxFilter("all")} className={`rounded-full px-3 py-1.5 ${reviewInboxFilter === "all" ? "bg-[#344054] text-white" : "bg-[#F2F4F7]"}`}>待处理 {reviewInbox.summary.open_count}</button><span className="rounded-full bg-[#FEF2F2] px-3 py-1.5 text-[#B42318]">阻断 {reviewInbox.summary.blocking_count}</span><button type="button" onClick={() => void changeReviewInboxFilter("overdue")} className={`rounded-full px-3 py-1.5 text-[#B54708] ${reviewInboxFilter === "overdue" ? "bg-[#FEC84B]" : "bg-[#FFF4E5]"}`}>逾期 {reviewInbox.summary.overdue_count}</button><button type="button" onClick={() => void changeReviewInboxFilter("mine")} className={`rounded-full px-3 py-1.5 text-[#4238CA] ${reviewInboxFilter === "mine" ? "bg-[#D9D6FE]" : "bg-[#F2F1FF]"}`}>我的 {reviewInbox.summary.assigned_to_me_count}</button></div></div>
           {reviewInbox.tasks.length === 0 ? <p className="mt-4 rounded-xl bg-[#F8F9FC] p-4 text-sm text-[#667085]">当前没有待处理整改项。</p> : <div className="mt-4 grid gap-3 lg:grid-cols-2">{reviewInbox.tasks.slice(0, 6).map((task) => <Link key={task.id} href={`/workspace/presentations/${encodeURIComponent(task.presentation_entry_id)}/review?workspace_id=${encodeURIComponent(activeWorkspaceId)}`} className="rounded-xl border border-[#EAECF0] p-3 transition hover:border-[#B9B2FF]"><div className="flex items-center justify-between gap-3"><p className="truncate text-sm font-medium text-[#101828]">{task.title}</p><span className={`shrink-0 rounded-full px-2 py-1 text-[10px] ${task.is_overdue ? "bg-[#FEF2F2] text-[#B42318]" : task.is_blocking ? "bg-[#FFF4E5] text-[#B54708]" : "bg-[#F2F4F7] text-[#475467]"}`}>{task.is_overdue ? "已逾期" : task.is_blocking ? "阻断" : "待跟进"}</span></div><p className="mt-1 truncate text-xs text-[#667085]">{task.presentation_title} · {task.slide_index === null ? "全稿" : `第 ${task.slide_index + 1} 页`} · {task.assigned_to_username || "未指派"}</p></Link>)}</div>}
@@ -634,69 +549,12 @@ function WorkspacePage() {
         <section className="mt-9">
           <div className="flex items-center justify-between">
             <div>
-              <h2 className="text-base font-semibold text-[#1D2939]">我的空间</h2>
+              <h2 className="text-base font-semibold text-[#1D2939]">最近文稿</h2>
               <p className="mt-1 text-sm text-[#667085]">
-                个人空间用于私有草稿，团队空间用于成员协作和权限管理。
+                继续编辑、评审或交付{activeWorkspace?.name || "当前空间"}中的最近工作。
               </p>
             </div>
-            <span className="text-sm text-[#667085]">{workspaces.length} 个空间</span>
-          </div>
-          {loading ? (
-            <div className="mt-4 flex h-36 items-center justify-center rounded-2xl border border-dashed border-[#D9DCE3] bg-white text-sm text-[#667085]">
-              <Loader2 className="mr-2 h-4 w-4 animate-spin" /> 正在加载空间
-            </div>
-          ) : (
-            <div className="mt-4 grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-              {workspaces.map((workspace) => (
-                <button
-                  type="button"
-                  key={workspace.id}
-                  onClick={() => setShellWorkspaceId(workspace.id)}
-                  className={`rounded-2xl border bg-white p-5 text-left shadow-[0_1px_2px_rgba(16,24,40,0.04)] transition hover:border-[#B9B2FF] ${
-                    activeWorkspaceId === workspace.id
-                      ? "border-[#8278FF] ring-2 ring-[#EEEAFE]"
-                      : "border-[#E3E4EA]"
-                  }`}
-                >
-                  <div className="flex items-start justify-between gap-4">
-                    <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-[#F2F1FF] text-[#635BFF]">
-                      {workspace.workspace_type === "personal" ? (
-                        <FolderKanban className="h-5 w-5" />
-                      ) : (
-                        <Users className="h-5 w-5" />
-                      )}
-                    </div>
-                    <span className="rounded-full border border-[#E3E4EA] px-2.5 py-1 text-xs font-medium text-[#475467]">
-                      {workspace.confidentiality}
-                    </span>
-                  </div>
-                  <h3 className="mt-4 truncate font-semibold text-[#101828]">
-                    {workspace.name}
-                  </h3>
-                  <div className="mt-2 flex flex-wrap gap-2 text-xs text-[#667085]">
-                    <span>{workspaceTypeLabel[workspace.workspace_type]}</span>
-                    <span>·</span>
-                    <span>{workspaceRoleLabel[workspace.current_user_role]}</span>
-                  </div>
-                  <div className="mt-4 flex items-center gap-2 border-t border-[#F0F1F3] pt-4 text-xs text-[#667085]">
-                    <ShieldCheck className="h-4 w-4 text-[#12B76A]" />
-                    服务端空间权限已启用
-                  </div>
-                </button>
-              ))}
-            </div>
-          )}
-        </section>
-
-        <section className="mt-9">
-          <div className="flex items-center justify-between">
-            <div>
-              <h2 className="text-base font-semibold text-[#1D2939]">空间文稿</h2>
-              <p className="mt-1 text-sm text-[#667085]">
-                {activeWorkspace?.name || "当前空间"}中的通用 PPT 创建记录。
-              </p>
-            </div>
-            <div className="flex flex-wrap items-center justify-end gap-3"><span className="text-sm text-[#667085]">{presentations.length} 份文稿</span>{canFreeze && activeWorkspace && <><label className="flex items-center gap-2 text-xs text-[#667085]">审批策略<select disabled={governancePending === "workspace-policy"} value={activeWorkspace.governance_policy.review_mode} onChange={(event) => void updateGovernancePolicy({ review_mode: event.target.value as "none" | "single" })} className="h-8 rounded-lg border border-[#D9DCE3] bg-white px-2 text-xs"><option value="single">单级审批</option><option value="none">无需审批</option></select></label><label className="flex items-center gap-2 text-xs text-[#667085]">撤销件保留<select disabled={governancePending === "workspace-policy"} value={activeWorkspace.governance_policy.revoked_delivery_retention_days || 90} onChange={(event) => void updateGovernancePolicy({ revoked_delivery_retention_days: Number(event.target.value) })} className="h-8 rounded-lg border border-[#D9DCE3] bg-white px-2 text-xs"><option value={30}>30 天</option><option value={90}>90 天</option><option value={180}>180 天</option><option value={365}>365 天</option></select></label></>}</div>
+            <span className="text-sm text-[#667085]">{presentations.length} 份文稿</span>
           </div>
           {presentations.length === 0 ? (
             <div className="mt-4 flex h-28 items-center justify-center rounded-2xl border border-dashed border-[#D9DCE3] bg-white text-sm text-[#667085]">
@@ -704,7 +562,7 @@ function WorkspacePage() {
             </div>
           ) : (
             <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-              {presentations.slice(0, 9).map((presentation) => (
+              {presentations.slice(0, 6).map((presentation) => (
                 <article
                   key={presentation.id}
                   className="rounded-xl border border-[#E3E4EA] bg-white p-4 transition hover:border-[#B9B2FF] hover:shadow-sm"

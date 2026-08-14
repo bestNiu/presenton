@@ -1203,6 +1203,16 @@ class DeliveryCenterResponse(BaseModel):
     items: list[DeliveryCenterItemResponse]
 
 
+class DeliveryIntegrityScanResponse(BaseModel):
+    id: uuid.UUID
+    workspace_id: uuid.UUID
+    total: int
+    integrity_failed: int
+    anomaly_ids: list[str]
+    new_anomaly_ids: list[str]
+    created_at: datetime
+
+
 class PresentationQualityIssueResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: uuid.UUID

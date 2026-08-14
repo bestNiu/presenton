@@ -16,6 +16,8 @@ from models.sql.enterprise.bid import (
     BidProjectModel,
 )
 from models.sql.enterprise.presentation_entry import PresentationEntryModel
+from models.sql.enterprise.audit_event import AuditEventModel
+from models.sql.enterprise.workspace import WorkspaceMemberModel
 from models.sql.enterprise.presentation_governance import (
     PresentationDeliveryArtifactModel,
     PresentationDownloadGrantModel,
@@ -26,6 +28,8 @@ from services.enterprise.object_storage_service import (
     get_enterprise_object_storage,
 )
 from services.enterprise.workspace_service import require_workspace_role
+from services.enterprise.audit_service import record_audit_event
+from services.enterprise.notification_service import queue_notifications
 
 
 def _canonical_hash(value: object) -> str:
@@ -161,3 +165,118 @@ async def get_delivery_center(
         },
         "items": items,
     }
+
+
+async def run_delivery_integrity_scan(
+    session: AsyncSession,
+    *,
+    workspace_id: uuid.UUID,
+    principal: AuthPrincipal,
+) -> dict:
+    result = await get_delivery_center(
+        session, workspace_id=workspace_id, principal=principal
+    )
+    anomaly_ids = sorted(
+        str(item["artifact_id"])
+        for item in result["items"]
+        if item["integrity_status"] == "failed"
+    )
+    previous = await session.scalar(
+        select(AuditEventModel)
+        .where(
+            AuditEventModel.workspace_id == workspace_id,
+            AuditEventModel.action == "delivery_center.integrity_scanned",
+        )
+        .order_by(AuditEventModel.created_at.desc())
+        .limit(1)
+    )
+    previous_ids = set((previous.event_metadata or {}).get("anomaly_ids", [])) if previous else set()
+    new_anomaly_ids = sorted(set(anomaly_ids) - previous_ids)
+    event = record_audit_event(
+        session,
+        actor_id=principal.user_id,
+        workspace_id=workspace_id,
+        action="delivery_center.integrity_scanned",
+        resource_type="enterprise_workspace",
+        resource_id=workspace_id,
+        metadata={
+            "total": result["summary"]["total"],
+            "ready": result["summary"]["ready"],
+            "revoked": result["summary"]["revoked"],
+            "integrity_failed": len(anomaly_ids),
+            "anomaly_ids": anomaly_ids,
+            "new_anomaly_ids": new_anomaly_ids,
+        },
+    )
+    if new_anomaly_ids:
+        recipients = set(
+            (
+                await session.scalars(
+                    select(WorkspaceMemberModel.user_id).where(
+                        WorkspaceMemberModel.workspace_id == workspace_id,
+                        WorkspaceMemberModel.role.in_([WorkspaceRole.OWNER, WorkspaceRole.ADMIN]),
+                    )
+                )
+            ).all()
+        )
+        queue_notifications(
+            session,
+            recipient_ids=recipients,
+            actor_id=principal.user_id,
+            workspace_id=workspace_id,
+            notification_type="delivery.integrity_anomaly",
+            title="交付件完整性异常",
+            body=f"检测到 {len(new_anomaly_ids)} 个新增异常交付件，请暂停授权并核查。",
+            resource_type="enterprise_workspace",
+            resource_id=workspace_id,
+            action_url=f"/workspace/deliveries?workspace_id={workspace_id}&integrity=failed",
+            metadata={"artifact_ids": new_anomaly_ids},
+        )
+    await session.commit()
+    await session.refresh(event)
+    return {
+        "id": event.id,
+        "workspace_id": workspace_id,
+        "total": result["summary"]["total"],
+        "integrity_failed": len(anomaly_ids),
+        "anomaly_ids": anomaly_ids,
+        "new_anomaly_ids": new_anomaly_ids,
+        "created_at": event.created_at,
+    }
+
+
+async def list_delivery_integrity_scans(
+    session: AsyncSession,
+    *,
+    workspace_id: uuid.UUID,
+    principal: AuthPrincipal,
+    limit: int,
+) -> list[dict]:
+    await require_workspace_role(
+        session, workspace_id=workspace_id, principal=principal, required_role=WorkspaceRole.ADMIN
+    )
+    events = list(
+        (
+            await session.scalars(
+                select(AuditEventModel)
+                .where(
+                    AuditEventModel.workspace_id == workspace_id,
+                    AuditEventModel.action == "delivery_center.integrity_scanned",
+                )
+                .order_by(AuditEventModel.created_at.desc())
+                .limit(limit)
+            )
+        ).all()
+    )
+    return [
+        {
+            "id": event.id,
+            "workspace_id": workspace_id,
+            "total": int((event.event_metadata or {}).get("total", 0)),
+            "integrity_failed": int((event.event_metadata or {}).get("integrity_failed", 0)),
+            "anomaly_ids": (event.event_metadata or {}).get("anomaly_ids", []),
+            "new_anomaly_ids": (event.event_metadata or {}).get("new_anomaly_ids", []),
+            "created_at": event.created_at,
+        }
+        for event in events
+    ]

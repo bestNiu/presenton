@@ -79,6 +79,7 @@ from api.v1.enterprise.schemas import (
     EnterpriseNotificationResponse,
     EnterpriseDocumentDetailResponse,
     DeliveryCenterResponse,
+    DeliveryIntegrityScanResponse,
     EnterpriseDocumentParseTaskResponse,
     EnterpriseDocumentResponse,
     EnterpriseKnowledgeSearchItemResponse,
@@ -173,7 +174,11 @@ from services.enterprise.presentation_delivery_service import (
     verify_presentation_delivery_evidence_package,
     revoke_presentation_delivery,
 )
-from services.enterprise.delivery_center_service import get_delivery_center
+from services.enterprise.delivery_center_service import (
+    get_delivery_center,
+    list_delivery_integrity_scans,
+    run_delivery_integrity_scan,
+)
 from services.enterprise.notification_service import (
     list_notifications,
     mark_all_notifications_read,
@@ -1942,3 +1947,20 @@ async def get_workspace_delivery_center(
     session: AsyncSession = Depends(get_async_session),
 ):
     return await get_delivery_center(session, workspace_id=workspace_id, principal=principal, scene_type=scene_type, delivery_status=delivery_status, integrity_status=integrity_status, query=q)
+
+
+@API_V1_ENTERPRISE_ROUTER.post(
+    "/workspaces/{workspace_id}/delivery-center/integrity-runs",
+    response_model=DeliveryIntegrityScanResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def post_workspace_delivery_integrity_run(workspace_id: uuid.UUID, principal: AuthPrincipal = Depends(principal_from_request), session: AsyncSession = Depends(get_async_session)):
+    return await run_delivery_integrity_scan(session, workspace_id=workspace_id, principal=principal)
+
+
+@API_V1_ENTERPRISE_ROUTER.get(
+    "/workspaces/{workspace_id}/delivery-center/integrity-runs",
+    response_model=list[DeliveryIntegrityScanResponse],
+)
+async def get_workspace_delivery_integrity_runs(workspace_id: uuid.UUID, limit: int = Query(default=20, ge=1, le=100), principal: AuthPrincipal = Depends(principal_from_request), session: AsyncSession = Depends(get_async_session)):
+    return await list_delivery_integrity_scans(session, workspace_id=workspace_id, principal=principal, limit=limit)

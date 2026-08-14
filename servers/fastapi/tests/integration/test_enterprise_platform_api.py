@@ -1033,6 +1033,43 @@ def test_presentation_registration_preserves_owner_and_allows_member_listing(tmp
             f"/api/v1/enterprise/workspaces/{workspace['id']}/delivery-center",
             headers={"x-test-user": "member"},
         )
+        client.put(
+            f"/api/v1/enterprise/workspaces/{workspace['id']}/members/{users['member'].id}",
+            json={"user_id": str(users["member"].id), "role": "admin"},
+        )
+        clean_scan = client.post(
+            f"/api/v1/enterprise/workspaces/{workspace['id']}/delivery-center/integrity-runs"
+        )
+
+        async def set_delivery_sha256(value: str):
+            async with session_maker() as session:
+                artifact = await session.get(
+                    PresentationDeliveryArtifactModel, uuid.UUID(delivery.json()["id"])
+                )
+                artifact.sha256 = value
+                session.add(artifact)
+                await session.commit()
+
+        asyncio.run(set_delivery_sha256("0" * 64))
+        anomaly_scan = client.post(
+            f"/api/v1/enterprise/workspaces/{workspace['id']}/delivery-center/integrity-runs"
+        )
+        repeated_scan = client.post(
+            f"/api/v1/enterprise/workspaces/{workspace['id']}/delivery-center/integrity-runs"
+        )
+        scan_history = client.get(
+            f"/api/v1/enterprise/workspaces/{workspace['id']}/delivery-center/integrity-runs"
+        )
+        integrity_notifications = client.get(
+            "/api/v1/enterprise/notifications",
+            params={"workspace_id": workspace["id"]},
+            headers={"x-test-user": "member"},
+        )
+        client.put(
+            f"/api/v1/enterprise/workspaces/{workspace['id']}/members/{users['member'].id}",
+            json={"user_id": str(users["member"].id), "role": "reviewer"},
+        )
+        asyncio.run(set_delivery_sha256(delivery.json()["sha256"]))
         delivery_grant = client.post(
             f"/api/v1/enterprise/workspaces/{workspace['id']}/presentations/{entry_id}/deliveries/{delivery.json()['id']}/grants",
             json={"expires_in_minutes": 30, "max_downloads": 1},
@@ -1135,6 +1172,12 @@ def test_presentation_registration_preserves_owner_and_allows_member_listing(tmp
         assert delivery_center.json()["items"][0]["scene_type"] == "general"
         assert delivery_center.json()["items"][0]["resource_title"] == "企业架构汇报"
         assert delivery_center_denied.status_code == 404
+        assert clean_scan.json()["integrity_failed"] == 0
+        assert anomaly_scan.json()["new_anomaly_ids"] == [delivery.json()["id"]]
+        assert repeated_scan.json()["integrity_failed"] == 1
+        assert repeated_scan.json()["new_anomaly_ids"] == []
+        assert len(scan_history.json()) == 3
+        assert [item["notification_type"] for item in integrity_notifications.json()["notifications"]].count("delivery.integrity_anomaly") == 1
         assert delivery.json()["watermark_text"] == "共享空间 · L2 · owner"
         assert "file_path" not in delivery.json()
         assert delivery_download.content == b"governed-general-pdf"

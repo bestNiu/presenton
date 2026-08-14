@@ -547,6 +547,16 @@ export interface DeliveryCenterResponse {
   }>;
 }
 
+export interface DeliveryIntegrityScanResponse {
+  id: string;
+  workspace_id: string;
+  total: number;
+  integrity_failed: number;
+  anomaly_ids: string[];
+  new_anomaly_ids: string[];
+  created_at: string;
+}
+
 export interface TemplatePublicationResponse {
   id: string;
   publication_key: string;
@@ -1324,6 +1334,16 @@ export class EnterpriseApi {
     if (filters.q) params.set("q", filters.q);
     const response = await fetch(getApiUrl(`/api/v1/enterprise/workspaces/${encodeURIComponent(workspaceId)}/delivery-center?${params.toString()}`), { credentials: "include", cache: "no-store" });
     return ApiResponseHandler.handleResponse(response, "Failed to load delivery center");
+  }
+
+  static async runDeliveryIntegrityScan(workspaceId: string): Promise<DeliveryIntegrityScanResponse> {
+    const response = await fetch(getApiUrl(`/api/v1/enterprise/workspaces/${encodeURIComponent(workspaceId)}/delivery-center/integrity-runs`), { method: "POST", credentials: "include" });
+    return ApiResponseHandler.handleResponse(response, "Failed to run delivery integrity scan");
+  }
+
+  static async getDeliveryIntegrityScans(workspaceId: string): Promise<DeliveryIntegrityScanResponse[]> {
+    const response = await fetch(getApiUrl(`/api/v1/enterprise/workspaces/${encodeURIComponent(workspaceId)}/delivery-center/integrity-runs`), { credentials: "include", cache: "no-store" });
+    return ApiResponseHandler.handleResponse(response, "Failed to load delivery integrity scans");
   }
 
   static async issuePresentationDownloadGrant(workspaceId: string, entryId: string, artifactId: string): Promise<BidDownloadGrantResponse> {

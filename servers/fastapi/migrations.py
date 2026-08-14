@@ -56,7 +56,8 @@ REVISION_ENTERPRISE_DOCUMENT_CENTER = "l8e2g6i0d4f7"
 REVISION_ENTERPRISE_DOCUMENT_CHUNKS = "m9f3h7j1e5g8"
 REVISION_KNOWLEDGE_OUTLINES = "n0g4i8k2f6h9"
 REVISION_KNOWLEDGE_PRESENTATION_ORCHESTRATION = "o1h5j9l3g7i0"
-REVISION_HEAD = REVISION_KNOWLEDGE_PRESENTATION_ORCHESTRATION
+REVISION_DELIVERY_INTEGRITY_OPERATIONS = "p2i6k0m4h8j1"
+REVISION_HEAD = REVISION_DELIVERY_INTEGRITY_OPERATIONS
 
 
 async def migrate_database_on_startup() -> None:
@@ -151,6 +152,8 @@ def _infer_revision_from_schema(
         "enterprise_audit_events",
     }
     if enterprise_tables.issubset(tables):
+        if "enterprise_delivery_integrity_runs" in tables:
+            return REVISION_DELIVERY_INTEGRITY_OPERATIONS
         if "enterprise_asset_items" in tables:
             asset_columns = {column["name"] for column in inspector.get_columns("enterprise_asset_items")}
             if "duplicate_status" in asset_columns:

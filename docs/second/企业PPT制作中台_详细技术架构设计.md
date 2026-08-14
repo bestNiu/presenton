@@ -587,6 +587,14 @@ sequenceDiagram
 
 部署侧提供带非阻塞文件锁的 `scripts/run_delivery_integrity_scans.py`，并发触发时安全跳过，失败输出机器可读错误并返回非零退出码。它可直接接入 cron、Kubernetes CronJob 或现有任务平台，调用与页面完全相同的巡检、去重通知和审计逻辑。
 
+### 11.18 T45：交付巡检生产运维闭环
+
+全空间巡检新增 `enterprise_delivery_integrity_runs` 作为批次级运行事实表，API 与 CLI 都会记录来源、状态、健康度、超时阈值、空间进度、交付件与异常统计、耗时及失败原因。数据库中的 `running` 批次用于跨节点并发拦截；超过自身超时阈值的遗留批次会在下一次调度时自动收口为 `timed_out` 并通知平台管理员，节点内文件锁继续承担快速防重职责。
+
+平台管理员可通过 `GET /admin/delivery-integrity-runs` 查询最近批次，通过 `GET /admin/delivery-integrity-health` 获取 `healthy/warning/critical` 健康状态。健康检查同时识别从未运行、正在执行、执行超时、最近批次失败、调度逾期和交付件异常；默认要求 26 小时内至少完成一次，可使用 `ENTERPRISE_DELIVERY_INTEGRITY_MAX_AGE_HOURS` 调整。CLI 使用 `ENTERPRISE_DELIVERY_INTEGRITY_TIMEOUT_SECONDS` 控制单批最长执行时间，默认 1800 秒；失败、超时和新增异常都会形成平台管理员站内告警及审计记录。
+
+生产调度参考 `deploy/kubernetes/delivery-integrity-cronjob.yaml`，默认每日凌晨 02:15 执行、禁止并发、保留最近成功/失败记录，并设置主动截止时间。部署时必须复用主服务的数据库、对象存储配置和持久卷；上线验收应同时检查 CronJob 退出码、批次历史 API 和健康 API，而不能只依赖容器日志。
+
 ---
 
 ## 12. AI 编排架构

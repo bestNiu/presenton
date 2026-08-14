@@ -81,6 +81,8 @@ from api.v1.enterprise.schemas import (
     DeliveryCenterResponse,
     DeliveryIntegrityScanResponse,
     DeliveryIntegrityBatchResponse,
+    DeliveryIntegrityBatchRunResponse,
+    DeliveryIntegrityHealthResponse,
     EnterpriseDocumentParseTaskResponse,
     EnterpriseDocumentResponse,
     EnterpriseKnowledgeSearchItemResponse,
@@ -176,7 +178,9 @@ from services.enterprise.presentation_delivery_service import (
     revoke_presentation_delivery,
 )
 from services.enterprise.delivery_center_service import (
+    get_delivery_integrity_health,
     get_delivery_center,
+    list_delivery_integrity_batch_runs,
     list_delivery_integrity_scans,
     run_delivery_integrity_scan,
     run_all_workspace_delivery_integrity_scans,
@@ -314,6 +318,31 @@ API_V1_ENTERPRISE_ROUTER = APIRouter(
 )
 async def post_all_workspace_delivery_integrity_runs(principal: AuthPrincipal = Depends(principal_from_request), session: AsyncSession = Depends(get_async_session)):
     return await run_all_workspace_delivery_integrity_scans(session, principal=principal)
+
+
+@API_V1_ENTERPRISE_ROUTER.get(
+    "/admin/delivery-integrity-runs",
+    response_model=list[DeliveryIntegrityBatchRunResponse],
+)
+async def get_all_workspace_delivery_integrity_runs(
+    limit: int = Query(default=30, ge=1, le=100),
+    principal: AuthPrincipal = Depends(principal_from_request),
+    session: AsyncSession = Depends(get_async_session),
+):
+    return await list_delivery_integrity_batch_runs(
+        session, principal=principal, limit=limit
+    )
+
+
+@API_V1_ENTERPRISE_ROUTER.get(
+    "/admin/delivery-integrity-health",
+    response_model=DeliveryIntegrityHealthResponse,
+)
+async def get_all_workspace_delivery_integrity_health(
+    principal: AuthPrincipal = Depends(principal_from_request),
+    session: AsyncSession = Depends(get_async_session),
+):
+    return await get_delivery_integrity_health(session, principal=principal)
 
 
 @API_V1_ENTERPRISE_ROUTER.post(

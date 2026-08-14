@@ -1,10 +1,13 @@
-from datetime import datetime, timezone
+import asyncio
+from datetime import datetime, timedelta, timezone
 import hashlib
 import json
+import os
 import uuid
 
 from fastapi import HTTPException
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.v1.auth.principal import AuthPrincipal
@@ -17,7 +20,9 @@ from models.sql.enterprise.bid import (
 )
 from models.sql.enterprise.presentation_entry import PresentationEntryModel
 from models.sql.enterprise.audit_event import AuditEventModel
+from models.sql.enterprise.delivery_integrity_run import DeliveryIntegrityRunModel
 from models.sql.enterprise.workspace import WorkspaceMemberModel
+from models.sql.user import User
 from models.sql.enterprise.presentation_governance import (
     PresentationDeliveryArtifactModel,
     PresentationDownloadGrantModel,
@@ -254,40 +259,263 @@ async def run_all_workspace_delivery_integrity_scans(
     session: AsyncSession,
     *,
     principal: AuthPrincipal,
+    source: str = "api",
+    timeout_seconds: int | None = None,
 ) -> dict:
     if not principal.is_admin:
         raise HTTPException(status_code=403, detail="Platform administrator required")
+    if source not in {"api", "cli"}:
+        raise ValueError("Delivery integrity source must be api or cli")
     from models.sql.enterprise.workspace import WorkspaceModel
 
-    workspace_ids = list(
+    configured_timeout = timeout_seconds or int(
+        os.getenv("ENTERPRISE_DELIVERY_INTEGRITY_TIMEOUT_SECONDS", "1800")
+    )
+    configured_timeout = max(30, min(configured_timeout, 86400))
+    now = datetime.now(timezone.utc)
+    existing = await session.scalar(
+        select(DeliveryIntegrityRunModel)
+        .where(DeliveryIntegrityRunModel.status == "running")
+        .order_by(DeliveryIntegrityRunModel.started_at.desc())
+        .limit(1)
+    )
+    if existing is not None:
+        started_at = existing.started_at if existing.started_at.tzinfo else existing.started_at.replace(tzinfo=timezone.utc)
+        if started_at + timedelta(seconds=existing.timeout_seconds + 60) > now:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Delivery integrity run {existing.id} is already running",
+            )
+        existing.status = "timed_out"
+        existing.health = "critical"
+        existing.lock_key = None
+        existing.failure_detail = "Run exceeded its timeout and was recovered by the next scheduler invocation"
+        existing.completed_at = now
+        existing.duration_ms = int((now - started_at).total_seconds() * 1000)
+        session.add(existing)
+        await _queue_delivery_integrity_alert(
+            session,
+            run=existing,
+            detail="交付完整性巡检超过执行时限，已由后续调度自动收口。",
+        )
+        await session.commit()
+
+    batch_run = DeliveryIntegrityRunModel(
+        triggered_by=principal.user_id,
+        source=source,
+        lock_key="delivery_integrity",
+        timeout_seconds=configured_timeout,
+    )
+    session.add(batch_run)
+    try:
+        await session.commit()
+    except IntegrityError as exc:
+        await session.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="Another delivery integrity run acquired the scheduler lock",
+        ) from exc
+    try:
+        workspace_ids = list(
+            (
+                await session.scalars(
+                    select(WorkspaceModel.id)
+                    .where(WorkspaceModel.is_archived.is_(False))
+                    .order_by(WorkspaceModel.created_at)
+                )
+            ).all()
+        )
+        batch_run.workspace_count = len(workspace_ids)
+        session.add(batch_run)
+        await session.commit()
+        results = []
+        async with asyncio.timeout(configured_timeout):
+            for workspace_id in workspace_ids:
+                results.append(
+                    await run_delivery_integrity_scan(
+                        session,
+                        workspace_id=workspace_id,
+                        principal=principal,
+                        system_run=True,
+                    )
+                )
+                batch_run.completed_workspace_count = len(results)
+
+        completed_at = datetime.now(timezone.utc)
+        failed_workspaces = sum(item["integrity_failed"] > 0 for item in results)
+        new_anomalies = sum(len(item["new_anomaly_ids"]) for item in results)
+        batch_run.status = "completed"
+        batch_run.health = "critical" if failed_workspaces else "healthy"
+        batch_run.lock_key = None
+        batch_run.failed_workspace_count = failed_workspaces
+        batch_run.artifact_count = sum(item["total"] for item in results)
+        batch_run.integrity_failed = sum(item["integrity_failed"] for item in results)
+        batch_run.new_anomalies = new_anomalies
+        batch_run.completed_at = completed_at
+        started_at = batch_run.started_at if batch_run.started_at.tzinfo else batch_run.started_at.replace(tzinfo=timezone.utc)
+        batch_run.duration_ms = int((completed_at - started_at).total_seconds() * 1000)
+        session.add(batch_run)
+        if new_anomalies:
+            await _queue_delivery_integrity_alert(
+                session,
+                run=batch_run,
+                detail=f"全空间巡检发现 {new_anomalies} 个新增交付完整性异常。",
+            )
+        record_audit_event(
+            session,
+            actor_id=principal.user_id,
+            action="delivery_center.batch_integrity_scanned",
+            resource_type="delivery_integrity_run",
+            resource_id=batch_run.id,
+            metadata={
+                "source": source,
+                "workspace_count": len(results),
+                "failed_workspace_count": failed_workspaces,
+                "artifact_count": batch_run.artifact_count,
+                "integrity_failed": batch_run.integrity_failed,
+                "new_anomalies": new_anomalies,
+                "duration_ms": batch_run.duration_ms,
+            },
+        )
+        await session.commit()
+        return {
+            "run_id": batch_run.id,
+            "source": source,
+            "status": batch_run.status,
+            "health": batch_run.health,
+            "workspace_count": len(results),
+            "failed_workspace_count": failed_workspaces,
+            "artifact_count": batch_run.artifact_count,
+            "integrity_failed": batch_run.integrity_failed,
+            "new_anomalies": new_anomalies,
+            "started_at": started_at,
+            "completed_at": completed_at,
+            "duration_ms": batch_run.duration_ms,
+            "runs": results,
+        }
+    except Exception as exc:
+        await session.rollback()
+        failed_run = await session.get(DeliveryIntegrityRunModel, batch_run.id)
+        if failed_run is not None:
+            completed_at = datetime.now(timezone.utc)
+            started_at = failed_run.started_at if failed_run.started_at.tzinfo else failed_run.started_at.replace(tzinfo=timezone.utc)
+            failed_run.status = "timed_out" if isinstance(exc, TimeoutError) else "failed"
+            failed_run.health = "critical"
+            failed_run.lock_key = None
+            failed_run.failure_detail = str(getattr(exc, "detail", exc))[:2000] or type(exc).__name__
+            failed_run.completed_at = completed_at
+            failed_run.duration_ms = int((completed_at - started_at).total_seconds() * 1000)
+            session.add(failed_run)
+            await _queue_delivery_integrity_alert(
+                session,
+                run=failed_run,
+                detail=f"全空间交付完整性巡检{('超时' if isinstance(exc, TimeoutError) else '失败')}：{failed_run.failure_detail}",
+            )
+            record_audit_event(
+                session,
+                actor_id=principal.user_id,
+                action="delivery_center.batch_integrity_failed",
+                resource_type="delivery_integrity_run",
+                resource_id=failed_run.id,
+                metadata={"source": source, "status": failed_run.status, "detail": failed_run.failure_detail},
+            )
+            await session.commit()
+        raise
+
+
+async def _queue_delivery_integrity_alert(
+    session: AsyncSession,
+    *,
+    run: DeliveryIntegrityRunModel,
+    detail: str,
+) -> None:
+    admin_ids = set(
         (
             await session.scalars(
-                select(WorkspaceModel.id)
-                .where(WorkspaceModel.is_archived.is_(False))
-                .order_by(WorkspaceModel.created_at)
+                select(User.id).where(User.is_superuser.is_(True), User.is_active.is_(True))
             )
         ).all()
     )
-    results = []
-    for workspace_id in workspace_ids:
-        results.append(
-            await run_delivery_integrity_scan(
-                session,
-                workspace_id=workspace_id,
-                principal=principal,
-                system_run=True,
+    queue_notifications(
+        session,
+        recipient_ids=admin_ids,
+        actor_id=None,
+        workspace_id=None,
+        notification_type="delivery.integrity_run_alert",
+        title="企业交付完整性巡检异常",
+        body=detail[:1000],
+        resource_type="delivery_integrity_run",
+        resource_id=run.id,
+        action_url="/admin",
+        metadata={"status": run.status, "health": run.health, "source": run.source},
+    )
+
+
+async def list_delivery_integrity_batch_runs(
+    session: AsyncSession,
+    *,
+    principal: AuthPrincipal,
+    limit: int,
+) -> list[DeliveryIntegrityRunModel]:
+    if not principal.is_admin:
+        raise HTTPException(status_code=403, detail="Platform administrator required")
+    return list(
+        (
+            await session.scalars(
+                select(DeliveryIntegrityRunModel)
+                .order_by(DeliveryIntegrityRunModel.started_at.desc())
+                .limit(limit)
             )
-        )
-    failed_workspaces = sum(item["integrity_failed"] > 0 for item in results)
-    new_anomalies = sum(len(item["new_anomaly_ids"]) for item in results)
+        ).all()
+    )
+
+
+async def get_delivery_integrity_health(
+    session: AsyncSession,
+    *,
+    principal: AuthPrincipal,
+) -> dict:
+    if not principal.is_admin:
+        raise HTTPException(status_code=403, detail="Platform administrator required")
+    max_age_hours = max(
+        1,
+        min(int(os.getenv("ENTERPRISE_DELIVERY_INTEGRITY_MAX_AGE_HOURS", "26")), 720),
+    )
+    latest = await session.scalar(
+        select(DeliveryIntegrityRunModel)
+        .order_by(DeliveryIntegrityRunModel.started_at.desc())
+        .limit(1)
+    )
+    now = datetime.now(timezone.utc)
+    if latest is None:
+        return {
+            "health": "critical",
+            "reason": "never_run",
+            "overdue": True,
+            "max_age_hours": max_age_hours,
+            "checked_at": now,
+            "latest_run": None,
+        }
+    started_at = latest.started_at if latest.started_at.tzinfo else latest.started_at.replace(tzinfo=timezone.utc)
+    reference_at = latest.completed_at or started_at
+    reference_at = reference_at if reference_at.tzinfo else reference_at.replace(tzinfo=timezone.utc)
+    overdue = reference_at + timedelta(hours=max_age_hours) < now
+    if latest.status == "running":
+        timed_out = started_at + timedelta(seconds=latest.timeout_seconds + 60) < now
+        health, reason = ("critical", "run_timed_out") if timed_out else ("warning", "run_in_progress")
+    elif latest.status != "completed":
+        health, reason = "critical", "last_run_failed"
+    elif overdue:
+        health, reason = "critical", "schedule_overdue"
+    else:
+        health, reason = latest.health, ("integrity_anomalies" if latest.health == "critical" else "ok")
     return {
-        "workspace_count": len(results),
-        "failed_workspace_count": failed_workspaces,
-        "artifact_count": sum(item["total"] for item in results),
-        "integrity_failed": sum(item["integrity_failed"] for item in results),
-        "new_anomalies": new_anomalies,
-        "completed_at": datetime.now(timezone.utc),
-        "runs": results,
+        "health": health,
+        "reason": reason,
+        "overdue": overdue,
+        "max_age_hours": max_age_hours,
+        "checked_at": now,
+        "latest_run": latest,
     }
 
 

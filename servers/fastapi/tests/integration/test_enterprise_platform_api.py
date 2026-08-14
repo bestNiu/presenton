@@ -26,6 +26,7 @@ from models.sql.enterprise import (
     EnterpriseNotificationModel,
     EnterpriseDocumentModel,
     EnterpriseDocumentChunkModel,
+    DeliveryIntegrityRunModel,
     EnterpriseKnowledgeOutlineModel,
     BidDeliveryArtifactModel,
     BidDownloadGrantModel,
@@ -128,6 +129,7 @@ def _build_client(tmp_path):
                 EnterpriseDocumentModel.__table__,
                 EnterpriseDocumentChunkModel.__table__,
                 EnterpriseKnowledgeOutlineModel.__table__,
+                DeliveryIntegrityRunModel.__table__,
                 AssetItemModel.__table__,
                 AssetFavoriteModel.__table__,
                 AssetPromotionRequestModel.__table__,
@@ -223,6 +225,53 @@ def test_personal_workspace_is_idempotent_and_isolated(tmp_path):
         assert first.json()["current_user_role"] == "owner"
         assert outsider.status_code == 200
         assert outsider.json() == []
+    finally:
+        asyncio.run(engine.dispose())
+
+
+def test_delivery_integrity_batch_health_and_distributed_lock(tmp_path):
+    client, engine, session_maker, users = _build_client(tmp_path)
+    try:
+        never_run = client.get(
+            "/api/v1/enterprise/admin/delivery-integrity-health",
+            headers={"x-test-user": "admin"},
+        )
+        first_run = client.post(
+            "/api/v1/enterprise/admin/delivery-integrity-runs",
+            headers={"x-test-user": "admin"},
+        )
+
+        async def add_running_batch():
+            async with session_maker() as session:
+                session.add(
+                    DeliveryIntegrityRunModel(
+                        triggered_by=users["admin"].id,
+                        source="cli",
+                        timeout_seconds=1800,
+                    )
+                )
+                await session.commit()
+
+        asyncio.run(add_running_batch())
+        concurrent_run = client.post(
+            "/api/v1/enterprise/admin/delivery-integrity-runs",
+            headers={"x-test-user": "admin"},
+        )
+        running_health = client.get(
+            "/api/v1/enterprise/admin/delivery-integrity-health",
+            headers={"x-test-user": "admin"},
+        )
+
+        assert never_run.status_code == 200
+        assert never_run.json()["reason"] == "never_run"
+        assert first_run.status_code == 200
+        assert first_run.json()["health"] == "healthy"
+        assert first_run.json()["workspace_count"] == 0
+        assert concurrent_run.status_code == 409
+        assert "already running" in concurrent_run.json()["detail"]
+        assert running_health.status_code == 200
+        assert running_health.json()["health"] == "warning"
+        assert running_health.json()["reason"] == "run_in_progress"
     finally:
         asyncio.run(engine.dispose())
 
@@ -1064,6 +1113,17 @@ def test_presentation_registration_preserves_owner_and_allows_member_listing(tmp
             "/api/v1/enterprise/admin/delivery-integrity-runs",
             headers={"x-test-user": "admin"},
         )
+        batch_scan_history = client.get(
+            "/api/v1/enterprise/admin/delivery-integrity-runs",
+            headers={"x-test-user": "admin"},
+        )
+        batch_scan_history_denied = client.get(
+            "/api/v1/enterprise/admin/delivery-integrity-runs"
+        )
+        batch_scan_health = client.get(
+            "/api/v1/enterprise/admin/delivery-integrity-health",
+            headers={"x-test-user": "admin"},
+        )
         scan_history = client.get(
             f"/api/v1/enterprise/workspaces/{workspace['id']}/delivery-center/integrity-runs"
         )
@@ -1185,9 +1245,21 @@ def test_presentation_registration_preserves_owner_and_allows_member_listing(tmp
         assert repeated_scan.json()["new_anomaly_ids"] == []
         assert batch_scan_denied.status_code == 403
         assert batch_scan.status_code == 200
+        assert batch_scan.json()["status"] == "completed"
+        assert batch_scan.json()["health"] == "critical"
+        assert batch_scan.json()["source"] == "api"
+        assert batch_scan.json()["duration_ms"] >= 0
         assert batch_scan.json()["workspace_count"] == 1
         assert batch_scan.json()["failed_workspace_count"] == 1
         assert batch_scan.json()["integrity_failed"] == 1
+        assert batch_scan_history.status_code == 200
+        assert batch_scan_history.json()[0]["id"] == batch_scan.json()["run_id"]
+        assert batch_scan_history.json()[0]["completed_workspace_count"] == 1
+        assert batch_scan_history_denied.status_code == 403
+        assert batch_scan_health.status_code == 200
+        assert batch_scan_health.json()["health"] == "critical"
+        assert batch_scan_health.json()["reason"] == "integrity_anomalies"
+        assert batch_scan_health.json()["latest_run"]["id"] == batch_scan.json()["run_id"]
         assert len(scan_history.json()) == 4
         assert [item["notification_type"] for item in integrity_notifications.json()["notifications"]].count("delivery.integrity_anomaly") == 1
         assert delivery.json()["watermark_text"] == "共享空间 · L2 · owner"

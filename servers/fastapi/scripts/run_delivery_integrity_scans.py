@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import sys
 
+from fastapi import HTTPException
 from sqlalchemy import select
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -24,7 +25,13 @@ async def run() -> dict:
         if admin is None:
             raise RuntimeError("An active platform administrator is required")
         principal = AuthPrincipal(user_id=admin.id, username=admin.username, is_admin=True, method="api_key")
-        return await run_all_workspace_delivery_integrity_scans(session, principal=principal)
+        timeout_seconds = int(os.getenv("ENTERPRISE_DELIVERY_INTEGRITY_TIMEOUT_SECONDS", "1800"))
+        return await run_all_workspace_delivery_integrity_scans(
+            session,
+            principal=principal,
+            source="cli",
+            timeout_seconds=timeout_seconds,
+        )
 
 
 def main() -> int:
@@ -37,6 +44,12 @@ def main() -> int:
             return 0
         try:
             report = asyncio.run(run())
+        except HTTPException as exc:
+            if exc.status_code == 409:
+                print(json.dumps({"status": "skipped", "reason": "already_running", "detail": exc.detail}))
+                return 0
+            print(json.dumps({"status": "error", "detail": str(exc.detail)}, ensure_ascii=False), file=sys.stderr)
+            return 1
         except Exception as exc:
             print(json.dumps({"status": "error", "detail": str(exc)}, ensure_ascii=False), file=sys.stderr)
             return 1

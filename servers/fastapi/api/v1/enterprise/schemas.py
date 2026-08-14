@@ -1214,13 +1214,48 @@ class DeliveryIntegrityScanResponse(BaseModel):
 
 
 class DeliveryIntegrityBatchResponse(BaseModel):
+    run_id: uuid.UUID
+    source: str
+    status: str
+    health: str
     workspace_count: int
     failed_workspace_count: int
     artifact_count: int
     integrity_failed: int
     new_anomalies: int
+    started_at: datetime
     completed_at: datetime
+    duration_ms: int
     runs: list[DeliveryIntegrityScanResponse]
+
+
+class DeliveryIntegrityBatchRunResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: uuid.UUID
+    triggered_by: uuid.UUID | None
+    source: str
+    status: str
+    health: str
+    timeout_seconds: int
+    workspace_count: int
+    completed_workspace_count: int
+    failed_workspace_count: int
+    artifact_count: int
+    integrity_failed: int
+    new_anomalies: int
+    duration_ms: int | None
+    failure_detail: str | None
+    started_at: datetime
+    completed_at: datetime | None
+
+
+class DeliveryIntegrityHealthResponse(BaseModel):
+    health: str
+    reason: str
+    overdue: bool
+    max_age_hours: int
+    checked_at: datetime
+    latest_run: DeliveryIntegrityBatchRunResponse | None
 
 
 class PresentationQualityIssueResponse(BaseModel):

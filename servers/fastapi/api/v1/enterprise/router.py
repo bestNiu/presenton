@@ -80,6 +80,7 @@ from api.v1.enterprise.schemas import (
     EnterpriseDocumentDetailResponse,
     DeliveryCenterResponse,
     DeliveryIntegrityScanResponse,
+    DeliveryIntegrityBatchResponse,
     EnterpriseDocumentParseTaskResponse,
     EnterpriseDocumentResponse,
     EnterpriseKnowledgeSearchItemResponse,
@@ -178,6 +179,7 @@ from services.enterprise.delivery_center_service import (
     get_delivery_center,
     list_delivery_integrity_scans,
     run_delivery_integrity_scan,
+    run_all_workspace_delivery_integrity_scans,
 )
 from services.enterprise.notification_service import (
     list_notifications,
@@ -304,6 +306,14 @@ from services.enterprise.workspace_service import (
 API_V1_ENTERPRISE_ROUTER = APIRouter(
     prefix="/api/v1/enterprise", tags=["Enterprise Platform"]
 )
+
+
+@API_V1_ENTERPRISE_ROUTER.post(
+    "/admin/delivery-integrity-runs",
+    response_model=DeliveryIntegrityBatchResponse,
+)
+async def post_all_workspace_delivery_integrity_runs(principal: AuthPrincipal = Depends(principal_from_request), session: AsyncSession = Depends(get_async_session)):
+    return await run_all_workspace_delivery_integrity_scans(session, principal=principal)
 
 
 @API_V1_ENTERPRISE_ROUTER.post(

@@ -1057,6 +1057,13 @@ def test_presentation_registration_preserves_owner_and_allows_member_listing(tmp
         repeated_scan = client.post(
             f"/api/v1/enterprise/workspaces/{workspace['id']}/delivery-center/integrity-runs"
         )
+        batch_scan_denied = client.post(
+            "/api/v1/enterprise/admin/delivery-integrity-runs"
+        )
+        batch_scan = client.post(
+            "/api/v1/enterprise/admin/delivery-integrity-runs",
+            headers={"x-test-user": "admin"},
+        )
         scan_history = client.get(
             f"/api/v1/enterprise/workspaces/{workspace['id']}/delivery-center/integrity-runs"
         )
@@ -1176,7 +1183,12 @@ def test_presentation_registration_preserves_owner_and_allows_member_listing(tmp
         assert anomaly_scan.json()["new_anomaly_ids"] == [delivery.json()["id"]]
         assert repeated_scan.json()["integrity_failed"] == 1
         assert repeated_scan.json()["new_anomaly_ids"] == []
-        assert len(scan_history.json()) == 3
+        assert batch_scan_denied.status_code == 403
+        assert batch_scan.status_code == 200
+        assert batch_scan.json()["workspace_count"] == 1
+        assert batch_scan.json()["failed_workspace_count"] == 1
+        assert batch_scan.json()["integrity_failed"] == 1
+        assert len(scan_history.json()) == 4
         assert [item["notification_type"] for item in integrity_notifications.json()["notifications"]].count("delivery.integrity_anomaly") == 1
         assert delivery.json()["watermark_text"] == "共享空间 · L2 · owner"
         assert "file_path" not in delivery.json()

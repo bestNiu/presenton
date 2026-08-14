@@ -75,13 +75,15 @@ async def get_delivery_center(
     delivery_status: str | None = None,
     integrity_status: str | None = None,
     query: str | None = None,
+    skip_access_check: bool = False,
 ) -> dict:
-    await require_workspace_role(
-        session,
-        workspace_id=workspace_id,
-        principal=principal,
-        required_role=WorkspaceRole.ADMIN,
-    )
+    if not skip_access_check:
+        await require_workspace_role(
+            session,
+            workspace_id=workspace_id,
+            principal=principal,
+            required_role=WorkspaceRole.ADMIN,
+        )
     general_rows = (
         await session.execute(
             select(PresentationDeliveryArtifactModel, PresentationSnapshotModel, PresentationEntryModel)
@@ -172,9 +174,12 @@ async def run_delivery_integrity_scan(
     *,
     workspace_id: uuid.UUID,
     principal: AuthPrincipal,
+    system_run: bool = False,
 ) -> dict:
+    if system_run and not principal.is_admin:
+        raise HTTPException(status_code=403, detail="Platform administrator required")
     result = await get_delivery_center(
-        session, workspace_id=workspace_id, principal=principal
+        session, workspace_id=workspace_id, principal=principal, skip_access_check=system_run
     )
     anomaly_ids = sorted(
         str(item["artifact_id"])
@@ -242,6 +247,47 @@ async def run_delivery_integrity_scan(
         "anomaly_ids": anomaly_ids,
         "new_anomaly_ids": new_anomaly_ids,
         "created_at": event.created_at,
+    }
+
+
+async def run_all_workspace_delivery_integrity_scans(
+    session: AsyncSession,
+    *,
+    principal: AuthPrincipal,
+) -> dict:
+    if not principal.is_admin:
+        raise HTTPException(status_code=403, detail="Platform administrator required")
+    from models.sql.enterprise.workspace import WorkspaceModel
+
+    workspace_ids = list(
+        (
+            await session.scalars(
+                select(WorkspaceModel.id)
+                .where(WorkspaceModel.is_archived.is_(False))
+                .order_by(WorkspaceModel.created_at)
+            )
+        ).all()
+    )
+    results = []
+    for workspace_id in workspace_ids:
+        results.append(
+            await run_delivery_integrity_scan(
+                session,
+                workspace_id=workspace_id,
+                principal=principal,
+                system_run=True,
+            )
+        )
+    failed_workspaces = sum(item["integrity_failed"] > 0 for item in results)
+    new_anomalies = sum(len(item["new_anomaly_ids"]) for item in results)
+    return {
+        "workspace_count": len(results),
+        "failed_workspace_count": failed_workspaces,
+        "artifact_count": sum(item["total"] for item in results),
+        "integrity_failed": sum(item["integrity_failed"] for item in results),
+        "new_anomalies": new_anomalies,
+        "completed_at": datetime.now(timezone.utc),
+        "runs": results,
     }
 
 

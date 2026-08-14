@@ -1213,6 +1213,16 @@ class DeliveryIntegrityScanResponse(BaseModel):
     created_at: datetime
 
 
+class DeliveryIntegrityBatchResponse(BaseModel):
+    workspace_count: int
+    failed_workspace_count: int
+    artifact_count: int
+    integrity_failed: int
+    new_anomalies: int
+    completed_at: datetime
+    runs: list[DeliveryIntegrityScanResponse]
+
+
 class PresentationQualityIssueResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: uuid.UUID

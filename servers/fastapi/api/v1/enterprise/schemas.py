@@ -1162,6 +1162,47 @@ class PresentationDeliveryEvidenceVerifyResponse(BaseModel):
     package_hash: str | None
 
 
+class DeliveryCenterSummaryResponse(BaseModel):
+    total: int
+    ready: int
+    revoked: int
+    integrity_failed: int
+    downloads: int
+    active_grants: int
+
+
+class DeliveryCenterItemResponse(BaseModel):
+    artifact_id: uuid.UUID
+    scene_type: str
+    resource_id: uuid.UUID
+    resource_title: str
+    resource_code: str | None
+    version_no: int
+    format: str
+    file_name: str
+    sha256: str
+    size_bytes: int
+    watermark_text: str
+    status: str
+    integrity_status: str
+    file_integrity: bool
+    snapshot_integrity: bool
+    citation_integrity: bool | None
+    citation_count: int
+    grant_count: int
+    active_grant_count: int
+    download_count: int
+    created_at: datetime
+    revoked_at: datetime | None
+    purged_at: datetime | None
+    detail_url: str
+
+
+class DeliveryCenterResponse(BaseModel):
+    summary: DeliveryCenterSummaryResponse
+    items: list[DeliveryCenterItemResponse]
+
+
 class PresentationQualityIssueResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: uuid.UUID

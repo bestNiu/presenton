@@ -1026,6 +1026,13 @@ def test_presentation_registration_preserves_owner_and_allows_member_listing(tmp
         delivery_evidence = client.get(
             f"/api/v1/enterprise/workspaces/{workspace['id']}/presentations/{entry_id}/deliveries/{delivery.json()['id']}/evidence"
         )
+        delivery_center = client.get(
+            f"/api/v1/enterprise/workspaces/{workspace['id']}/delivery-center"
+        )
+        delivery_center_denied = client.get(
+            f"/api/v1/enterprise/workspaces/{workspace['id']}/delivery-center",
+            headers={"x-test-user": "member"},
+        )
         delivery_grant = client.post(
             f"/api/v1/enterprise/workspaces/{workspace['id']}/presentations/{entry_id}/deliveries/{delivery.json()['id']}/grants",
             json={"expires_in_minutes": 30, "max_downloads": 1},
@@ -1122,6 +1129,12 @@ def test_presentation_registration_preserves_owner_and_allows_member_listing(tmp
         assert delivery_evidence.json()["snapshot_integrity"] is True
         assert delivery_evidence.json()["citation_integrity"] is True
         assert len(delivery_evidence.json()["credential_hash"]) == 64
+        assert delivery_center.status_code == 200
+        assert delivery_center.json()["summary"]["total"] == 1
+        assert delivery_center.json()["summary"]["integrity_failed"] == 0
+        assert delivery_center.json()["items"][0]["scene_type"] == "general"
+        assert delivery_center.json()["items"][0]["resource_title"] == "企业架构汇报"
+        assert delivery_center_denied.status_code == 404
         assert delivery.json()["watermark_text"] == "共享空间 · L2 · owner"
         assert "file_path" not in delivery.json()
         assert delivery_download.content == b"governed-general-pdf"
@@ -2203,6 +2216,10 @@ def test_bid_understanding_flow_enforces_project_access_and_strategy_gate(tmp_pa
             f"/api/v1/enterprise/bid/projects/{project_id}/releases/{release['id']}/deliveries",
             json={"format": "pptx"},
         )
+        bid_delivery_center = client.get(
+            f"/api/v1/enterprise/workspaces/{workspace['id']}/delivery-center",
+            params={"scene_type": "bid", "integrity_status": "passed", "q": "BID-2026-001"},
+        )
         outsider_deliveries = client.get(
             f"/api/v1/enterprise/bid/projects/{project_id}/releases/{release['id']}/deliveries",
             headers={"x-test-user": "outsider"},
@@ -2286,6 +2303,10 @@ def test_bid_understanding_flow_enforces_project_access_and_strategy_gate(tmp_pa
         assert gate3_passed.json()["status"] == "passed"
         assert frozen.json()["status"] == "frozen"
         assert delivery.status_code == 201
+        assert bid_delivery_center.status_code == 200
+        assert bid_delivery_center.json()["summary"]["total"] == 1
+        assert bid_delivery_center.json()["items"][0]["scene_type"] == "bid"
+        assert bid_delivery_center.json()["items"][0]["resource_code"] == "BID-2026-001"
         assert delivery.json()["watermark_text"] == "BID-2026-001 · L3 · owner"
         assert delivery.json()["sha256"] == hashlib.sha256(b"watermarked-pptx-delivery").hexdigest()
         assert "file_path" not in delivery.json()

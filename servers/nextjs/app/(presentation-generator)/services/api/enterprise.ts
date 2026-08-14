@@ -517,6 +517,36 @@ export interface PresentationDeliveryEvidenceVerifyResponse {
   package_hash: string | null;
 }
 
+export interface DeliveryCenterResponse {
+  summary: { total: number; ready: number; revoked: number; integrity_failed: number; downloads: number; active_grants: number };
+  items: Array<{
+    artifact_id: string;
+    scene_type: "general" | "bid";
+    resource_id: string;
+    resource_title: string;
+    resource_code: string | null;
+    version_no: number;
+    format: "pptx" | "pdf";
+    file_name: string;
+    sha256: string;
+    size_bytes: number;
+    watermark_text: string;
+    status: "ready" | "revoked";
+    integrity_status: "passed" | "failed";
+    file_integrity: boolean;
+    snapshot_integrity: boolean;
+    citation_integrity: boolean | null;
+    citation_count: number;
+    grant_count: number;
+    active_grant_count: number;
+    download_count: number;
+    created_at: string;
+    revoked_at: string | null;
+    purged_at: string | null;
+    detail_url: string;
+  }>;
+}
+
 export interface TemplatePublicationResponse {
   id: string;
   publication_key: string;
@@ -1284,6 +1314,16 @@ export class EnterpriseApi {
   static async verifyPresentationDeliveryEvidencePackage(workspaceId: string, entryId: string, artifactId: string, evidencePackage: Record<string, unknown>): Promise<PresentationDeliveryEvidenceVerifyResponse> {
     const response = await fetch(getApiUrl(`/api/v1/enterprise/workspaces/${encodeURIComponent(workspaceId)}/presentations/${encodeURIComponent(entryId)}/deliveries/${encodeURIComponent(artifactId)}/evidence-package/verify`), { method: "POST", credentials: "include", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ package: evidencePackage }) });
     return ApiResponseHandler.handleResponse(response, "Failed to verify delivery evidence package");
+  }
+
+  static async getDeliveryCenter(workspaceId: string, filters: { sceneType?: string; status?: string; integrity?: string; q?: string } = {}): Promise<DeliveryCenterResponse> {
+    const params = new URLSearchParams();
+    if (filters.sceneType) params.set("scene_type", filters.sceneType);
+    if (filters.status) params.set("delivery_status", filters.status);
+    if (filters.integrity) params.set("integrity_status", filters.integrity);
+    if (filters.q) params.set("q", filters.q);
+    const response = await fetch(getApiUrl(`/api/v1/enterprise/workspaces/${encodeURIComponent(workspaceId)}/delivery-center?${params.toString()}`), { credentials: "include", cache: "no-store" });
+    return ApiResponseHandler.handleResponse(response, "Failed to load delivery center");
   }
 
   static async issuePresentationDownloadGrant(workspaceId: string, entryId: string, artifactId: string): Promise<BidDownloadGrantResponse> {

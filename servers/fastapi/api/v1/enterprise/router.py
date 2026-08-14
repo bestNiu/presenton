@@ -78,6 +78,7 @@ from api.v1.enterprise.schemas import (
     EnterpriseNotificationReadAllResponse,
     EnterpriseNotificationResponse,
     EnterpriseDocumentDetailResponse,
+    DeliveryCenterResponse,
     EnterpriseDocumentParseTaskResponse,
     EnterpriseDocumentResponse,
     EnterpriseKnowledgeSearchItemResponse,
@@ -172,6 +173,7 @@ from services.enterprise.presentation_delivery_service import (
     verify_presentation_delivery_evidence_package,
     revoke_presentation_delivery,
 )
+from services.enterprise.delivery_center_service import get_delivery_center
 from services.enterprise.notification_service import (
     list_notifications,
     mark_all_notifications_read,
@@ -1924,3 +1926,19 @@ async def get_workspace_audit_events(
             )
         ).all()
     )
+
+
+@API_V1_ENTERPRISE_ROUTER.get(
+    "/workspaces/{workspace_id}/delivery-center",
+    response_model=DeliveryCenterResponse,
+)
+async def get_workspace_delivery_center(
+    workspace_id: uuid.UUID,
+    scene_type: str | None = Query(default=None, pattern="^(general|bid)$"),
+    delivery_status: str | None = Query(default=None, pattern="^(ready|revoked)$"),
+    integrity_status: str | None = Query(default=None, pattern="^(passed|failed)$"),
+    q: str | None = Query(default=None, max_length=200),
+    principal: AuthPrincipal = Depends(principal_from_request),
+    session: AsyncSession = Depends(get_async_session),
+):
+    return await get_delivery_center(session, workspace_id=workspace_id, principal=principal, scene_type=scene_type, delivery_status=delivery_status, integrity_status=integrity_status, query=q)

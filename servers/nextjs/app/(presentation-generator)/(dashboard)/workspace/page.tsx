@@ -8,6 +8,7 @@ import {
   Bell,
   Building2,
   FilePlus2,
+  FileCheck2,
   FileText,
   FolderKanban,
   LayoutTemplate,
@@ -361,6 +362,13 @@ function WorkspacePage() {
               <FileText className="h-4 w-4" />
               文档中心
             </Link>
+            {canFreeze && <Link
+              href={`/workspace/deliveries?workspace_id=${encodeURIComponent(activeWorkspaceId)}`}
+              className="inline-flex items-center gap-2 rounded-lg border border-[#D9DCE3] bg-white px-3 py-2 text-sm font-medium text-[#344054] hover:bg-[#F8F9FC]"
+            >
+              <FileCheck2 className="h-4 w-4" />
+              交付中心
+            </Link>}
             </>
           )}
           <button

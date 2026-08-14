@@ -7,8 +7,8 @@ import { ArrowLeft, CheckCircle2, Loader2, Plus, ShieldCheck } from "lucide-reac
 import {
   EnterpriseApi,
   type TemplatePublicationResponse,
-  type WorkspaceResponse,
 } from "@/app/(presentation-generator)/services/api/enterprise";
+import { useEnterpriseWorkspace } from "../components/EnterpriseWorkspaceShell";
 
 const statusLabel: Record<TemplatePublicationResponse["status"], string> = {
   draft: "草稿",
@@ -30,8 +30,11 @@ const actionLabel = {
 type PublicationAction = keyof typeof actionLabel;
 
 function TemplateGovernancePage() {
-  const [workspaces, setWorkspaces] = useState<WorkspaceResponse[]>([]);
-  const [workspaceId, setWorkspaceId] = useState("");
+  const {
+    workspaces,
+    activeWorkspaceId: workspaceId,
+    setActiveWorkspaceId: setWorkspaceId,
+  } = useEnterpriseWorkspace();
   const [publications, setPublications] = useState<TemplatePublicationResponse[]>([]);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
@@ -41,20 +44,6 @@ function TemplateGovernancePage() {
   const [publicationKey, setPublicationKey] = useState("");
   const [displayName, setDisplayName] = useState("");
   const [version, setVersion] = useState(1);
-
-  useEffect(() => {
-    EnterpriseApi.getWorkspaces()
-      .then((rows) => {
-        setWorkspaces(rows);
-        const requested = new URLSearchParams(window.location.search).get("workspace_id");
-        setWorkspaceId(
-          rows.some((workspace) => workspace.id === requested)
-            ? requested || ""
-            : rows[0]?.id || ""
-        );
-      })
-      .catch((cause) => setError(cause instanceof Error ? cause.message : "空间加载失败"));
-  }, []);
 
   const loadPublications = useCallback(async () => {
     if (!workspaceId) {

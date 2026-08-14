@@ -4,11 +4,15 @@ import Link from "next/link";
 import { FormEvent, useCallback, useEffect, useState } from "react";
 import { AlertTriangle, ArrowLeft, CheckCircle2, FileCheck2, RefreshCw, Search, ShieldAlert } from "lucide-react";
 
-import { EnterpriseApi, type DeliveryCenterResponse, type DeliveryIntegrityIncidentResponse, type DeliveryIntegrityScanResponse, type WorkspaceResponse } from "@/app/(presentation-generator)/services/api/enterprise";
+import { EnterpriseApi, type DeliveryCenterResponse, type DeliveryIntegrityIncidentResponse, type DeliveryIntegrityScanResponse } from "@/app/(presentation-generator)/services/api/enterprise";
+import { useEnterpriseWorkspace } from "../components/EnterpriseWorkspaceShell";
 
 export default function DeliveryCenterPage() {
-  const [workspaces, setWorkspaces] = useState<WorkspaceResponse[]>([]);
-  const [workspaceId, setWorkspaceId] = useState("");
+  const {
+    workspaces,
+    activeWorkspaceId: workspaceId,
+    setActiveWorkspaceId: setWorkspaceId,
+  } = useEnterpriseWorkspace();
   const [data, setData] = useState<DeliveryCenterResponse | null>(null);
   const [scans, setScans] = useState<DeliveryIntegrityScanResponse[]>([]);
   const [incidents, setIncidents] = useState<DeliveryIntegrityIncidentResponse[]>([]);
@@ -21,14 +25,8 @@ export default function DeliveryCenterPage() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    EnterpriseApi.getWorkspaces().then((rows) => {
-      const admins = rows.filter((item) => ["owner", "admin"].includes(item.current_user_role));
-      setWorkspaces(admins);
-      const requested = new URLSearchParams(window.location.search).get("workspace_id");
-      const requestedIntegrity = new URLSearchParams(window.location.search).get("integrity");
-      if (["passed", "failed"].includes(requestedIntegrity || "")) setIntegrity(requestedIntegrity || "");
-      setWorkspaceId(admins.some((item) => item.id === requested) ? requested || "" : admins[0]?.id || "");
-    }).catch((cause) => setError(cause instanceof Error ? cause.message : "空间加载失败"));
+    const requestedIntegrity = new URLSearchParams(window.location.search).get("integrity");
+    if (["passed", "failed"].includes(requestedIntegrity || "")) setIntegrity(requestedIntegrity || "");
   }, []);
 
   const load = useCallback(async () => {
@@ -90,7 +88,7 @@ export default function DeliveryCenterPage() {
   return <main className="min-h-screen bg-[#F7F7FA] px-5 py-8 text-[#101828] sm:px-8">
     <div className="mx-auto max-w-7xl">
       <Link href={`/workspace${workspaceId ? `?workspace_id=${encodeURIComponent(workspaceId)}` : ""}`} className="inline-flex items-center gap-2 text-sm text-[#475467]"><ArrowLeft className="h-4 w-4" />返回工作台</Link>
-      <header className="mt-5 flex flex-wrap items-end justify-between gap-4"><div><p className="text-xs font-medium text-[#635BFF]">企业治理</p><h1 className="mt-1 text-2xl font-semibold">交付中心</h1><p className="mt-2 text-sm text-[#667085]">统一核验通用 PPT 与竞标交付件、下载使用和撤销风险。</p></div><div className="flex gap-2"><select value={workspaceId} onChange={(event) => setWorkspaceId(event.target.value)} className="h-10 rounded-lg border border-[#D9DCE3] bg-white px-3 text-sm">{workspaces.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select><button type="button" onClick={() => void runScan()} disabled={loading} className="inline-flex h-10 items-center gap-2 rounded-lg bg-[#17171B] px-3 text-sm text-white disabled:opacity-40"><ShieldAlert className="h-4 w-4" />立即巡检</button><button type="button" onClick={() => void load()} className="inline-flex h-10 items-center gap-2 rounded-lg border border-[#D9DCE3] bg-white px-3 text-sm"><RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />刷新</button></div></header>
+      <header className="mt-5 flex flex-wrap items-end justify-between gap-4"><div><p className="text-xs font-medium text-[#635BFF]">企业治理</p><h1 className="mt-1 text-2xl font-semibold">交付中心</h1><p className="mt-2 text-sm text-[#667085]">统一核验通用 PPT 与竞标交付件、下载使用和撤销风险。</p></div><div className="flex gap-2"><select value={workspaceId} onChange={(event) => setWorkspaceId(event.target.value)} className="h-10 rounded-lg border border-[#D9DCE3] bg-white px-3 text-sm">{workspaces.filter((item) => ["owner", "admin"].includes(item.current_user_role)).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select><button type="button" onClick={() => void runScan()} disabled={loading} className="inline-flex h-10 items-center gap-2 rounded-lg bg-[#17171B] px-3 text-sm text-white disabled:opacity-40"><ShieldAlert className="h-4 w-4" />立即巡检</button><button type="button" onClick={() => void load()} className="inline-flex h-10 items-center gap-2 rounded-lg border border-[#D9DCE3] bg-white px-3 text-sm"><RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />刷新</button></div></header>
       {error && <p className="mt-4 rounded-xl bg-[#FEF2F2] p-3 text-sm text-[#B42318]">{error}</p>}
       <section className="mt-6 grid gap-3 sm:grid-cols-2 lg:grid-cols-6">{[
         ["全部交付", data?.summary.total ?? 0, ""], ["可交付", data?.summary.ready ?? 0, "text-[#027A48]"], ["已撤销", data?.summary.revoked ?? 0, "text-[#B42318]"], ["完整性异常", data?.summary.integrity_failed ?? 0, "text-[#B42318]"], ["累计下载", data?.summary.downloads ?? 0, ""], ["有效授权", data?.summary.active_grants ?? 0, "text-[#4238CA]"],

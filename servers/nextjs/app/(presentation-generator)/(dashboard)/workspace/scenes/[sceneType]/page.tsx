@@ -18,6 +18,7 @@ import {
   type BidProjectResponse,
   type SceneRuntimeResponse,
 } from "@/app/(presentation-generator)/services/api/enterprise";
+import { useEnterpriseWorkspace } from "../../components/EnterpriseWorkspaceShell";
 
 const policyLabel: Record<string, string> = {
   document_policy: "资料策略",
@@ -28,8 +29,11 @@ const policyLabel: Record<string, string> = {
 
 function SceneRuntimePage() {
   const params = useParams<{ sceneType: string }>();
+  const {
+    activeWorkspaceId: workspaceId,
+    loading: workspaceLoading,
+  } = useEnterpriseWorkspace();
   const [runtime, setRuntime] = useState<SceneRuntimeResponse | null>(null);
-  const [workspaceId, setWorkspaceId] = useState("");
   const [projects, setProjects] = useState<BidProjectResponse[]>([]);
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
@@ -40,15 +44,14 @@ function SceneRuntimePage() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    const workspaceId = new URLSearchParams(window.location.search).get(
-      "workspace_id"
-    );
+    if (workspaceLoading) return;
     if (!workspaceId) {
       setError("缺少工作空间，请从企业工作台进入场景。");
       setLoading(false);
       return;
     }
-    setWorkspaceId(workspaceId);
+    setLoading(true);
+    setError(null);
     Promise.all([
       EnterpriseApi.getSceneRuntime(params.sceneType, workspaceId),
       params.sceneType === "bid"
@@ -63,7 +66,7 @@ function SceneRuntimePage() {
         setError(cause instanceof Error ? cause.message : "场景加载失败")
       )
       .finally(() => setLoading(false));
-  }, [params.sceneType]);
+  }, [params.sceneType, workspaceId, workspaceLoading]);
 
   if (loading) {
     return (

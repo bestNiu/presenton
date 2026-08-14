@@ -11,8 +11,8 @@ import {
   type EnterpriseKnowledgeOutlineResponse,
   type EnterpriseKnowledgeSearchItemResponse,
   type PresentationEntryResponse,
-  type WorkspaceResponse,
 } from "@/app/(presentation-generator)/services/api/enterprise";
+import { useEnterpriseWorkspace } from "../components/EnterpriseWorkspaceShell";
 
 const parseLabel: Record<EnterpriseDocumentResponse["parse_status"], string> = {
   queued: "等待解析",
@@ -22,8 +22,11 @@ const parseLabel: Record<EnterpriseDocumentResponse["parse_status"], string> = {
 };
 
 export default function EnterpriseDocumentCenterPage() {
-  const [workspaces, setWorkspaces] = useState<WorkspaceResponse[]>([]);
-  const [workspaceId, setWorkspaceId] = useState("");
+  const {
+    workspaces,
+    activeWorkspaceId: workspaceId,
+    setActiveWorkspaceId: setWorkspaceId,
+  } = useEnterpriseWorkspace();
   const [documents, setDocuments] = useState<EnterpriseDocumentResponse[]>([]);
   const [presentations, setPresentations] = useState<PresentationEntryResponse[]>([]);
   const [targetEntryId, setTargetEntryId] = useState("");
@@ -41,14 +44,6 @@ export default function EnterpriseDocumentCenterPage() {
   const [generatedPresentationId, setGeneratedPresentationId] = useState("");
   const [pending, setPending] = useState("");
   const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    EnterpriseApi.getWorkspaces().then((rows) => {
-      setWorkspaces(rows);
-      const requested = new URLSearchParams(window.location.search).get("workspace_id");
-      setWorkspaceId(rows.some((item) => item.id === requested) ? requested || "" : rows[0]?.id || "");
-    }).catch((cause) => setError(cause instanceof Error ? cause.message : "空间加载失败"));
-  }, []);
 
   const loadDocuments = useCallback(async () => {
     if (!workspaceId) return;

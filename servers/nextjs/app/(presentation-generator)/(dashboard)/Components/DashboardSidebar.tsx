@@ -43,11 +43,11 @@ const DashboardSidebar = () => {
                             prefetch={false}
                             href="/workspace"
                             className="flex flex-col items-center gap-2 text-center transition-colors"
-                            aria-label="Enterprise workspace"
-                            title="Enterprise workspace"
+                            aria-label="企业中台"
+                            title="企业中台"
                         >
                             <Building2 className={`h-4 w-4 ${pathname === "/workspace" ? "text-[#5146E5]" : "text-slate-600"}`} />
-                            <span className="text-[11px] text-slate-800">Workspace</span>
+                            <span className="text-[11px] text-slate-800">企业中台</span>
                         </Link>
 
                         {/* Dashboard */}
@@ -58,11 +58,11 @@ const DashboardSidebar = () => {
                                 "flex flex-col tex-center items-center gap-2  transition-colors",
                                 pathname === "/dashboard" ? "" : "ring-transparent",
                             ].join(" ")}
-                            aria-label="Dashboard"
-                            title="Dashboard"
+                            aria-label="首页"
+                            title="首页"
                         >
                             <LayoutDashboard className={["h-4 w-4", pathname === "/dashboard" ? "text-[#5146E5]" : "text-slate-600"].join(" ")} />
-                            <span className="text-[11px] text-slate-800">Dashboard</span>
+                            <span className="text-[11px] text-slate-800">首页</span>
                         </Link>
                         <Link
                             prefetch={false}
@@ -76,18 +76,18 @@ const DashboardSidebar = () => {
                         >
                             <div className="flex flex-col cursor-pointer tex-center items-center gap-2  transition-colors">
                                 <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke={`${pathname === "/templates" ? "#5146E5" : "#475569"}`} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="h-4 w-4"><path d="M4 14h6" /><path d="M4 2h10" /><rect x="4" y="18" width="16" height="4" rx="1" /><rect x="4" y="6" width="16" height="4" rx="1" /></svg>
-                                <span className="text-[11px] text-slate-800">Templates</span>
+                                <span className="text-[11px] text-slate-800">模板</span>
                             </div>
                         </Link>
                         <Link
                             prefetch={false}
                             href="/community"
                             className="flex flex-col items-center gap-2 text-center transition-colors"
-                            aria-label="Community"
-                            title="Community"
+                            aria-label="社区"
+                            title="社区"
                         >
                             <UsersRound className={`h-4 w-4 ${pathname === "/community" ? "text-[#5146E5]" : "text-slate-600"}`} />
-                            <span className="text-[11px] text-slate-800">Community</span>
+                            <span className="text-[11px] text-slate-800">社区</span>
                         </Link>
                         {/* <Link
                             prefetch={false}
@@ -115,7 +115,7 @@ const DashboardSidebar = () => {
                     className="flex flex-col items-center gap-2 transition-colors"
                 >
                     <HelpCircle className="h-4 w-4" />
-                    <span className="text-[11px] text-slate-800">Help</span>
+                    <span className="text-[11px] text-slate-800">帮助</span>
                 </Link>
             </div>
 

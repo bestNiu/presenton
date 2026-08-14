@@ -11,8 +11,8 @@ import {
   type AssetDiscoveryItemResponse,
   type AssetPromotionResponse,
   type AssetStatus,
-  type WorkspaceResponse,
 } from "@/app/(presentation-generator)/services/api/enterprise";
+import { useEnterpriseWorkspace } from "../components/EnterpriseWorkspaceShell";
 
 const statusLabel: Record<AssetStatus, string> = {
   draft: "草稿",
@@ -31,8 +31,11 @@ const typeLabel: Record<string, string> = {
 };
 
 export default function AssetCenterPage() {
-  const [workspaces, setWorkspaces] = useState<WorkspaceResponse[]>([]);
-  const [workspaceId, setWorkspaceId] = useState("");
+  const {
+    workspaces,
+    activeWorkspaceId: workspaceId,
+    setActiveWorkspaceId: setWorkspaceId,
+  } = useEnterpriseWorkspace();
   const [assets, setAssets] = useState<AssetItemResponse[]>([]);
   const [analytics, setAnalytics] = useState<AssetAnalyticsResponse | null>(null);
   const [myPromotions, setMyPromotions] = useState<AssetPromotionResponse[]>([]);
@@ -54,16 +57,6 @@ export default function AssetCenterPage() {
   const [assetVersions, setAssetVersions] = useState<Record<string, AssetItemResponse[]>>({});
   const [searchResults, setSearchResults] = useState<AssetDiscoveryItemResponse[] | null>(null);
   const [similarResults, setSimilarResults] = useState<Record<string, AssetDiscoveryItemResponse[]>>({});
-
-  useEffect(() => {
-    EnterpriseApi.getWorkspaces()
-      .then((rows) => {
-        setWorkspaces(rows);
-        const requested = new URLSearchParams(window.location.search).get("workspace_id");
-        setWorkspaceId(rows.some((item) => item.id === requested) ? requested || "" : rows[0]?.id || "");
-      })
-      .catch((cause) => setError(cause instanceof Error ? cause.message : "空间加载失败"));
-  }, []);
 
   const load = useCallback(async (silent = false) => {
     if (!workspaceId) return;

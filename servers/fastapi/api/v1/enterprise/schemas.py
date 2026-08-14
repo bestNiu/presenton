@@ -1210,6 +1210,9 @@ class DeliveryIntegrityScanResponse(BaseModel):
     integrity_failed: int
     anomaly_ids: list[str]
     new_anomaly_ids: list[str]
+    opened_incident_ids: list[str] = Field(default_factory=list)
+    resolved_incident_ids: list[str] = Field(default_factory=list)
+    revoked_grant_count: int = 0
     created_at: datetime
 
 
@@ -1256,6 +1259,36 @@ class DeliveryIntegrityHealthResponse(BaseModel):
     max_age_hours: int
     checked_at: datetime
     latest_run: DeliveryIntegrityBatchRunResponse | None
+
+
+class DeliveryIntegrityIncidentResponse(BaseModel):
+    id: uuid.UUID
+    workspace_id: uuid.UUID
+    workspace_name: str
+    scene_type: str
+    artifact_id: uuid.UUID
+    resource_id: uuid.UUID
+    resource_title: str
+    detail_url: str
+    anomaly_types: list[str]
+    severity: str
+    status: str
+    authorization_paused: bool
+    assigned_to: uuid.UUID | None
+    assigned_to_username: str | None
+    occurrence_count: int
+    resolution_note: str | None
+    resolved_by: uuid.UUID | None
+    first_detected_at: datetime
+    last_detected_at: datetime
+    resolved_at: datetime | None
+    updated_at: datetime
+
+
+class DeliveryIntegrityIncidentUpdateRequest(BaseModel):
+    status: str | None = Field(default=None, pattern="^(open|in_progress|resolved|accepted_risk|false_positive)$")
+    assigned_to: uuid.UUID | None = None
+    resolution_note: str | None = Field(default=None, max_length=2000)
 
 
 class PresentationQualityIssueResponse(BaseModel):

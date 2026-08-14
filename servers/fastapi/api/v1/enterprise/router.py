@@ -83,6 +83,8 @@ from api.v1.enterprise.schemas import (
     DeliveryIntegrityBatchResponse,
     DeliveryIntegrityBatchRunResponse,
     DeliveryIntegrityHealthResponse,
+    DeliveryIntegrityIncidentResponse,
+    DeliveryIntegrityIncidentUpdateRequest,
     EnterpriseDocumentParseTaskResponse,
     EnterpriseDocumentResponse,
     EnterpriseKnowledgeSearchItemResponse,
@@ -184,6 +186,11 @@ from services.enterprise.delivery_center_service import (
     list_delivery_integrity_scans,
     run_delivery_integrity_scan,
     run_all_workspace_delivery_integrity_scans,
+)
+from services.enterprise.delivery_integrity_incident_service import (
+    list_delivery_integrity_incidents,
+    recheck_delivery_integrity_incident,
+    update_delivery_integrity_incident,
 )
 from services.enterprise.notification_service import (
     list_notifications,
@@ -343,6 +350,64 @@ async def get_all_workspace_delivery_integrity_health(
     session: AsyncSession = Depends(get_async_session),
 ):
     return await get_delivery_integrity_health(session, principal=principal)
+
+
+@API_V1_ENTERPRISE_ROUTER.get(
+    "/admin/delivery-integrity-incidents",
+    response_model=list[DeliveryIntegrityIncidentResponse],
+)
+async def get_all_delivery_integrity_incidents(
+    status: str | None = Query(default=None),
+    scene_type: str | None = Query(default=None),
+    limit: int = Query(default=100, ge=1, le=500),
+    principal: AuthPrincipal = Depends(principal_from_request),
+    session: AsyncSession = Depends(get_async_session),
+):
+    return await list_delivery_integrity_incidents(
+        session,
+        principal=principal,
+        status=status,
+        scene_type=scene_type,
+        limit=limit,
+    )
+
+
+@API_V1_ENTERPRISE_ROUTER.patch(
+    "/admin/delivery-integrity-incidents/{incident_id}",
+    response_model=DeliveryIntegrityIncidentResponse,
+)
+async def patch_delivery_integrity_incident(
+    incident_id: uuid.UUID,
+    body: DeliveryIntegrityIncidentUpdateRequest,
+    principal: AuthPrincipal = Depends(principal_from_request),
+    session: AsyncSession = Depends(get_async_session),
+):
+    if not principal.is_admin:
+        raise HTTPException(status_code=403, detail="Platform administrator required")
+    return await update_delivery_integrity_incident(
+        session,
+        incident_id=incident_id,
+        principal=principal,
+        status=body.status,
+        assigned_to=body.assigned_to,
+        resolution_note=body.resolution_note,
+    )
+
+
+@API_V1_ENTERPRISE_ROUTER.post(
+    "/admin/delivery-integrity-incidents/{incident_id}/recheck",
+    response_model=DeliveryIntegrityIncidentResponse,
+)
+async def post_delivery_integrity_incident_recheck(
+    incident_id: uuid.UUID,
+    principal: AuthPrincipal = Depends(principal_from_request),
+    session: AsyncSession = Depends(get_async_session),
+):
+    if not principal.is_admin:
+        raise HTTPException(status_code=403, detail="Platform administrator required")
+    return await recheck_delivery_integrity_incident(
+        session, incident_id=incident_id, principal=principal
+    )
 
 
 @API_V1_ENTERPRISE_ROUTER.post(
@@ -2003,3 +2068,65 @@ async def post_workspace_delivery_integrity_run(workspace_id: uuid.UUID, princip
 )
 async def get_workspace_delivery_integrity_runs(workspace_id: uuid.UUID, limit: int = Query(default=20, ge=1, le=100), principal: AuthPrincipal = Depends(principal_from_request), session: AsyncSession = Depends(get_async_session)):
     return await list_delivery_integrity_scans(session, workspace_id=workspace_id, principal=principal, limit=limit)
+
+
+@API_V1_ENTERPRISE_ROUTER.get(
+    "/workspaces/{workspace_id}/delivery-integrity-incidents",
+    response_model=list[DeliveryIntegrityIncidentResponse],
+)
+async def get_workspace_delivery_integrity_incidents(
+    workspace_id: uuid.UUID,
+    status: str | None = Query(default=None),
+    scene_type: str | None = Query(default=None),
+    limit: int = Query(default=100, ge=1, le=500),
+    principal: AuthPrincipal = Depends(principal_from_request),
+    session: AsyncSession = Depends(get_async_session),
+):
+    return await list_delivery_integrity_incidents(
+        session,
+        principal=principal,
+        workspace_id=workspace_id,
+        status=status,
+        scene_type=scene_type,
+        limit=limit,
+    )
+
+
+@API_V1_ENTERPRISE_ROUTER.patch(
+    "/workspaces/{workspace_id}/delivery-integrity-incidents/{incident_id}",
+    response_model=DeliveryIntegrityIncidentResponse,
+)
+async def patch_workspace_delivery_integrity_incident(
+    workspace_id: uuid.UUID,
+    incident_id: uuid.UUID,
+    body: DeliveryIntegrityIncidentUpdateRequest,
+    principal: AuthPrincipal = Depends(principal_from_request),
+    session: AsyncSession = Depends(get_async_session),
+):
+    return await update_delivery_integrity_incident(
+        session,
+        incident_id=incident_id,
+        principal=principal,
+        status=body.status,
+        assigned_to=body.assigned_to,
+        resolution_note=body.resolution_note,
+        workspace_id=workspace_id,
+    )
+
+
+@API_V1_ENTERPRISE_ROUTER.post(
+    "/workspaces/{workspace_id}/delivery-integrity-incidents/{incident_id}/recheck",
+    response_model=DeliveryIntegrityIncidentResponse,
+)
+async def post_workspace_delivery_integrity_incident_recheck(
+    workspace_id: uuid.UUID,
+    incident_id: uuid.UUID,
+    principal: AuthPrincipal = Depends(principal_from_request),
+    session: AsyncSession = Depends(get_async_session),
+):
+    return await recheck_delivery_integrity_incident(
+        session,
+        incident_id=incident_id,
+        principal=principal,
+        workspace_id=workspace_id,
+    )

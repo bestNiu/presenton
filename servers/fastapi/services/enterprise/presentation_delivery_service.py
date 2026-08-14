@@ -213,6 +213,11 @@ async def issue_presentation_download_grant(session: AsyncSession, *, workspace_
         raise HTTPException(status_code=404, detail="Presentation delivery not found")
     if PresentationDeliveryStatus(artifact.status) != PresentationDeliveryStatus.READY:
         raise HTTPException(status_code=409, detail="Presentation delivery is not available")
+    from services.enterprise.delivery_integrity_incident_service import ensure_delivery_not_quarantined
+
+    await ensure_delivery_not_quarantined(
+        session, scene_type="general", artifact_id=artifact.id
+    )
     token = secrets.token_urlsafe(32)
     grant = PresentationDownloadGrantModel(artifact_id=artifact.id, token_hash=_token_hash(token), expires_at=datetime.now(timezone.utc) + timedelta(minutes=expires_in_minutes), max_downloads=max_downloads, created_by=principal.user_id)
     session.add(grant)

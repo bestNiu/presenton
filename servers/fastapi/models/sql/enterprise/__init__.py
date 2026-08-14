@@ -6,6 +6,7 @@ from models.sql.enterprise.asset_usage import AssetUsageEventModel
 from models.sql.enterprise.document import EnterpriseDocumentModel
 from models.sql.enterprise.document_chunk import EnterpriseDocumentChunkModel
 from models.sql.enterprise.delivery_integrity_run import DeliveryIntegrityRunModel
+from models.sql.enterprise.delivery_integrity_incident import DeliveryIntegrityIncidentModel
 from models.sql.enterprise.knowledge_outline import EnterpriseKnowledgeOutlineModel
 from models.sql.enterprise.bid import (
     BidDeliveryArtifactModel,
@@ -53,6 +54,7 @@ __all__ = [
     "EnterpriseDocumentModel",
     "EnterpriseDocumentChunkModel",
     "DeliveryIntegrityRunModel",
+    "DeliveryIntegrityIncidentModel",
     "EnterpriseKnowledgeOutlineModel",
     "BidDeliveryArtifactModel",
     "BidDownloadGrantModel",

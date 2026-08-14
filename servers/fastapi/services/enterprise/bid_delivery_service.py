@@ -234,6 +234,11 @@ async def issue_download_grant(
         raise HTTPException(status_code=404, detail="Delivery artifact not found")
     if BidDeliveryStatus(artifact.status) != BidDeliveryStatus.READY:
         raise HTTPException(status_code=409, detail="Delivery artifact is not available")
+    from services.enterprise.delivery_integrity_incident_service import ensure_delivery_not_quarantined
+
+    await ensure_delivery_not_quarantined(
+        session, scene_type="bid", artifact_id=artifact.id
+    )
     token = secrets.token_urlsafe(32)
     grant = BidDownloadGrantModel(
         artifact_id=artifact.id,

@@ -89,6 +89,7 @@ def test_upgrade_from_baseline_stamp_skips_existing_theme_column(tmp_path):
         assert "fonts" in columns
         assert "async_tasks" in tables
         assert "enterprise_delivery_integrity_runs" in tables
+        assert "enterprise_delivery_integrity_incidents" in tables
         assert "admin_slot" in user_columns
         assert "uq_user_admin_slot" in user_indexes
     finally:

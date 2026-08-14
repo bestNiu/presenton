@@ -4,13 +4,14 @@ import Link from "next/link";
 import { FormEvent, useCallback, useEffect, useState } from "react";
 import { AlertTriangle, ArrowLeft, CheckCircle2, FileCheck2, RefreshCw, Search, ShieldAlert } from "lucide-react";
 
-import { EnterpriseApi, type DeliveryCenterResponse, type DeliveryIntegrityScanResponse, type WorkspaceResponse } from "@/app/(presentation-generator)/services/api/enterprise";
+import { EnterpriseApi, type DeliveryCenterResponse, type DeliveryIntegrityIncidentResponse, type DeliveryIntegrityScanResponse, type WorkspaceResponse } from "@/app/(presentation-generator)/services/api/enterprise";
 
 export default function DeliveryCenterPage() {
   const [workspaces, setWorkspaces] = useState<WorkspaceResponse[]>([]);
   const [workspaceId, setWorkspaceId] = useState("");
   const [data, setData] = useState<DeliveryCenterResponse | null>(null);
   const [scans, setScans] = useState<DeliveryIntegrityScanResponse[]>([]);
+  const [incidents, setIncidents] = useState<DeliveryIntegrityIncidentResponse[]>([]);
   const [sceneType, setSceneType] = useState("");
   const [status, setStatus] = useState("");
   const [integrity, setIntegrity] = useState("");
@@ -34,12 +35,14 @@ export default function DeliveryCenterPage() {
     if (!workspaceId) return;
     setLoading(true);
     try {
-      const [center, history] = await Promise.all([
+      const [center, history, incidentRows] = await Promise.all([
         EnterpriseApi.getDeliveryCenter(workspaceId, { sceneType, status, integrity, q: appliedQuery }),
         EnterpriseApi.getDeliveryIntegrityScans(workspaceId),
+        EnterpriseApi.getDeliveryIntegrityIncidents(workspaceId),
       ]);
       setData(center);
       setScans(history);
+      setIncidents(incidentRows);
       setError(null);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "交付中心加载失败");
@@ -59,6 +62,30 @@ export default function DeliveryCenterPage() {
       setLoading(false);
     }
   };
+  const recheckIncident = async (incidentId: string) => {
+    if (!workspaceId) return;
+    setLoading(true);
+    try {
+      await EnterpriseApi.recheckDeliveryIntegrityIncident(workspaceId, incidentId);
+      await load();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "异常复检失败");
+      setLoading(false);
+    }
+  };
+  const decideIncident = async (incidentId: string, status: "accepted_risk" | "false_positive") => {
+    if (!workspaceId) return;
+    const note = window.prompt(status === "accepted_risk" ? "请输入接受风险的审批依据" : "请输入误报判定依据");
+    if (!note?.trim()) return;
+    setLoading(true);
+    try {
+      await EnterpriseApi.updateDeliveryIntegrityIncident(workspaceId, incidentId, { status, resolution_note: note.trim() });
+      await load();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "异常处置失败");
+      setLoading(false);
+    }
+  };
 
   return <main className="min-h-screen bg-[#F7F7FA] px-5 py-8 text-[#101828] sm:px-8">
     <div className="mx-auto max-w-7xl">
@@ -71,6 +98,7 @@ export default function DeliveryCenterPage() {
       <section className="mt-5 rounded-2xl border border-[#E3E4EA] bg-white p-4"><form onSubmit={search} className="flex flex-wrap gap-2"><select value={sceneType} onChange={(event) => setSceneType(event.target.value)} className="h-10 rounded-lg border border-[#D9DCE3] px-3 text-sm"><option value="">全部场景</option><option value="general">通用 PPT</option><option value="bid">竞标 PPT</option></select><select value={status} onChange={(event) => setStatus(event.target.value)} className="h-10 rounded-lg border border-[#D9DCE3] px-3 text-sm"><option value="">全部状态</option><option value="ready">可交付</option><option value="revoked">已撤销</option></select><select value={integrity} onChange={(event) => setIntegrity(event.target.value)} className="h-10 rounded-lg border border-[#D9DCE3] px-3 text-sm"><option value="">全部完整性</option><option value="passed">验证通过</option><option value="failed">验证异常</option></select><div className="flex min-w-[260px] flex-1"><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索文稿、项目编号、文件名或 SHA-256" className="h-10 min-w-0 flex-1 rounded-l-lg border border-r-0 border-[#D9DCE3] px-3 text-sm" /><button className="inline-flex h-10 items-center gap-1 rounded-r-lg bg-[#635BFF] px-4 text-sm text-white"><Search className="h-4 w-4" />搜索</button></div></form></section>
       <section className="mt-5 overflow-hidden rounded-2xl border border-[#E3E4EA] bg-white"><div className="grid grid-cols-[minmax(220px,1.5fr)_90px_110px_120px_110px_100px] gap-3 border-b border-[#EAECF0] bg-[#F8F9FC] px-5 py-3 text-xs font-medium text-[#667085]"><span>交付对象</span><span>场景/格式</span><span>状态</span><span>完整性</span><span>下载/授权</span><span>操作</span></div>{data?.items.map((item) => <article key={`${item.scene_type}:${item.artifact_id}`} className="grid grid-cols-[minmax(220px,1.5fr)_90px_110px_120px_110px_100px] gap-3 border-b border-[#F0F1F3] px-5 py-4 text-xs last:border-0"><div className="min-w-0"><p className="truncate text-sm font-medium">{item.resource_title}</p><p className="mt-1 truncate text-[#667085]">{item.resource_code ? `${item.resource_code} · ` : ""}V{item.version_no} · {item.file_name}</p><p className="mt-1 truncate font-mono text-[10px] text-[#98A2B3]">{item.sha256}</p></div><div><p>{item.scene_type === "bid" ? "竞标" : "通用"}</p><p className="mt-1 uppercase text-[#667085]">{item.format}</p></div><div><span className={`rounded-full px-2 py-1 ${item.status === "ready" ? "bg-[#ECFDF3] text-[#027A48]" : "bg-[#FEF2F2] text-[#B42318]"}`}>{item.status === "ready" ? "可交付" : "已撤销"}</span></div><div className="flex items-start gap-1">{item.integrity_status === "passed" ? <CheckCircle2 className="h-4 w-4 text-[#039855]" /> : <ShieldAlert className="h-4 w-4 text-[#D92D20]" />}<div><p className={item.integrity_status === "passed" ? "text-[#027A48]" : "text-[#B42318]"}>{item.integrity_status === "passed" ? "三层通过" : "验证异常"}</p><p className="mt-1 text-[10px] text-[#98A2B3]">引用 {item.citation_integrity === null ? "不适用" : item.citation_count}</p></div></div><div><p>{item.download_count} 次下载</p><p className="mt-1 text-[#667085]">{item.active_grant_count}/{item.grant_count} 有效</p></div><Link href={item.detail_url} className="inline-flex h-8 items-center justify-center gap-1 rounded-lg border border-[#D9DCE3]"><FileCheck2 className="h-3.5 w-3.5" />详情</Link></article>)}{!loading && !data?.items.length && <p className="p-12 text-center text-sm text-[#98A2B3]">当前筛选条件下暂无交付件</p>}{loading && <p className="p-12 text-center text-sm text-[#667085]">正在校验交付件完整性…</p>}</section>
       {(data?.summary.integrity_failed ?? 0) > 0 && <div className="mt-4 flex items-start gap-2 rounded-xl border border-[#FDA29B] bg-[#FEF2F2] p-4 text-sm text-[#B42318]"><AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />检测到交付文件、冻结快照或引用证据异常，请暂停下载授权并进入详情核查。</div>}
+      <section className="mt-5 overflow-hidden rounded-2xl border border-[#E3E4EA] bg-white"><div className="flex items-center justify-between border-b border-[#EAECF0] px-5 py-4"><div><h2 className="font-semibold">完整性处置单</h2><p className="mt-1 text-xs text-[#667085]">活动处置单会暂停对应交付件的新下载授权，复检通过后自动恢复。</p></div><span className="rounded-full bg-[#FEF2F2] px-2.5 py-1 text-xs font-medium text-[#B42318]">{incidents.filter((item) => item.authorization_paused).length} 个处理中</span></div><div className="divide-y divide-[#EAECF0]">{incidents.filter((item) => item.authorization_paused).map((incident) => <article key={incident.id} className="flex flex-wrap items-center justify-between gap-4 px-5 py-4"><div className="min-w-0"><div className="flex items-center gap-2"><p className="truncate text-sm font-medium">{incident.resource_title}</p><span className="rounded-full bg-[#FFF4ED] px-2 py-1 text-[10px] text-[#B54708]">{incident.status === "open" ? "待处理" : "处理中"}</span></div><p className="mt-1 text-xs text-[#667085]">{incident.scene_type === "bid" ? "竞标 PPT" : "通用 PPT"} · {incident.anomaly_types.map((item) => ({ file_integrity: "文件", snapshot_integrity: "快照", citation_integrity: "引用" }[item])).join("/")}异常 · 已发现 {incident.occurrence_count} 次</p></div><div className="flex flex-wrap gap-2"><Link href={incident.detail_url} className="inline-flex h-8 items-center rounded-lg border border-[#D9DCE3] px-3 text-xs">查看详情</Link><button type="button" onClick={() => void recheckIncident(incident.id)} disabled={loading} className="h-8 rounded-lg bg-[#635BFF] px-3 text-xs text-white disabled:opacity-40">重新核验</button><button type="button" onClick={() => void decideIncident(incident.id, "accepted_risk")} disabled={loading} className="h-8 rounded-lg border border-[#FEC84B] px-3 text-xs text-[#B54708] disabled:opacity-40">接受风险</button><button type="button" onClick={() => void decideIncident(incident.id, "false_positive")} disabled={loading} className="h-8 rounded-lg border border-[#D9DCE3] px-3 text-xs text-[#667085] disabled:opacity-40">标记误报</button></div></article>)}{!incidents.some((item) => item.authorization_paused) && <p className="px-5 py-8 text-center text-sm text-[#667085]">当前没有待处置的完整性异常。</p>}</div></section>
       <section className="mt-5 rounded-2xl border border-[#E3E4EA] bg-white p-5"><div className="flex items-center justify-between"><h2 className="font-semibold">巡检历史</h2><span className="text-xs text-[#98A2B3]">保留在工作区审计日志</span></div>{scans.length ? <div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">{scans.slice(0, 6).map((scan) => <div key={scan.id} className="rounded-xl bg-[#F8F9FC] p-3 text-xs"><div className="flex items-center justify-between"><span>{new Date(scan.created_at).toLocaleString()}</span><span className={scan.integrity_failed ? "text-[#B42318]" : "text-[#027A48]"}>{scan.integrity_failed ? `${scan.integrity_failed} 项异常` : "全部通过"}</span></div><p className="mt-2 text-[#667085]">扫描 {scan.total} 个交付件 · 新增异常 {scan.new_anomaly_ids.length}</p></div>)}</div> : <p className="mt-3 rounded-xl bg-[#F8F9FC] p-4 text-sm text-[#667085]">尚未执行持久化巡检；点击“立即巡检”建立首条基线。</p>}</section>
     </div>
   </main>;

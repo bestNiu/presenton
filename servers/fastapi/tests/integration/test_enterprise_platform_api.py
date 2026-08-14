@@ -27,6 +27,7 @@ from models.sql.enterprise import (
     EnterpriseDocumentModel,
     EnterpriseDocumentChunkModel,
     DeliveryIntegrityRunModel,
+    DeliveryIntegrityIncidentModel,
     EnterpriseKnowledgeOutlineModel,
     BidDeliveryArtifactModel,
     BidDownloadGrantModel,
@@ -130,6 +131,7 @@ def _build_client(tmp_path):
                 EnterpriseDocumentChunkModel.__table__,
                 EnterpriseKnowledgeOutlineModel.__table__,
                 DeliveryIntegrityRunModel.__table__,
+                DeliveryIntegrityIncidentModel.__table__,
                 AssetItemModel.__table__,
                 AssetFavoriteModel.__table__,
                 AssetPromotionRequestModel.__table__,
@@ -1106,6 +1108,33 @@ def test_presentation_registration_preserves_owner_and_allows_member_listing(tmp
         repeated_scan = client.post(
             f"/api/v1/enterprise/workspaces/{workspace['id']}/delivery-center/integrity-runs"
         )
+        workspace_incidents = client.get(
+            f"/api/v1/enterprise/workspaces/{workspace['id']}/delivery-integrity-incidents"
+        )
+        admin_incidents = client.get(
+            "/api/v1/enterprise/admin/delivery-integrity-incidents",
+            headers={"x-test-user": "admin"},
+        )
+        admin_incidents_denied = client.get(
+            "/api/v1/enterprise/admin/delivery-integrity-incidents"
+        )
+        incident_id = workspace_incidents.json()[0]["id"]
+        incident_close_without_note = client.patch(
+            f"/api/v1/enterprise/workspaces/{workspace['id']}/delivery-integrity-incidents/{incident_id}",
+            json={"status": "accepted_risk"},
+        )
+        incident_resolve_without_recheck = client.patch(
+            f"/api/v1/enterprise/workspaces/{workspace['id']}/delivery-integrity-incidents/{incident_id}",
+            json={"status": "resolved", "resolution_note": "不应绕过复检"},
+        )
+        assigned_incident = client.patch(
+            f"/api/v1/enterprise/workspaces/{workspace['id']}/delivery-integrity-incidents/{incident_id}",
+            json={"status": "in_progress", "assigned_to": str(users["member"].id)},
+        )
+        quarantined_grant = client.post(
+            f"/api/v1/enterprise/workspaces/{workspace['id']}/presentations/{entry_id}/deliveries/{delivery.json()['id']}/grants",
+            json={"expires_in_minutes": 30, "max_downloads": 1},
+        )
         batch_scan_denied = client.post(
             "/api/v1/enterprise/admin/delivery-integrity-runs"
         )
@@ -1137,6 +1166,9 @@ def test_presentation_registration_preserves_owner_and_allows_member_listing(tmp
             json={"user_id": str(users["member"].id), "role": "reviewer"},
         )
         asyncio.run(set_delivery_sha256(delivery.json()["sha256"]))
+        resolved_incident = client.post(
+            f"/api/v1/enterprise/workspaces/{workspace['id']}/delivery-integrity-incidents/{incident_id}/recheck"
+        )
         delivery_grant = client.post(
             f"/api/v1/enterprise/workspaces/{workspace['id']}/presentations/{entry_id}/deliveries/{delivery.json()['id']}/grants",
             json={"expires_in_minutes": 30, "max_downloads": 1},
@@ -1243,6 +1275,20 @@ def test_presentation_registration_preserves_owner_and_allows_member_listing(tmp
         assert anomaly_scan.json()["new_anomaly_ids"] == [delivery.json()["id"]]
         assert repeated_scan.json()["integrity_failed"] == 1
         assert repeated_scan.json()["new_anomaly_ids"] == []
+        assert repeated_scan.json()["opened_incident_ids"] == []
+        assert workspace_incidents.status_code == 200
+        assert workspace_incidents.json()[0]["status"] == "open"
+        assert workspace_incidents.json()[0]["anomaly_types"] == ["file_integrity"]
+        assert workspace_incidents.json()[0]["authorization_paused"] is True
+        assert admin_incidents.status_code == 200
+        assert admin_incidents.json()[0]["workspace_name"] == "共享空间"
+        assert admin_incidents_denied.status_code == 403
+        assert incident_close_without_note.status_code == 422
+        assert incident_resolve_without_recheck.status_code == 409
+        assert assigned_incident.status_code == 200
+        assert assigned_incident.json()["assigned_to_username"] == "member"
+        assert quarantined_grant.status_code == 409
+        assert "authorization paused" in quarantined_grant.json()["detail"]
         assert batch_scan_denied.status_code == 403
         assert batch_scan.status_code == 200
         assert batch_scan.json()["status"] == "completed"
@@ -1260,6 +1306,9 @@ def test_presentation_registration_preserves_owner_and_allows_member_listing(tmp
         assert batch_scan_health.json()["health"] == "critical"
         assert batch_scan_health.json()["reason"] == "integrity_anomalies"
         assert batch_scan_health.json()["latest_run"]["id"] == batch_scan.json()["run_id"]
+        assert resolved_incident.status_code == 200
+        assert resolved_incident.json()["status"] == "resolved"
+        assert resolved_incident.json()["authorization_paused"] is False
         assert len(scan_history.json()) == 4
         assert [item["notification_type"] for item in integrity_notifications.json()["notifications"]].count("delivery.integrity_anomaly") == 1
         assert delivery.json()["watermark_text"] == "共享空间 · L2 · owner"

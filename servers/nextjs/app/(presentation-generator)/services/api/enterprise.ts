@@ -554,7 +554,33 @@ export interface DeliveryIntegrityScanResponse {
   integrity_failed: number;
   anomaly_ids: string[];
   new_anomaly_ids: string[];
+  opened_incident_ids: string[];
+  resolved_incident_ids: string[];
+  revoked_grant_count: number;
   created_at: string;
+}
+
+export interface DeliveryIntegrityIncidentResponse {
+  id: string;
+  workspace_id: string;
+  workspace_name: string;
+  scene_type: "general" | "bid";
+  artifact_id: string;
+  resource_id: string;
+  resource_title: string;
+  detail_url: string;
+  anomaly_types: Array<"file_integrity" | "snapshot_integrity" | "citation_integrity">;
+  severity: "high" | "medium" | "low";
+  status: "open" | "in_progress" | "resolved" | "accepted_risk" | "false_positive";
+  authorization_paused: boolean;
+  assigned_to: string | null;
+  assigned_to_username: string | null;
+  occurrence_count: number;
+  resolution_note: string | null;
+  first_detected_at: string;
+  last_detected_at: string;
+  resolved_at: string | null;
+  updated_at: string;
 }
 
 export interface TemplatePublicationResponse {
@@ -1344,6 +1370,21 @@ export class EnterpriseApi {
   static async getDeliveryIntegrityScans(workspaceId: string): Promise<DeliveryIntegrityScanResponse[]> {
     const response = await fetch(getApiUrl(`/api/v1/enterprise/workspaces/${encodeURIComponent(workspaceId)}/delivery-center/integrity-runs`), { credentials: "include", cache: "no-store" });
     return ApiResponseHandler.handleResponse(response, "Failed to load delivery integrity scans");
+  }
+
+  static async getDeliveryIntegrityIncidents(workspaceId: string): Promise<DeliveryIntegrityIncidentResponse[]> {
+    const response = await fetch(getApiUrl(`/api/v1/enterprise/workspaces/${encodeURIComponent(workspaceId)}/delivery-integrity-incidents`), { credentials: "include", cache: "no-store" });
+    return ApiResponseHandler.handleResponse(response, "Failed to load delivery integrity incidents");
+  }
+
+  static async updateDeliveryIntegrityIncident(workspaceId: string, incidentId: string, input: { status: DeliveryIntegrityIncidentResponse["status"]; resolution_note?: string }): Promise<DeliveryIntegrityIncidentResponse> {
+    const response = await fetch(getApiUrl(`/api/v1/enterprise/workspaces/${encodeURIComponent(workspaceId)}/delivery-integrity-incidents/${encodeURIComponent(incidentId)}`), { method: "PATCH", credentials: "include", headers: { "Content-Type": "application/json" }, body: JSON.stringify(input) });
+    return ApiResponseHandler.handleResponse(response, "Failed to update delivery integrity incident");
+  }
+
+  static async recheckDeliveryIntegrityIncident(workspaceId: string, incidentId: string): Promise<DeliveryIntegrityIncidentResponse> {
+    const response = await fetch(getApiUrl(`/api/v1/enterprise/workspaces/${encodeURIComponent(workspaceId)}/delivery-integrity-incidents/${encodeURIComponent(incidentId)}/recheck`), { method: "POST", credentials: "include" });
+    return ApiResponseHandler.handleResponse(response, "Failed to recheck delivery integrity incident");
   }
 
   static async issuePresentationDownloadGrant(workspaceId: string, entryId: string, artifactId: string): Promise<BidDownloadGrantResponse> {

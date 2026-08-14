@@ -34,6 +34,7 @@ from services.enterprise.object_storage_service import (
 )
 from services.enterprise.workspace_service import require_workspace_role
 from services.enterprise.audit_service import record_audit_event
+from services.enterprise.delivery_integrity_incident_service import synchronize_delivery_integrity_incidents
 from services.enterprise.notification_service import queue_notifications
 
 
@@ -202,6 +203,12 @@ async def run_delivery_integrity_scan(
     )
     previous_ids = set((previous.event_metadata or {}).get("anomaly_ids", [])) if previous else set()
     new_anomaly_ids = sorted(set(anomaly_ids) - previous_ids)
+    incident_changes = await synchronize_delivery_integrity_incidents(
+        session,
+        workspace_id=workspace_id,
+        items=result["items"],
+        actor_id=principal.user_id,
+    )
     event = record_audit_event(
         session,
         actor_id=principal.user_id,
@@ -216,6 +223,9 @@ async def run_delivery_integrity_scan(
             "integrity_failed": len(anomaly_ids),
             "anomaly_ids": anomaly_ids,
             "new_anomaly_ids": new_anomaly_ids,
+            "opened_incident_ids": incident_changes["opened_ids"],
+            "resolved_incident_ids": incident_changes["resolved_ids"],
+            "revoked_grant_count": incident_changes["revoked_grant_count"],
         },
     )
     if new_anomaly_ids:
@@ -251,6 +261,9 @@ async def run_delivery_integrity_scan(
         "integrity_failed": len(anomaly_ids),
         "anomaly_ids": anomaly_ids,
         "new_anomaly_ids": new_anomaly_ids,
+        "opened_incident_ids": incident_changes["opened_ids"],
+        "resolved_incident_ids": incident_changes["resolved_ids"],
+        "revoked_grant_count": incident_changes["revoked_grant_count"],
         "created_at": event.created_at,
     }
 
@@ -550,6 +563,9 @@ async def list_delivery_integrity_scans(
             "integrity_failed": int((event.event_metadata or {}).get("integrity_failed", 0)),
             "anomaly_ids": (event.event_metadata or {}).get("anomaly_ids", []),
             "new_anomaly_ids": (event.event_metadata or {}).get("new_anomaly_ids", []),
+            "opened_incident_ids": (event.event_metadata or {}).get("opened_incident_ids", []),
+            "resolved_incident_ids": (event.event_metadata or {}).get("resolved_incident_ids", []),
+            "revoked_grant_count": int((event.event_metadata or {}).get("revoked_grant_count", 0)),
             "created_at": event.created_at,
         }
         for event in events

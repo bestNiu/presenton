@@ -149,7 +149,13 @@ async def create_workspace(
         role=WorkspaceRole.OWNER,
     )
     session.add(workspace)
+    # These models use explicit identifiers instead of an ORM relationship, so
+    # SQLAlchemy cannot infer that the workspace must be inserted first.
+    await session.flush()
     session.add(membership)
+    # The audit row references both the workspace and its creator. Flush the
+    # owner membership before adding the audit event for deterministic FK order.
+    await session.flush()
     record_audit_event(
         session,
         actor_id=principal.user_id,

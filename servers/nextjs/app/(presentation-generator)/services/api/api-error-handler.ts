@@ -8,6 +8,21 @@ import {
   type ApiErrorResponse,
 } from "@/utils/apiErrorMessages";
 
+export class ApiRequestError extends Error {
+  readonly status: number;
+  readonly retryable: boolean;
+  readonly traceId: string | null;
+
+  constructor(message: string, response: Response) {
+    super(message);
+    this.name = "ApiRequestError";
+    this.status = response.status;
+    this.retryable = response.status === 429 || response.status >= 500;
+    this.traceId =
+      response.headers.get("x-request-id") || response.headers.get("x-trace-id");
+  }
+}
+
 // API Response Handler Utility
 export class ApiResponseHandler {
   static async handleResponse(response: Response, defaultErrorMessage: string): Promise<any> {
@@ -58,7 +73,7 @@ export class ApiResponseHandler {
     }
 
     // Throw error with appropriate message
-    throw new Error(errorMessage);
+    throw new ApiRequestError(errorMessage, response);
   }
 
 
@@ -115,27 +130,27 @@ export class ApiResponseHandler {
   private static getStatusBasedErrorMessage(status: number, defaultMessage: string): string {
     switch (status) {
       case 400:
-        return "Bad request. Please check your input and try again.";
+        return "请求内容不正确，请检查后重试。";
       case 401:
-        return "Unauthorized. Please log in and try again.";
+        return "登录状态已失效，请重新登录。";
       case 403:
-        return "Access forbidden. You don't have permission to perform this action.";
+        return "当前账号没有权限执行此操作。";
       case 404:
-        return "Resource not found. The requested item may have been deleted or moved.";
+        return "未找到请求的内容，它可能已被删除或移动。";
       case 409:
-        return "Conflict. The resource already exists or there's a conflict with the current state.";
+        return "当前内容已发生变化，请刷新后重试。";
       case 422:
-        return "Validation error. Please check your input and try again.";
+        return "部分信息不符合要求，请检查后重试。";
       case 429:
-        return "Too many requests. Please wait a moment and try again.";
+        return "操作过于频繁，请稍后重试。";
       case 500:
-        return "Internal server error. Please try again later.";
+        return "服务处理失败，请稍后重试。";
       case 502:
-        return "Bad gateway. The server is temporarily unavailable.";
+        return "上游服务暂不可用，请稍后重试。";
       case 503:
-        return "Service unavailable. Please try again later.";
+        return "服务正在恢复中，请稍后重试。";
       case 504:
-        return "Gateway timeout. The request took too long to process.";
+        return "任务处理超时，请稍后重试。";
       default:
         return defaultMessage;
     }

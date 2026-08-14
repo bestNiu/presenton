@@ -79,24 +79,40 @@ function WorkspacePage() {
   const [confidentiality, setConfidentiality] =
     useState<ConfidentialityLevel>("L2");
   const [error, setError] = useState<string | null>(null);
+  const [initializationError, setInitializationError] = useState<string | null>(null);
+  const [sectionWarnings, setSectionWarnings] = useState<string[]>([]);
   const [governancePending, setGovernancePending] = useState("");
 
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
+    setInitializationError(null);
+    setSectionWarnings([]);
     try {
       await EnterpriseApi.ensurePersonalWorkspace();
-      const [workspaceRows, sceneRows] = await Promise.all([
-        EnterpriseApi.getWorkspaces(),
-        EnterpriseApi.getScenes(),
-      ]);
+      const workspaceRows = await EnterpriseApi.getWorkspaces();
       setWorkspaces(workspaceRows);
-      setScenes(sceneRows);
-      setActiveWorkspaceId((current) => current || workspaceRows[0]?.id || "");
-    } catch (loadError) {
-      setError(
-        loadError instanceof Error ? loadError.message : "工作台加载失败"
+      setActiveWorkspaceId((current) =>
+        workspaceRows.some((workspace) => workspace.id === current)
+          ? current
+          : workspaceRows[0]?.id || ""
       );
+      try {
+        setScenes(await EnterpriseApi.getScenes());
+      } catch (sceneError) {
+        setScenes([]);
+        setSectionWarnings([
+          sceneError instanceof Error
+            ? sceneError.message
+            : "专业场景暂时无法加载",
+        ]);
+      }
+    } catch (loadError) {
+      const message =
+        loadError instanceof Error ? loadError.message : "工作台加载失败";
+      setInitializationError(message);
+      setWorkspaces([]);
+      setActiveWorkspaceId("");
     } finally {
       setLoading(false);
     }
@@ -112,18 +128,46 @@ function WorkspacePage() {
     }
     setReviewInboxFilter("all");
     let active = true;
-    Promise.all([
+    Promise.allSettled([
       EnterpriseApi.getPresentations(activeWorkspaceId),
       EnterpriseApi.getPublishedTemplates(activeWorkspaceId),
       EnterpriseApi.getPresentationReviewInbox(activeWorkspaceId),
       EnterpriseApi.getNotifications(activeWorkspaceId),
     ])
-      .then(([presentationRows, templateRows, inbox, notificationResult]) => {
-        if (active) {
-          setPresentations(presentationRows);
-          setPublishedTemplates(templateRows);
-          setReviewInbox(inbox);
-          setNotifications(notificationResult);
+      .then(([presentationResult, templateResult, inboxResult, notificationResult]) => {
+        if (!active) return;
+        const warnings: string[] = [];
+        const presentationRows =
+          presentationResult.status === "fulfilled"
+            ? presentationResult.value
+            : [];
+        setPresentations(presentationRows);
+        if (presentationResult.status === "rejected") warnings.push("文稿列表");
+
+        setPublishedTemplates(
+          templateResult.status === "fulfilled" ? templateResult.value : []
+        );
+        if (templateResult.status === "rejected") warnings.push("已发布模板");
+
+        setReviewInbox(inboxResult.status === "fulfilled" ? inboxResult.value : null);
+        if (inboxResult.status === "rejected") warnings.push("整改任务");
+
+        setNotifications(
+          notificationResult.status === "fulfilled" ? notificationResult.value : null
+        );
+        if (notificationResult.status === "rejected") warnings.push("站内通知");
+
+        setSectionWarnings((current) => [
+          ...current.filter(
+            (warning) => !warning.startsWith("部分工作台数据暂时无法加载：")
+          ),
+          ...(warnings.length
+            ? [`部分工作台数据暂时无法加载：${warnings.join("、")}`]
+            : []),
+        ]);
+
+        setQualityReports({});
+        if (presentationRows.length) {
           void Promise.all(presentationRows.map((item) => EnterpriseApi.getPresentationQualityReport(activeWorkspaceId, item.id)))
             .then((reports) => {
               if (active) setQualityReports(Object.fromEntries(presentationRows.map((item, index) => [item.id, reports[index].run])));
@@ -131,13 +175,6 @@ function WorkspacePage() {
             .catch(() => {
               if (active) setQualityReports({});
             });
-        }
-      })
-      .catch((loadError) => {
-        if (active) {
-          setError(
-            loadError instanceof Error ? loadError.message : "文稿列表加载失败"
-          );
         }
       });
     return () => {
@@ -397,6 +434,30 @@ function WorkspacePage() {
             {error}
           </div>
         )}
+
+        {initializationError && (
+          <div className="mt-5 flex flex-col gap-3 rounded-xl border border-[#FECACA] bg-[#FEF2F2] px-4 py-4 text-sm text-[#B42318] sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <p className="font-medium">工作台初始化失败</p>
+              <p className="mt-1 text-[#912018]">{initializationError}</p>
+            </div>
+            <button
+              type="button"
+              onClick={() => void load()}
+              disabled={loading}
+              className="inline-flex h-9 shrink-0 items-center justify-center gap-2 rounded-lg border border-[#FDA29B] bg-white px-3 font-medium disabled:opacity-50"
+            >
+              <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />
+              重新初始化
+            </button>
+          </div>
+        )}
+
+        {sectionWarnings.map((warning) => (
+          <div key={warning} className="mt-5 rounded-xl border border-[#FEDF89] bg-[#FFFAEB] px-4 py-3 text-sm text-[#93370D]">
+            {warning}。可刷新页面重试，其他已加载功能不受影响。
+          </div>
+        ))}
 
         {showCreate && (
           <form

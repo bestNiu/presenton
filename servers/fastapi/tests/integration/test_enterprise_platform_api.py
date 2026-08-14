@@ -9,7 +9,7 @@ from types import SimpleNamespace
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.testclient import TestClient
 import pytest
-from sqlalchemy import func, select
+from sqlalchemy import event, func, select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from api.v1.auth.principal import AuthPrincipal, principal_from_request
@@ -74,10 +74,18 @@ import services.enterprise.knowledge_outline_service as knowledge_outline_servic
 import services.enterprise.storage_lifecycle_service as storage_lifecycle_service
 
 
-def _build_client(tmp_path):
+def _build_client(tmp_path, *, enforce_foreign_keys=False):
     engine = create_async_engine(
         f"sqlite+aiosqlite:///{tmp_path / 'enterprise-platform.db'}"
     )
+
+    if enforce_foreign_keys:
+        @event.listens_for(engine.sync_engine, "connect")
+        def _enable_sqlite_foreign_keys(dbapi_connection, _connection_record):
+            cursor = dbapi_connection.cursor()
+            cursor.execute("PRAGMA foreign_keys=ON")
+            cursor.close()
+
     session_maker = async_sessionmaker(engine, expire_on_commit=False)
     users = {
         "owner": User(
@@ -212,7 +220,7 @@ def _build_client(tmp_path):
 
 
 def test_personal_workspace_is_idempotent_and_isolated(tmp_path):
-    client, engine, _, _ = _build_client(tmp_path)
+    client, engine, _, _ = _build_client(tmp_path, enforce_foreign_keys=True)
     try:
         first = client.post("/api/v1/enterprise/workspaces/personal")
         second = client.post("/api/v1/enterprise/workspaces/personal")

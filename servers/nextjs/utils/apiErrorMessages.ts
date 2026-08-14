@@ -101,6 +101,19 @@ function looksLikeRawPayload(message: string): boolean {
   );
 }
 
+function looksLikeGenericServerError(message: string, status?: number): boolean {
+  if (!status || status < 500) return false;
+  const text = message.trim().toLowerCase();
+  return [
+    "internal server error",
+    "server error",
+    "service unavailable",
+    "bad gateway",
+    "gateway timeout",
+    "unexpected error",
+  ].some((genericMessage) => text.includes(genericMessage));
+}
+
 export function sanitizeApiErrorMessage(
   message: string,
   fallbackMessage: string,
@@ -114,6 +127,9 @@ export function sanitizeApiErrorMessage(
   }
   if (looksLikeSafetyBlock(trimmed)) {
     return SAFETY_BLOCK_MESSAGE;
+  }
+  if (looksLikeGenericServerError(trimmed, status)) {
+    return fallbackMessage;
   }
   if (looksLikeRawPayload(trimmed)) {
     return fallbackMessage;

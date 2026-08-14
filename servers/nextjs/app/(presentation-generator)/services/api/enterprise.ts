@@ -761,7 +761,7 @@ export class EnterpriseApi {
     );
     return ApiResponseHandler.handleResponse(
       response,
-      "Failed to initialize your personal workspace"
+      "个人工作空间初始化失败，请稍后重试"
     );
   }
 
@@ -773,7 +773,7 @@ export class EnterpriseApi {
     });
     return ApiResponseHandler.handleResponse(
       response,
-      "Failed to load workspaces"
+      "工作空间加载失败，请稍后重试"
     );
   }
 
@@ -1186,7 +1186,7 @@ export class EnterpriseApi {
     });
     return ApiResponseHandler.handleResponse(
       response,
-      "Failed to create workspace"
+      "团队工作空间创建失败，请稍后重试"
     );
   }
 
@@ -1198,7 +1198,7 @@ export class EnterpriseApi {
     });
     return ApiResponseHandler.handleResponse(
       response,
-      "Failed to load professional workspaces"
+      "专业场景加载失败，其他工作台功能仍可继续使用"
     );
   }
 

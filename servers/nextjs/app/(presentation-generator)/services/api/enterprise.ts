@@ -31,6 +31,17 @@ export interface WorkspaceMemberResponse {
   created_at: string;
 }
 
+export interface FolderResponse {
+  id: string;
+  workspace_id: string;
+  parent_id: string | null;
+  created_by: string | null;
+  name: string;
+  is_archived: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface EnterpriseNotificationResponse {
   id: string;
   workspace_id: string | null;
@@ -1152,7 +1163,79 @@ export class EnterpriseApi {
 
   static async getWorkspaceMembers(workspaceId: string): Promise<WorkspaceMemberResponse[]> {
     const response = await fetch(getApiUrl(`/api/v1/enterprise/workspaces/${encodeURIComponent(workspaceId)}/members`), { credentials: "include", cache: "no-store" });
-    return ApiResponseHandler.handleResponse(response, "Failed to load workspace members");
+    return ApiResponseHandler.handleResponse(response, "工作空间成员加载失败，请稍后重试");
+  }
+
+  static async updateWorkspace(
+    workspaceId: string,
+    input: { name: string; confidentiality: ConfidentialityLevel }
+  ): Promise<WorkspaceResponse> {
+    const response = await fetch(
+      getApiUrl(`/api/v1/enterprise/workspaces/${encodeURIComponent(workspaceId)}`),
+      {
+        method: "PUT",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(input),
+      }
+    );
+    return ApiResponseHandler.handleResponse(response, "工作空间基本信息保存失败");
+  }
+
+  static async inviteWorkspaceMember(
+    workspaceId: string,
+    username: string,
+    role: Exclude<WorkspaceRole, "owner">
+  ): Promise<WorkspaceMemberResponse> {
+    const response = await fetch(
+      getApiUrl(`/api/v1/enterprise/workspaces/${encodeURIComponent(workspaceId)}/members`),
+      {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username, role }),
+      }
+    );
+    return ApiResponseHandler.handleResponse(response, "成员添加失败，请检查用户名和权限");
+  }
+
+  static async updateWorkspaceMember(
+    workspaceId: string,
+    userId: string,
+    role: Exclude<WorkspaceRole, "owner">
+  ): Promise<WorkspaceMemberResponse> {
+    const response = await fetch(
+      getApiUrl(`/api/v1/enterprise/workspaces/${encodeURIComponent(workspaceId)}/members/${encodeURIComponent(userId)}`),
+      {
+        method: "PUT",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ user_id: userId, role }),
+      }
+    );
+    return ApiResponseHandler.handleResponse(response, "成员角色更新失败");
+  }
+
+  static async removeWorkspaceMember(
+    workspaceId: string,
+    userId: string
+  ): Promise<boolean> {
+    const response = await fetch(
+      getApiUrl(`/api/v1/enterprise/workspaces/${encodeURIComponent(workspaceId)}/members/${encodeURIComponent(userId)}`),
+      { method: "DELETE", credentials: "include" }
+    );
+    return ApiResponseHandler.handleResponse(response, "成员移除失败");
+  }
+
+  static async getWorkspaceAuditEvents(
+    workspaceId: string,
+    limit = 50
+  ): Promise<AuditEventResponse[]> {
+    const response = await fetch(
+      getApiUrl(`/api/v1/enterprise/workspaces/${encodeURIComponent(workspaceId)}/audit-events?limit=${limit}`),
+      { credentials: "include", cache: "no-store" }
+    );
+    return ApiResponseHandler.handleResponse(response, "审计记录加载失败");
   }
 
   static async getNotifications(workspaceId?: string, unreadOnly = false): Promise<EnterpriseNotificationListResponse> {
@@ -1230,7 +1313,101 @@ export class EnterpriseApi {
     );
     return ApiResponseHandler.handleResponse(
       response,
-      "Failed to load workspace presentations"
+      "工作空间文稿加载失败，请稍后重试"
+    );
+  }
+
+  static async getFolders(workspaceId: string): Promise<FolderResponse[]> {
+    const response = await fetch(
+      getApiUrl(
+        `/api/v1/enterprise/workspaces/${encodeURIComponent(workspaceId)}/folders`
+      ),
+      { method: "GET", credentials: "include", cache: "no-store" }
+    );
+    return ApiResponseHandler.handleResponse(
+      response,
+      "工作空间文件夹加载失败，请稍后重试"
+    );
+  }
+
+  static async createFolder(
+    workspaceId: string,
+    input: { name: string; parent_id: string | null }
+  ): Promise<FolderResponse> {
+    const response = await fetch(
+      getApiUrl(
+        `/api/v1/enterprise/workspaces/${encodeURIComponent(workspaceId)}/folders`
+      ),
+      {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(input),
+      }
+    );
+    return ApiResponseHandler.handleResponse(
+      response,
+      "文件夹创建失败，请稍后重试"
+    );
+  }
+
+  static async updateFolder(
+    workspaceId: string,
+    folderId: string,
+    input: { name: string; parent_id: string | null }
+  ): Promise<FolderResponse> {
+    const response = await fetch(
+      getApiUrl(
+        `/api/v1/enterprise/workspaces/${encodeURIComponent(workspaceId)}/folders/${encodeURIComponent(folderId)}`
+      ),
+      {
+        method: "PUT",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(input),
+      }
+    );
+    return ApiResponseHandler.handleResponse(
+      response,
+      "文件夹更新失败，请稍后重试"
+    );
+  }
+
+  static async archiveFolder(
+    workspaceId: string,
+    folderId: string
+  ): Promise<void> {
+    const response = await fetch(
+      getApiUrl(
+        `/api/v1/enterprise/workspaces/${encodeURIComponent(workspaceId)}/folders/${encodeURIComponent(folderId)}`
+      ),
+      { method: "DELETE", credentials: "include" }
+    );
+    return ApiResponseHandler.handleResponse(
+      response,
+      "文件夹归档失败，请先移出其中的文稿和子文件夹"
+    );
+  }
+
+  static async movePresentations(
+    workspaceId: string,
+    entryIds: string[],
+    folderId: string | null
+  ): Promise<PresentationEntryResponse[]> {
+    const response = await fetch(
+      getApiUrl(
+        `/api/v1/enterprise/workspaces/${encodeURIComponent(workspaceId)}/presentations/move`
+      ),
+      {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ entry_ids: entryIds, folder_id: folderId }),
+      }
+    );
+    return ApiResponseHandler.handleResponse(
+      response,
+      "文稿移动失败，请稍后重试"
     );
   }
 

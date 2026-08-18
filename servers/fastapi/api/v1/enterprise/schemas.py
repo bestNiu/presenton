@@ -779,6 +779,19 @@ class WorkspaceCreateRequest(BaseModel):
         return value
 
 
+class WorkspaceUpdateRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=200)
+    confidentiality: ConfidentialityLevel
+
+    @field_validator("name")
+    @classmethod
+    def normalize_name(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("Workspace name is required")
+        return value
+
+
 class WorkspaceResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -867,6 +880,19 @@ class WorkspaceMemberUpsertRequest(BaseModel):
     role: WorkspaceRole
 
 
+class WorkspaceMemberInviteRequest(BaseModel):
+    username: str = Field(min_length=1, max_length=255)
+    role: WorkspaceRole
+
+    @field_validator("username")
+    @classmethod
+    def normalize_username(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("Username is required")
+        return value
+
+
 class WorkspaceMemberResponse(BaseModel):
     id: uuid.UUID
     user_id: uuid.UUID
@@ -915,6 +941,10 @@ class FolderCreateRequest(BaseModel):
         return value
 
 
+class FolderUpdateRequest(FolderCreateRequest):
+    pass
+
+
 class FolderResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -939,6 +969,11 @@ class PresentationRegisterRequest(BaseModel):
     @classmethod
     def normalize_scene_type(cls, value: str) -> str:
         return value.strip().lower()
+
+
+class PresentationBulkMoveRequest(BaseModel):
+    entry_ids: list[uuid.UUID] = Field(min_length=1, max_length=100)
+    folder_id: uuid.UUID | None = None
 
 
 class PresentationEntryResponse(BaseModel):

@@ -11,8 +11,10 @@ import {
   LayoutTemplate,
   Library,
   Loader2,
+  MonitorPlay,
   PanelLeftClose,
   PanelLeftOpen,
+  Settings2,
   ShieldCheck,
 } from "lucide-react";
 import {
@@ -69,6 +71,7 @@ const navigation: Array<{
   adminOnly?: boolean;
 }> = [
   { label: "工作台总览", href: "/workspace", icon: LayoutDashboard },
+  { label: "文稿中心", href: "/workspace/presentations", icon: MonitorPlay },
   { label: "文档与知识", href: "/workspace/documents", icon: FileText },
   { label: "模板中心", href: "/workspace/templates", icon: LayoutTemplate },
   { label: "资产中心", href: "/workspace/assets", icon: Library },
@@ -78,6 +81,7 @@ const navigation: Array<{
     icon: FileCheck2,
     adminOnly: true,
   },
+  { label: "工作区设置", href: "/workspace/settings", icon: Settings2 },
 ];
 
 function withWorkspace(href: string, workspaceId: string) {

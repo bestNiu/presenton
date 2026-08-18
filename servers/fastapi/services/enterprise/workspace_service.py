@@ -17,6 +17,7 @@ from models.sql.enterprise.workspace import (
     WorkspaceMemberModel,
     WorkspaceModel,
 )
+from models.sql.enterprise.presentation_entry import PresentationEntryModel
 from models.sql.user import User
 from services.enterprise.audit_service import record_audit_event
 
@@ -101,6 +102,51 @@ async def list_workspaces(
         )
     ).all()
     return [(workspace, WorkspaceRole(role)) for workspace, role in rows]
+
+
+async def update_workspace_details(
+    session: AsyncSession,
+    *,
+    workspace_id: uuid.UUID,
+    principal: AuthPrincipal,
+    name: str,
+    confidentiality: ConfidentialityLevel,
+) -> WorkspaceModel:
+    workspace, _ = await require_workspace_role(
+        session,
+        workspace_id=workspace_id,
+        principal=principal,
+        required_role=WorkspaceRole.ADMIN,
+    )
+    previous = {
+        "name": workspace.name,
+        "confidentiality": getattr(
+            workspace.confidentiality, "value", str(workspace.confidentiality)
+        ),
+    }
+    workspace.name = name.strip()
+    workspace.confidentiality = confidentiality
+    session.add(workspace)
+    record_audit_event(
+        session,
+        actor_id=principal.user_id,
+        workspace_id=workspace_id,
+        action="workspace.details_updated",
+        resource_type="workspace",
+        resource_id=workspace.id,
+        metadata={
+            "previous": previous,
+            "current": {
+                "name": workspace.name,
+                "confidentiality": getattr(
+                    confidentiality, "value", str(confidentiality)
+                ),
+            },
+        },
+    )
+    await session.commit()
+    await session.refresh(workspace)
+    return workspace
 
 
 async def create_workspace(
@@ -261,6 +307,33 @@ async def add_or_update_member(
     return membership
 
 
+async def add_or_update_member_by_username(
+    session: AsyncSession,
+    *,
+    workspace_id: uuid.UUID,
+    principal: AuthPrincipal,
+    username: str,
+    role: WorkspaceRole,
+) -> tuple[WorkspaceMemberModel, User]:
+    normalized_username = username.strip()
+    user = await session.scalar(
+        select(User).where(
+            func.lower(User.username) == normalized_username.casefold(),
+            User.is_active.is_(True),
+        )
+    )
+    if user is None:
+        raise HTTPException(status_code=404, detail="User not found")
+    member = await add_or_update_member(
+        session,
+        workspace_id=workspace_id,
+        principal=principal,
+        user_id=user.id,
+        role=role,
+    )
+    return member, user
+
+
 async def remove_member(
     session: AsyncSession,
     *,
@@ -390,3 +463,127 @@ async def list_folders(
             )
         ).all()
     )
+
+
+async def update_folder(
+    session: AsyncSession,
+    *,
+    workspace_id: uuid.UUID,
+    folder_id: uuid.UUID,
+    principal: AuthPrincipal,
+    name: str,
+    parent_id: uuid.UUID | None,
+) -> WorkspaceFolderModel:
+    await require_workspace_role(
+        session,
+        workspace_id=workspace_id,
+        principal=principal,
+        required_role=WorkspaceRole.EDITOR,
+    )
+    folder = await session.get(WorkspaceFolderModel, folder_id)
+    if folder is None or folder.workspace_id != workspace_id or folder.is_archived:
+        raise HTTPException(status_code=404, detail="Folder not found")
+    if parent_id == folder_id:
+        raise HTTPException(status_code=422, detail="文件夹不能作为自己的上级")
+    if parent_id is not None:
+        parent = await session.get(WorkspaceFolderModel, parent_id)
+        if parent is None or parent.workspace_id != workspace_id or parent.is_archived:
+            raise HTTPException(status_code=404, detail="Parent folder not found")
+        ancestor = parent
+        while ancestor is not None:
+            if ancestor.id == folder_id:
+                raise HTTPException(
+                    status_code=409, detail="文件夹层级不能形成循环"
+                )
+            ancestor = (
+                await session.get(WorkspaceFolderModel, ancestor.parent_id)
+                if ancestor.parent_id
+                else None
+            )
+    normalized_name = name.strip()
+    duplicate_count = await session.scalar(
+        select(func.count())
+        .select_from(WorkspaceFolderModel)
+        .where(
+            WorkspaceFolderModel.workspace_id == workspace_id,
+            WorkspaceFolderModel.parent_id == parent_id,
+            WorkspaceFolderModel.id != folder_id,
+            func.lower(WorkspaceFolderModel.name) == normalized_name.casefold(),
+            WorkspaceFolderModel.is_archived.is_(False),
+        )
+    )
+    if duplicate_count:
+        raise HTTPException(status_code=409, detail="Folder name already exists")
+    previous = {
+        "name": folder.name,
+        "parent_id": str(folder.parent_id) if folder.parent_id else None,
+    }
+    folder.name = normalized_name
+    folder.parent_id = parent_id
+    session.add(folder)
+    record_audit_event(
+        session,
+        actor_id=principal.user_id,
+        workspace_id=workspace_id,
+        action="workspace.folder_updated",
+        resource_type="workspace_folder",
+        resource_id=folder.id,
+        metadata={
+            "previous": previous,
+            "current": {
+                "name": folder.name,
+                "parent_id": str(parent_id) if parent_id else None,
+            },
+        },
+    )
+    await session.commit()
+    await session.refresh(folder)
+    return folder
+
+
+async def archive_folder(
+    session: AsyncSession,
+    *,
+    workspace_id: uuid.UUID,
+    folder_id: uuid.UUID,
+    principal: AuthPrincipal,
+) -> None:
+    await require_workspace_role(
+        session,
+        workspace_id=workspace_id,
+        principal=principal,
+        required_role=WorkspaceRole.EDITOR,
+    )
+    folder = await session.get(WorkspaceFolderModel, folder_id)
+    if folder is None or folder.workspace_id != workspace_id or folder.is_archived:
+        raise HTTPException(status_code=404, detail="Folder not found")
+    child_count = await session.scalar(
+        select(func.count())
+        .select_from(WorkspaceFolderModel)
+        .where(
+            WorkspaceFolderModel.parent_id == folder_id,
+            WorkspaceFolderModel.is_archived.is_(False),
+        )
+    )
+    presentation_count = await session.scalar(
+        select(func.count())
+        .select_from(PresentationEntryModel)
+        .where(PresentationEntryModel.folder_id == folder_id)
+    )
+    if child_count or presentation_count:
+        raise HTTPException(
+            status_code=409,
+            detail="请先移动子文件夹和文稿，再归档当前文件夹",
+        )
+    folder.is_archived = True
+    session.add(folder)
+    record_audit_event(
+        session,
+        actor_id=principal.user_id,
+        workspace_id=workspace_id,
+        action="workspace.folder_archived",
+        resource_type="workspace_folder",
+        resource_id=folder.id,
+        metadata={"name": folder.name},
+    )
+    await session.commit()

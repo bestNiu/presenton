@@ -141,3 +141,57 @@ async def list_presentation_entries(
             )
         ).all()
     )
+
+
+async def move_presentation_entries(
+    session: AsyncSession,
+    *,
+    principal: AuthPrincipal,
+    workspace_id: uuid.UUID,
+    entry_ids: list[uuid.UUID],
+    folder_id: uuid.UUID | None,
+) -> list[PresentationEntryModel]:
+    await require_workspace_role(
+        session,
+        workspace_id=workspace_id,
+        principal=principal,
+        required_role=WorkspaceRole.EDITOR,
+    )
+    if folder_id is not None:
+        folder = await session.get(WorkspaceFolderModel, folder_id)
+        if folder is None or folder.workspace_id != workspace_id or folder.is_archived:
+            raise HTTPException(status_code=404, detail="Folder not found")
+    entries = list(
+        (
+            await session.scalars(
+                select(PresentationEntryModel).where(
+                    PresentationEntryModel.workspace_id == workspace_id,
+                    PresentationEntryModel.id.in_(entry_ids),
+                )
+            )
+        ).all()
+    )
+    if len(entries) != len(set(entry_ids)):
+        raise HTTPException(status_code=404, detail="文稿不存在或不属于当前工作空间")
+    for entry in entries:
+        previous_folder_id = entry.folder_id
+        entry.folder_id = folder_id
+        session.add(entry)
+        record_audit_event(
+            session,
+            actor_id=principal.user_id,
+            workspace_id=workspace_id,
+            action="presentation.folder_changed",
+            resource_type="presentation_entry",
+            resource_id=entry.id,
+            metadata={
+                "previous_folder_id": (
+                    str(previous_folder_id) if previous_folder_id else None
+                ),
+                "folder_id": str(folder_id) if folder_id else None,
+            },
+        )
+    await session.commit()
+    for entry in entries:
+        await session.refresh(entry)
+    return entries

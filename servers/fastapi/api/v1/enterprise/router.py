@@ -74,6 +74,7 @@ from api.v1.enterprise.schemas import (
     BidStrategyUpdateRequest,
     FolderCreateRequest,
     FolderResponse,
+    FolderUpdateRequest,
     EnterpriseNotificationListResponse,
     EnterpriseNotificationReadAllResponse,
     EnterpriseNotificationResponse,
@@ -96,6 +97,7 @@ from api.v1.enterprise.schemas import (
     EnterpriseKnowledgePresentationCreateRequest,
     EnterpriseKnowledgePresentationResponse,
     PresentationEntryResponse,
+    PresentationBulkMoveRequest,
     PresentationCommentCreateRequest,
     PresentationCommentReplyCreateRequest,
     PresentationCommentReplyResponse,
@@ -126,6 +128,8 @@ from api.v1.enterprise.schemas import (
     TemplatePublicationCreateRequest,
     TemplatePublicationResponse,
     WorkspaceCreateRequest,
+    WorkspaceUpdateRequest,
+    WorkspaceMemberInviteRequest,
     WorkspaceMemberResponse,
     WorkspaceMemberUpsertRequest,
     WorkspaceResponse,
@@ -140,6 +144,7 @@ from models.sql.user import User
 from services.database import get_async_session
 from services.enterprise.presentation_workspace_service import (
     list_presentation_entries,
+    move_presentation_entries,
     register_presentation,
 )
 from services.enterprise.presentation_governance_service import (
@@ -302,6 +307,8 @@ from services.enterprise.template_publication_service import (
 )
 from services.enterprise.workspace_service import (
     add_or_update_member,
+    add_or_update_member_by_username,
+    archive_folder,
     create_folder,
     create_workspace,
     ensure_personal_workspace,
@@ -310,7 +317,9 @@ from services.enterprise.workspace_service import (
     list_workspaces,
     remove_member,
     require_workspace_role,
+    update_folder,
     update_workspace_governance_policy,
+    update_workspace_details,
 )
 
 
@@ -1597,6 +1606,28 @@ async def get_workspace(
 
 
 @API_V1_ENTERPRISE_ROUTER.put(
+    "/workspaces/{workspace_id}", response_model=WorkspaceResponse
+)
+async def put_workspace(
+    workspace_id: uuid.UUID,
+    body: WorkspaceUpdateRequest,
+    principal: AuthPrincipal = Depends(principal_from_request),
+    session: AsyncSession = Depends(get_async_session),
+):
+    workspace = await update_workspace_details(
+        session,
+        workspace_id=workspace_id,
+        principal=principal,
+        name=body.name,
+        confidentiality=body.confidentiality,
+    )
+    _, membership = await require_workspace_role(
+        session, workspace_id=workspace_id, principal=principal
+    )
+    return _workspace_response(workspace, membership.role)
+
+
+@API_V1_ENTERPRISE_ROUTER.put(
     "/workspaces/{workspace_id}/governance-policy", response_model=WorkspaceResponse
 )
 async def put_workspace_governance_policy(workspace_id: uuid.UUID, body: WorkspaceGovernancePolicyRequest, principal: AuthPrincipal = Depends(principal_from_request), session: AsyncSession = Depends(get_async_session)):
@@ -1627,6 +1658,33 @@ async def get_workspace_members(
         )
         for member, user in rows
     ]
+
+
+@API_V1_ENTERPRISE_ROUTER.post(
+    "/workspaces/{workspace_id}/members",
+    response_model=WorkspaceMemberResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def post_workspace_member(
+    workspace_id: uuid.UUID,
+    body: WorkspaceMemberInviteRequest,
+    principal: AuthPrincipal = Depends(principal_from_request),
+    session: AsyncSession = Depends(get_async_session),
+):
+    member, user = await add_or_update_member_by_username(
+        session,
+        workspace_id=workspace_id,
+        principal=principal,
+        username=body.username,
+        role=body.role,
+    )
+    return WorkspaceMemberResponse(
+        id=member.id,
+        user_id=member.user_id,
+        username=user.username,
+        role=member.role,
+        created_at=member.created_at,
+    )
 
 
 @API_V1_ENTERPRISE_ROUTER.put(
@@ -1710,6 +1768,45 @@ async def post_workspace_folder(
     )
 
 
+@API_V1_ENTERPRISE_ROUTER.put(
+    "/workspaces/{workspace_id}/folders/{folder_id}",
+    response_model=FolderResponse,
+)
+async def put_workspace_folder(
+    workspace_id: uuid.UUID,
+    folder_id: uuid.UUID,
+    body: FolderUpdateRequest,
+    principal: AuthPrincipal = Depends(principal_from_request),
+    session: AsyncSession = Depends(get_async_session),
+):
+    return await update_folder(
+        session,
+        workspace_id=workspace_id,
+        folder_id=folder_id,
+        principal=principal,
+        name=body.name,
+        parent_id=body.parent_id,
+    )
+
+
+@API_V1_ENTERPRISE_ROUTER.delete(
+    "/workspaces/{workspace_id}/folders/{folder_id}", status_code=204
+)
+async def delete_workspace_folder(
+    workspace_id: uuid.UUID,
+    folder_id: uuid.UUID,
+    principal: AuthPrincipal = Depends(principal_from_request),
+    session: AsyncSession = Depends(get_async_session),
+):
+    await archive_folder(
+        session,
+        workspace_id=workspace_id,
+        folder_id=folder_id,
+        principal=principal,
+    )
+    return Response(status_code=204)
+
+
 @API_V1_ENTERPRISE_ROUTER.post(
     "/presentations",
     response_model=PresentationEntryResponse,
@@ -1746,6 +1843,31 @@ async def get_presentation_entries(
         principal=principal,
         workspace_id=workspace_id,
         folder_id=folder_id,
+    )
+    return [
+        PresentationEntryResponse.model_validate(entry).model_copy(
+            update={"can_open": True}
+        )
+        for entry in entries
+    ]
+
+
+@API_V1_ENTERPRISE_ROUTER.post(
+    "/workspaces/{workspace_id}/presentations/move",
+    response_model=list[PresentationEntryResponse],
+)
+async def post_presentation_entries_move(
+    workspace_id: uuid.UUID,
+    body: PresentationBulkMoveRequest,
+    principal: AuthPrincipal = Depends(principal_from_request),
+    session: AsyncSession = Depends(get_async_session),
+):
+    entries = await move_presentation_entries(
+        session,
+        principal=principal,
+        workspace_id=workspace_id,
+        entry_ids=body.entry_ids,
+        folder_id=body.folder_id,
     )
     return [
         PresentationEntryResponse.model_validate(entry).model_copy(

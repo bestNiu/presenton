@@ -382,7 +382,15 @@ def test_team_membership_enforces_roles_and_hides_workspace_from_outsider(tmp_pa
             json={"name": "研发团队", "workspace_type": "team"},
         )
         workspace_id = created.json()["id"]
-        added = client.put(
+        updated = client.put(
+            f"/api/v1/enterprise/workspaces/{workspace_id}",
+            json={"name": "研发协作空间", "confidentiality": "L3"},
+        )
+        added = client.post(
+            f"/api/v1/enterprise/workspaces/{workspace_id}/members",
+            json={"username": "member", "role": "editor"},
+        )
+        role_changed = client.put(
             f"/api/v1/enterprise/workspaces/{workspace_id}/members/{users['member'].id}",
             json={"user_id": str(users["member"].id), "role": "viewer"},
         )
@@ -398,14 +406,34 @@ def test_team_membership_enforces_roles_and_hides_workspace_from_outsider(tmp_pa
             f"/api/v1/enterprise/workspaces/{workspace_id}",
             headers={"x-test-user": "outsider"},
         )
+        denied_update = client.put(
+            f"/api/v1/enterprise/workspaces/{workspace_id}",
+            json={"name": "越权修改", "confidentiality": "L1"},
+            headers={"x-test-user": "member"},
+        )
+        audit = client.get(
+            f"/api/v1/enterprise/workspaces/{workspace_id}/audit-events"
+        )
 
         assert created.status_code == 201
-        assert added.status_code == 200
-        assert added.json()["role"] == "viewer"
+        assert updated.status_code == 200
+        assert updated.json()["name"] == "研发协作空间"
+        assert updated.json()["confidentiality"] == "L3"
+        assert added.status_code == 201
+        assert added.json()["username"] == "member"
+        assert role_changed.status_code == 200
+        assert role_changed.json()["role"] == "viewer"
         assert member_list.status_code == 200
         assert member_list.json()[0]["current_user_role"] == "viewer"
         assert denied_folder.status_code == 404
         assert outsider.status_code == 404
+        assert denied_update.status_code == 404
+        assert audit.status_code == 200
+        assert {row["action"] for row in audit.json()} >= {
+            "workspace.details_updated",
+            "workspace.member_added",
+            "workspace.member_role_changed",
+        }
     finally:
         asyncio.run(engine.dispose())
 
@@ -915,6 +943,111 @@ def test_folder_parent_must_belong_to_same_workspace(tmp_path):
 
         assert parent.status_code == 201
         assert cross_workspace.status_code == 404
+    finally:
+        asyncio.run(engine.dispose())
+
+
+def test_folder_management_and_presentation_bulk_move(tmp_path):
+    client, engine, session_maker, users = _build_client(tmp_path)
+    presentation_id = uuid.uuid4()
+
+    async def seed_presentation():
+        async with session_maker() as session:
+            session.add(
+                PresentationModel(
+                    id=presentation_id,
+                    owner_id=users["owner"].id,
+                    version=PresentationVersion.V2_STANDARD,
+                    content="folder management",
+                    n_slides=1,
+                    language="Chinese",
+                    title="文件夹管理验证文稿",
+                )
+            )
+            await session.commit()
+
+    asyncio.run(seed_presentation())
+    try:
+        workspace = client.post(
+            "/api/v1/enterprise/workspaces",
+            json={"name": "内容空间", "workspace_type": "team"},
+        ).json()
+        root = client.post(
+            f"/api/v1/enterprise/workspaces/{workspace['id']}/folders",
+            json={"name": "客户汇报"},
+        )
+        child = client.post(
+            f"/api/v1/enterprise/workspaces/{workspace['id']}/folders",
+            json={"name": "初稿", "parent_id": root.json()["id"]},
+        )
+        renamed = client.put(
+            f"/api/v1/enterprise/workspaces/{workspace['id']}/folders/{child.json()['id']}",
+            json={"name": "评审稿", "parent_id": root.json()["id"]},
+        )
+        cycle = client.put(
+            f"/api/v1/enterprise/workspaces/{workspace['id']}/folders/{root.json()['id']}",
+            json={"name": "客户汇报", "parent_id": child.json()["id"]},
+        )
+        registered = client.post(
+            "/api/v1/enterprise/presentations",
+            json={
+                "workspace_id": workspace["id"],
+                "presentation_id": str(presentation_id),
+                "scene_type": "general",
+            },
+        )
+        client.put(
+            f"/api/v1/enterprise/workspaces/{workspace['id']}/members/{users['member'].id}",
+            json={"user_id": str(users["member"].id), "role": "reviewer"},
+        )
+        reviewer_move_denied = client.post(
+            f"/api/v1/enterprise/workspaces/{workspace['id']}/presentations/move",
+            json={
+                "entry_ids": [registered.json()["id"]],
+                "folder_id": child.json()["id"],
+            },
+            headers={"x-test-user": "member"},
+        )
+        moved = client.post(
+            f"/api/v1/enterprise/workspaces/{workspace['id']}/presentations/move",
+            json={
+                "entry_ids": [registered.json()["id"]],
+                "folder_id": child.json()["id"],
+            },
+        )
+        nonempty_archive = client.delete(
+            f"/api/v1/enterprise/workspaces/{workspace['id']}/folders/{child.json()['id']}"
+        )
+        moved_to_root = client.post(
+            f"/api/v1/enterprise/workspaces/{workspace['id']}/presentations/move",
+            json={"entry_ids": [registered.json()["id"]], "folder_id": None},
+        )
+        child_archived = client.delete(
+            f"/api/v1/enterprise/workspaces/{workspace['id']}/folders/{child.json()['id']}"
+        )
+        root_archived = client.delete(
+            f"/api/v1/enterprise/workspaces/{workspace['id']}/folders/{root.json()['id']}"
+        )
+        folders = client.get(
+            f"/api/v1/enterprise/workspaces/{workspace['id']}/folders"
+        )
+
+        assert root.status_code == 201
+        assert child.status_code == 201
+        assert renamed.status_code == 200
+        assert renamed.json()["name"] == "评审稿"
+        assert cycle.status_code == 409
+        # Workspace authorization intentionally returns 404 when the caller's
+        # role is below editor, so resource existence is not disclosed.
+        assert reviewer_move_denied.status_code == 404
+        assert moved.status_code == 200
+        assert moved.json()[0]["folder_id"] == child.json()["id"]
+        assert nonempty_archive.status_code == 409
+        assert moved_to_root.status_code == 200
+        assert moved_to_root.json()[0]["folder_id"] is None
+        assert child_archived.status_code == 204
+        assert root_archived.status_code == 204
+        assert folders.json() == []
     finally:
         asyncio.run(engine.dispose())
 

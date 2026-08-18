@@ -246,12 +246,26 @@ export interface PresentationEntryResponse {
   workspace_id: string;
   folder_id: string | null;
   presentation_id: string;
+  created_by: string | null;
   title: string | null;
   scene_type: string;
   creation_mode: PresentationCreationMode;
   status: "draft" | "in_review" | "approved" | "frozen" | "published" | "archived";
   can_open: boolean;
   updated_at: string;
+}
+
+export interface PresentationCatalogItemResponse
+  extends PresentationEntryResponse {
+  creator_username: string | null;
+}
+
+export interface PresentationCatalogResponse {
+  items: PresentationCatalogItemResponse[];
+  total: number;
+  page: number;
+  page_size: number;
+  pages: number;
 }
 
 export interface EnterpriseDocumentResponse {
@@ -1314,6 +1328,73 @@ export class EnterpriseApi {
     return ApiResponseHandler.handleResponse(
       response,
       "工作空间文稿加载失败，请稍后重试"
+    );
+  }
+
+  static async getPresentationCatalog(
+    workspaceId: string,
+    filters: {
+      query?: string;
+      folder_id?: string;
+      unfiled_only?: boolean;
+      presentation_status?: PresentationEntryResponse["status"];
+      creation_mode?: PresentationCreationMode;
+      mine_only?: boolean;
+      sort_by?:
+        | "updated_desc"
+        | "updated_asc"
+        | "title_asc"
+        | "title_desc"
+        | "created_desc";
+      page?: number;
+      page_size?: number;
+    }
+  ): Promise<PresentationCatalogResponse> {
+    const params = new URLSearchParams();
+    Object.entries(filters).forEach(([key, value]) => {
+      if (value !== undefined && value !== "") params.set(key, String(value));
+    });
+    const response = await fetch(
+      getApiUrl(
+        `/api/v1/enterprise/workspaces/${encodeURIComponent(workspaceId)}/presentations/search?${params.toString()}`
+      ),
+      { method: "GET", credentials: "include", cache: "no-store" }
+    );
+    return ApiResponseHandler.handleResponse(
+      response,
+      "文稿目录加载失败，请稍后重试"
+    );
+  }
+
+  static async archivePresentation(
+    workspaceId: string,
+    entryId: string
+  ): Promise<PresentationEntryResponse> {
+    const response = await fetch(
+      getApiUrl(
+        `/api/v1/enterprise/workspaces/${encodeURIComponent(workspaceId)}/presentations/${encodeURIComponent(entryId)}/archive`
+      ),
+      { method: "POST", credentials: "include" }
+    );
+    return ApiResponseHandler.handleResponse(
+      response,
+      "文稿归档失败，请确认文稿仍处于草稿状态"
+    );
+  }
+
+  static async restorePresentation(
+    workspaceId: string,
+    entryId: string
+  ): Promise<PresentationEntryResponse> {
+    const response = await fetch(
+      getApiUrl(
+        `/api/v1/enterprise/workspaces/${encodeURIComponent(workspaceId)}/presentations/${encodeURIComponent(entryId)}/restore`
+      ),
+      { method: "POST", credentials: "include" }
+    );
+    return ApiResponseHandler.handleResponse(
+      response,
+      "文稿恢复失败，请稍后重试"
     );
   }
 

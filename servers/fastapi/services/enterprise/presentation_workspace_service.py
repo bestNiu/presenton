@@ -1,15 +1,20 @@
 import uuid
 
 from fastapi import HTTPException
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.v1.auth.principal import AuthPrincipal
-from domains.platform.enums import PresentationCreationMode, WorkspaceRole
+from domains.platform.enums import (
+    PresentationCreationMode,
+    PresentationEntryStatus,
+    WorkspaceRole,
+)
 from models.sql.enterprise.presentation_entry import PresentationEntryModel
 from models.sql.enterprise.workspace import WorkspaceFolderModel
 from models.sql.presentation import PresentationModel
+from models.sql.user import User
 from services.enterprise.audit_service import record_audit_event
 from services.enterprise.scene_service import get_active_scene
 from services.enterprise.scene_registry_service import (
@@ -141,6 +146,127 @@ async def list_presentation_entries(
             )
         ).all()
     )
+
+
+async def search_presentation_entries(
+    session: AsyncSession,
+    *,
+    principal: AuthPrincipal,
+    workspace_id: uuid.UUID,
+    query_text: str | None,
+    folder_id: uuid.UUID | None,
+    unfiled_only: bool,
+    status: PresentationEntryStatus | None,
+    creation_mode: PresentationCreationMode | None,
+    mine_only: bool,
+    sort_by: str,
+    page: int,
+    page_size: int,
+) -> tuple[list[tuple[PresentationEntryModel, str | None]], int]:
+    await require_workspace_role(
+        session, workspace_id=workspace_id, principal=principal
+    )
+    filters = [PresentationEntryModel.workspace_id == workspace_id]
+    if query_text and query_text.strip():
+        filters.append(
+            func.lower(func.coalesce(PresentationEntryModel.title, "")).contains(
+                query_text.strip().casefold(), autoescape=True
+            )
+        )
+    if folder_id is not None:
+        filters.append(PresentationEntryModel.folder_id == folder_id)
+    elif unfiled_only:
+        filters.append(PresentationEntryModel.folder_id.is_(None))
+    if status is not None:
+        filters.append(PresentationEntryModel.status == status)
+    if creation_mode is not None:
+        filters.append(PresentationEntryModel.creation_mode == creation_mode)
+    if mine_only:
+        filters.append(PresentationEntryModel.created_by == principal.user_id)
+
+    total = int(
+        await session.scalar(
+            select(func.count())
+            .select_from(PresentationEntryModel)
+            .where(*filters)
+        )
+        or 0
+    )
+    sort_expression = {
+        "updated_asc": PresentationEntryModel.updated_at.asc(),
+        "title_asc": PresentationEntryModel.title.asc(),
+        "title_desc": PresentationEntryModel.title.desc(),
+        "created_desc": PresentationEntryModel.created_at.desc(),
+    }.get(sort_by, PresentationEntryModel.updated_at.desc())
+    rows = (
+        await session.execute(
+            select(PresentationEntryModel, User.username)
+            .outerjoin(User, User.id == PresentationEntryModel.created_by)
+            .where(*filters)
+            .order_by(sort_expression, PresentationEntryModel.id.asc())
+            .offset((page - 1) * page_size)
+            .limit(page_size)
+        )
+    ).all()
+    return [(entry, username) for entry, username in rows], total
+
+
+async def set_presentation_archived(
+    session: AsyncSession,
+    *,
+    principal: AuthPrincipal,
+    workspace_id: uuid.UUID,
+    entry_id: uuid.UUID,
+    archived: bool,
+) -> PresentationEntryModel:
+    await require_workspace_role(
+        session,
+        workspace_id=workspace_id,
+        principal=principal,
+        required_role=WorkspaceRole.EDITOR,
+    )
+    entry = await session.scalar(
+        select(PresentationEntryModel).where(
+            PresentationEntryModel.id == entry_id,
+            PresentationEntryModel.workspace_id == workspace_id,
+        )
+    )
+    if entry is None:
+        raise HTTPException(status_code=404, detail="文稿不存在或不属于当前工作空间")
+    current_status = PresentationEntryStatus(entry.status)
+    if archived:
+        if current_status != PresentationEntryStatus.DRAFT:
+            raise HTTPException(status_code=409, detail="只有草稿状态的文稿可以归档")
+        previous_folder_id = entry.folder_id
+        entry.status = PresentationEntryStatus.ARCHIVED
+        entry.folder_id = None
+        action = "presentation.archived"
+    else:
+        if current_status != PresentationEntryStatus.ARCHIVED:
+            raise HTTPException(status_code=409, detail="只有已归档文稿可以恢复")
+        previous_folder_id = None
+        entry.status = PresentationEntryStatus.DRAFT
+        action = "presentation.restored"
+    entry.row_version += 1
+    session.add(entry)
+    record_audit_event(
+        session,
+        actor_id=principal.user_id,
+        workspace_id=workspace_id,
+        action=action,
+        resource_type="presentation_entry",
+        resource_id=entry.id,
+        metadata={
+            "previous_status": current_status.value,
+            "status": PresentationEntryStatus(entry.status).value,
+            "previous_folder_id": (
+                str(previous_folder_id) if previous_folder_id else None
+            ),
+        },
+    )
+    await session.commit()
+    await session.refresh(entry)
+    return entry
 
 
 async def move_presentation_entries(

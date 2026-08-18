@@ -98,6 +98,8 @@ from api.v1.enterprise.schemas import (
     EnterpriseKnowledgePresentationResponse,
     PresentationEntryResponse,
     PresentationBulkMoveRequest,
+    PresentationCatalogItemResponse,
+    PresentationCatalogResponse,
     PresentationCommentCreateRequest,
     PresentationCommentReplyCreateRequest,
     PresentationCommentReplyResponse,
@@ -138,7 +140,14 @@ from api.v1.enterprise.schemas import (
     StorageLifecycleRunResponse,
     StorageLifecycleHistoryResponse,
 )
-from domains.platform.enums import AssetStatus, BidGateType, TemplatePublicationStatus, WorkspaceRole
+from domains.platform.enums import (
+    AssetStatus,
+    BidGateType,
+    PresentationCreationMode,
+    PresentationEntryStatus,
+    TemplatePublicationStatus,
+    WorkspaceRole,
+)
 from models.sql.enterprise.audit_event import AuditEventModel
 from models.sql.user import User
 from services.database import get_async_session
@@ -146,6 +155,8 @@ from services.enterprise.presentation_workspace_service import (
     list_presentation_entries,
     move_presentation_entries,
     register_presentation,
+    search_presentation_entries,
+    set_presentation_archived,
 )
 from services.enterprise.presentation_governance_service import (
     compare_presentation_snapshots,
@@ -1852,6 +1863,55 @@ async def get_presentation_entries(
     ]
 
 
+@API_V1_ENTERPRISE_ROUTER.get(
+    "/workspaces/{workspace_id}/presentations/search",
+    response_model=PresentationCatalogResponse,
+)
+async def get_presentation_catalog(
+    workspace_id: uuid.UUID,
+    query: str | None = Query(default=None, max_length=200),
+    folder_id: uuid.UUID | None = Query(default=None),
+    unfiled_only: bool = Query(default=False),
+    presentation_status: PresentationEntryStatus | None = Query(default=None),
+    creation_mode: PresentationCreationMode | None = Query(default=None),
+    mine_only: bool = Query(default=False),
+    sort_by: str = Query(
+        default="updated_desc",
+        pattern="^(updated_desc|updated_asc|title_asc|title_desc|created_desc)$",
+    ),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=100),
+    principal: AuthPrincipal = Depends(principal_from_request),
+    session: AsyncSession = Depends(get_async_session),
+):
+    rows, total = await search_presentation_entries(
+        session,
+        principal=principal,
+        workspace_id=workspace_id,
+        query_text=query,
+        folder_id=folder_id,
+        unfiled_only=unfiled_only,
+        status=presentation_status,
+        creation_mode=creation_mode,
+        mine_only=mine_only,
+        sort_by=sort_by,
+        page=page,
+        page_size=page_size,
+    )
+    return PresentationCatalogResponse(
+        items=[
+            PresentationCatalogItemResponse.model_validate(entry).model_copy(
+                update={"can_open": True, "creator_username": username}
+            )
+            for entry, username in rows
+        ],
+        total=total,
+        page=page,
+        page_size=page_size,
+        pages=(total + page_size - 1) // page_size,
+    )
+
+
 @API_V1_ENTERPRISE_ROUTER.post(
     "/workspaces/{workspace_id}/presentations/move",
     response_model=list[PresentationEntryResponse],
@@ -1875,6 +1935,44 @@ async def post_presentation_entries_move(
         )
         for entry in entries
     ]
+
+
+@API_V1_ENTERPRISE_ROUTER.post(
+    "/workspaces/{workspace_id}/presentations/{entry_id}/archive",
+    response_model=PresentationEntryResponse,
+)
+async def post_presentation_entry_archive(
+    workspace_id: uuid.UUID,
+    entry_id: uuid.UUID,
+    principal: AuthPrincipal = Depends(principal_from_request),
+    session: AsyncSession = Depends(get_async_session),
+):
+    return await set_presentation_archived(
+        session,
+        principal=principal,
+        workspace_id=workspace_id,
+        entry_id=entry_id,
+        archived=True,
+    )
+
+
+@API_V1_ENTERPRISE_ROUTER.post(
+    "/workspaces/{workspace_id}/presentations/{entry_id}/restore",
+    response_model=PresentationEntryResponse,
+)
+async def post_presentation_entry_restore(
+    workspace_id: uuid.UUID,
+    entry_id: uuid.UUID,
+    principal: AuthPrincipal = Depends(principal_from_request),
+    session: AsyncSession = Depends(get_async_session),
+):
+    return await set_presentation_archived(
+        session,
+        principal=principal,
+        workspace_id=workspace_id,
+        entry_id=entry_id,
+        archived=False,
+    )
 
 
 @API_V1_ENTERPRISE_ROUTER.get(

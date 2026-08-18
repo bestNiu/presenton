@@ -1022,6 +1022,30 @@ def test_folder_management_and_presentation_bulk_move(tmp_path):
             f"/api/v1/enterprise/workspaces/{workspace['id']}/presentations/move",
             json={"entry_ids": [registered.json()["id"]], "folder_id": None},
         )
+        catalog = client.get(
+            f"/api/v1/enterprise/workspaces/{workspace['id']}/presentations/search",
+            params={
+                "query": "文件夹管理",
+                "mine_only": True,
+                "presentation_status": "draft",
+                "sort_by": "title_asc",
+                "page_size": 1,
+            },
+        )
+        reviewer_archive_denied = client.post(
+            f"/api/v1/enterprise/workspaces/{workspace['id']}/presentations/{registered.json()['id']}/archive",
+            headers={"x-test-user": "member"},
+        )
+        archived = client.post(
+            f"/api/v1/enterprise/workspaces/{workspace['id']}/presentations/{registered.json()['id']}/archive"
+        )
+        archived_catalog = client.get(
+            f"/api/v1/enterprise/workspaces/{workspace['id']}/presentations/search",
+            params={"presentation_status": "archived"},
+        )
+        restored = client.post(
+            f"/api/v1/enterprise/workspaces/{workspace['id']}/presentations/{registered.json()['id']}/restore"
+        )
         child_archived = client.delete(
             f"/api/v1/enterprise/workspaces/{workspace['id']}/folders/{child.json()['id']}"
         )
@@ -1045,6 +1069,16 @@ def test_folder_management_and_presentation_bulk_move(tmp_path):
         assert nonempty_archive.status_code == 409
         assert moved_to_root.status_code == 200
         assert moved_to_root.json()[0]["folder_id"] is None
+        assert catalog.status_code == 200
+        assert catalog.json()["total"] == 1
+        assert catalog.json()["pages"] == 1
+        assert catalog.json()["items"][0]["creator_username"] == "owner"
+        assert reviewer_archive_denied.status_code == 404
+        assert archived.status_code == 200
+        assert archived.json()["status"] == "archived"
+        assert archived_catalog.json()["items"][0]["id"] == registered.json()["id"]
+        assert restored.status_code == 200
+        assert restored.json()["status"] == "draft"
         assert child_archived.status_code == 204
         assert root_archived.status_code == 204
         assert folders.json() == []

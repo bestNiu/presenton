@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import {
   AlertTriangle,
@@ -13,6 +14,8 @@ import {
   FolderPlus,
   Loader2,
   Pencil,
+  Plus,
+  RotateCcw,
   Search,
   X,
 } from "lucide-react";
@@ -20,9 +23,11 @@ import {
 import {
   EnterpriseApi,
   type FolderResponse,
+  type PresentationCatalogItemResponse,
   type PresentationCreationMode,
   type PresentationEntryResponse,
 } from "@/app/(presentation-generator)/services/api/enterprise";
+import { PresentationGenerationApi } from "@/app/(presentation-generator)/services/api/presentation-generation";
 import { useEnterpriseWorkspace } from "../components/EnterpriseWorkspaceShell";
 
 const creationModeLabel: Record<PresentationCreationMode, string> = {
@@ -68,20 +73,31 @@ function flattenFolders(folders: FolderResponse[]): FolderRow[] {
 }
 
 export default function WorkspacePresentationsPage() {
+  const router = useRouter();
   const { activeWorkspace: workspace, activeWorkspaceId: workspaceId } =
     useEnterpriseWorkspace();
   const [folders, setFolders] = useState<FolderResponse[]>([]);
-  const [presentations, setPresentations] = useState<PresentationEntryResponse[]>([]);
+  const [presentations, setPresentations] = useState<PresentationCatalogItemResponse[]>([]);
   const [activeFolder, setActiveFolder] = useState<"all" | "root" | string>("all");
+  const [searchDraft, setSearchDraft] = useState("");
   const [search, setSearch] = useState("");
   const [status, setStatus] = useState("all");
   const [creationMode, setCreationMode] = useState("all");
+  const [mineOnly, setMineOnly] = useState(false);
+  const [sortBy, setSortBy] = useState<
+    "updated_desc" | "updated_asc" | "title_asc" | "title_desc" | "created_desc"
+  >("updated_desc");
+  const [page, setPage] = useState(1);
+  const [total, setTotal] = useState(0);
+  const [pages, setPages] = useState(0);
   const [selected, setSelected] = useState<string[]>([]);
   const [moveTarget, setMoveTarget] = useState("root");
   const [folderDialog, setFolderDialog] = useState<FolderResponse | "create" | null>(null);
   const [folderName, setFolderName] = useState("");
   const [folderParent, setFolderParent] = useState("root");
   const [archiveTarget, setArchiveTarget] = useState<FolderResponse | null>(null);
+  const [presentationLifecycleTarget, setPresentationLifecycleTarget] =
+    useState<PresentationCatalogItemResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [pending, setPending] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -101,19 +117,40 @@ export default function WorkspacePresentationsPage() {
     setLoading(true);
     setError(null);
     try {
-      const [folderRows, presentationRows] = await Promise.all([
+      const [folderRows, catalog] = await Promise.all([
         EnterpriseApi.getFolders(workspaceId),
-        EnterpriseApi.getPresentations(workspaceId),
+        EnterpriseApi.getPresentationCatalog(workspaceId, {
+          query: search || undefined,
+          folder_id:
+            activeFolder !== "all" && activeFolder !== "root"
+              ? activeFolder
+              : undefined,
+          unfiled_only: activeFolder === "root" || undefined,
+          presentation_status:
+            status === "all"
+              ? undefined
+              : (status as PresentationEntryResponse["status"]),
+          creation_mode:
+            creationMode === "all"
+              ? undefined
+              : (creationMode as PresentationCreationMode),
+          mine_only: mineOnly || undefined,
+          sort_by: sortBy,
+          page,
+          page_size: 20,
+        }),
       ]);
       setFolders(folderRows);
-      setPresentations(presentationRows);
+      setPresentations(catalog.items);
+      setTotal(catalog.total);
+      setPages(catalog.pages);
       setSelected([]);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "文稿中心加载失败");
     } finally {
       setLoading(false);
     }
-  }, [workspaceId]);
+  }, [activeFolder, creationMode, mineOnly, page, search, sortBy, status, workspaceId]);
 
   useEffect(() => {
     void load();
@@ -142,24 +179,10 @@ export default function WorkspacePresentationsPage() {
         .map((folder) => folder.id)
     );
   }, [folderDialog, folders]);
-  const folderCounts = useMemo(() => {
-    const counts = new Map<string, number>();
-    for (const item of presentations) {
-      if (item.folder_id) counts.set(item.folder_id, (counts.get(item.folder_id) || 0) + 1);
-    }
-    return counts;
-  }, [presentations]);
-
-  const visiblePresentations = useMemo(() => {
-    const keyword = search.trim().toLocaleLowerCase("zh-CN");
-    return presentations.filter((item) => {
-      if (activeFolder === "root" && item.folder_id !== null) return false;
-      if (activeFolder !== "all" && activeFolder !== "root" && item.folder_id !== activeFolder) return false;
-      if (status !== "all" && item.status !== status) return false;
-      if (creationMode !== "all" && item.creation_mode !== creationMode) return false;
-      return !keyword || (item.title || "未命名文稿").toLocaleLowerCase("zh-CN").includes(keyword);
-    });
-  }, [activeFolder, creationMode, presentations, search, status]);
+  const selectFolder = (folderId: "all" | "root" | string) => {
+    setActiveFolder(folderId);
+    setPage(1);
+  };
 
   const runAction = async (
     key: string,
@@ -245,9 +268,61 @@ export default function WorkspacePresentationsPage() {
     );
   };
 
+  const submitSearch = (event: FormEvent) => {
+    event.preventDefault();
+    setPage(1);
+    setSearch(searchDraft.trim());
+  };
+
+  const createHref = (entry: "topic" | "document" | "template") => {
+    const params = new URLSearchParams({ entry, workspace_id: workspaceId });
+    if (entry === "template") params.set("template", "executive");
+    return `/upload?${params.toString()}`;
+  };
+
+  const createBlankPresentation = () => {
+    if (!workspaceId || !canEdit) return;
+    void runAction(
+      "create-blank",
+      async () => {
+        const presentation =
+          await PresentationGenerationApi.createBlankPresentation({
+            workspace_id: workspaceId,
+            scene_type: "general",
+          });
+        router.push(
+          `/presentation?id=${encodeURIComponent(presentation.id)}&type=standard`
+        );
+      },
+      "空白文稿已创建"
+    );
+  };
+
+  const changePresentationLifecycle = () => {
+    if (!workspaceId || !presentationLifecycleTarget) return;
+    const target = presentationLifecycleTarget;
+    const restoring = target.status === "archived";
+    void runAction(
+      "presentation-lifecycle",
+      async () => {
+        if (restoring) {
+          await EnterpriseApi.restorePresentation(workspaceId, target.id);
+        } else {
+          await EnterpriseApi.archivePresentation(workspaceId, target.id);
+        }
+        setPresentationLifecycleTarget(null);
+        await load();
+      },
+      restoring ? "文稿已恢复为草稿" : "文稿已归档"
+    );
+  };
+
+  const movablePresentations = presentations.filter(
+    (item) => item.status !== "archived"
+  );
   const allVisibleSelected =
-    visiblePresentations.length > 0 &&
-    visiblePresentations.every((item) => selected.includes(item.id));
+    movablePresentations.length > 0 &&
+    movablePresentations.every((item) => selected.includes(item.id));
 
   return (
     <main className="min-h-screen bg-[#FBFBFD] px-5 py-8 sm:px-8 lg:px-10">
@@ -261,9 +336,24 @@ export default function WorkspacePresentationsPage() {
             <p className="mt-2 text-sm text-[#667085]">集中检索、分类和维护工作空间内的全部 PPT 文稿。</p>
           </div>
           {canEdit && (
-            <button type="button" onClick={openCreateFolder} className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-[#635BFF] px-4 text-sm font-medium text-white hover:bg-[#5147E5]">
-              <FolderPlus className="h-4 w-4" />新建文件夹
-            </button>
+            <div className="flex items-center gap-2">
+              <button type="button" onClick={openCreateFolder} className="inline-flex h-10 items-center justify-center gap-2 rounded-lg border border-[#D0D5DD] bg-white px-4 text-sm font-medium text-[#344054] hover:bg-[#F9FAFB]">
+                <FolderPlus className="h-4 w-4" />新建文件夹
+              </button>
+              <details className="group relative">
+                <summary className="flex h-10 cursor-pointer list-none items-center gap-2 rounded-lg bg-[#635BFF] px-4 text-sm font-medium text-white hover:bg-[#5147E5]">
+                  <Plus className="h-4 w-4" />新建文稿
+                </summary>
+                <div className="absolute right-0 z-20 mt-2 w-44 rounded-xl border border-[#E4E7EC] bg-white p-1.5 shadow-lg">
+                  <Link href={createHref("topic")} className="block rounded-lg px-3 py-2 text-sm text-[#344054] hover:bg-[#F5F3FF]">从主题生成</Link>
+                  <Link href={createHref("document")} className="block rounded-lg px-3 py-2 text-sm text-[#344054] hover:bg-[#F5F3FF]">从文档生成</Link>
+                  <Link href={createHref("template")} className="block rounded-lg px-3 py-2 text-sm text-[#344054] hover:bg-[#F5F3FF]">从模板创建</Link>
+                  <button type="button" onClick={createBlankPresentation} disabled={pending === "create-blank"} className="flex w-full items-center rounded-lg px-3 py-2 text-left text-sm text-[#344054] hover:bg-[#F5F3FF] disabled:opacity-50">
+                    {pending === "create-blank" && <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />}空白文稿
+                  </button>
+                </div>
+              </details>
+            </div>
           )}
         </header>
 
@@ -276,13 +366,13 @@ export default function WorkspacePresentationsPage() {
           <div className="mt-6 grid gap-6 lg:grid-cols-[260px_minmax(0,1fr)]">
             <aside className="h-fit rounded-2xl border border-[#E4E7EC] bg-white p-3">
               <div className="px-2 pb-2 text-xs font-semibold uppercase tracking-wide text-[#98A2B3]">文件夹</div>
-              <button type="button" onClick={() => setActiveFolder("all")} className={`flex w-full items-center justify-between rounded-lg px-3 py-2 text-left text-sm ${activeFolder === "all" ? "bg-[#F0EEFF] font-medium text-[#4238CA]" : "text-[#475467] hover:bg-[#F9FAFB]"}`}><span>全部文稿</span><span className="text-xs">{presentations.length}</span></button>
-              <button type="button" onClick={() => setActiveFolder("root")} className={`mt-1 flex w-full items-center justify-between rounded-lg px-3 py-2 text-left text-sm ${activeFolder === "root" ? "bg-[#F0EEFF] font-medium text-[#4238CA]" : "text-[#475467] hover:bg-[#F9FAFB]"}`}><span>未分类</span><span className="text-xs">{presentations.filter((item) => !item.folder_id).length}</span></button>
+              <button type="button" onClick={() => selectFolder("all")} className={`flex w-full items-center justify-between rounded-lg px-3 py-2 text-left text-sm ${activeFolder === "all" ? "bg-[#F0EEFF] font-medium text-[#4238CA]" : "text-[#475467] hover:bg-[#F9FAFB]"}`}><span>全部文稿</span>{activeFolder === "all" && <span className="text-xs">{total}</span>}</button>
+              <button type="button" onClick={() => selectFolder("root")} className={`mt-1 flex w-full items-center justify-between rounded-lg px-3 py-2 text-left text-sm ${activeFolder === "root" ? "bg-[#F0EEFF] font-medium text-[#4238CA]" : "text-[#475467] hover:bg-[#F9FAFB]"}`}><span>未分类</span>{activeFolder === "root" && <span className="text-xs">{total}</span>}</button>
               <div className="my-2 border-t border-[#EAECF0]" />
               {folderRows.map((folder) => (
                 <div key={folder.id} className="group flex items-center gap-1" style={{ paddingLeft: `${folder.depth * 14}px` }}>
-                  <button type="button" onClick={() => setActiveFolder(folder.id)} className={`flex min-w-0 flex-1 items-center justify-between rounded-lg px-2 py-2 text-left text-sm ${activeFolder === folder.id ? "bg-[#F0EEFF] font-medium text-[#4238CA]" : "text-[#475467] hover:bg-[#F9FAFB]"}`}>
-                    <span className="flex min-w-0 items-center gap-2"><Folder className="h-4 w-4 shrink-0" /><span className="truncate">{folder.name}</span></span><span className="ml-2 text-xs">{folderCounts.get(folder.id) || 0}</span>
+                  <button type="button" onClick={() => selectFolder(folder.id)} className={`flex min-w-0 flex-1 items-center justify-between rounded-lg px-2 py-2 text-left text-sm ${activeFolder === folder.id ? "bg-[#F0EEFF] font-medium text-[#4238CA]" : "text-[#475467] hover:bg-[#F9FAFB]"}`}>
+                    <span className="flex min-w-0 items-center gap-2"><Folder className="h-4 w-4 shrink-0" /><span className="truncate">{folder.name}</span></span>{activeFolder === folder.id && <span className="ml-2 text-xs">{total}</span>}
                   </button>
                   {canEdit && <button type="button" onClick={() => openEditFolder(folder)} className="rounded p-1 text-[#98A2B3] opacity-0 hover:bg-[#F2F4F7] hover:text-[#475467] group-hover:opacity-100 focus:opacity-100" aria-label={`编辑${folder.name}`}><Pencil className="h-3.5 w-3.5" /></button>}
                 </div>
@@ -292,10 +382,15 @@ export default function WorkspacePresentationsPage() {
 
             <section className="min-w-0">
               <div className="rounded-2xl border border-[#E4E7EC] bg-white p-4">
-                <div className="grid gap-3 md:grid-cols-[minmax(220px,1fr)_150px_150px]">
-                  <label className="relative"><span className="sr-only">搜索文稿</span><Search className="absolute left-3 top-3 h-4 w-4 text-[#98A2B3]" /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="搜索文稿名称" className="h-10 w-full rounded-lg border border-[#D0D5DD] pl-9 pr-3 text-sm outline-none focus:border-[#8B7DFF]" /></label>
-                  <select value={status} onChange={(event) => setStatus(event.target.value)} className="h-10 rounded-lg border border-[#D0D5DD] bg-white px-3 text-sm text-[#344054]"><option value="all">全部状态</option>{Object.entries(statusLabel).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select>
-                  <select value={creationMode} onChange={(event) => setCreationMode(event.target.value)} className="h-10 rounded-lg border border-[#D0D5DD] bg-white px-3 text-sm text-[#344054]"><option value="all">全部创建方式</option>{Object.entries(creationModeLabel).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select>
+                <form onSubmit={submitSearch} className="grid gap-3 md:grid-cols-[minmax(220px,1fr)_auto]">
+                  <label className="relative"><span className="sr-only">搜索文稿</span><Search className="absolute left-3 top-3 h-4 w-4 text-[#98A2B3]" /><input value={searchDraft} onChange={(event) => setSearchDraft(event.target.value)} placeholder="搜索文稿名称" className="h-10 w-full rounded-lg border border-[#D0D5DD] pl-9 pr-3 text-sm outline-none focus:border-[#8B7DFF]" /></label>
+                  <button type="submit" className="h-10 rounded-lg bg-[#101828] px-4 text-sm font-medium text-white">搜索</button>
+                </form>
+                <div className="mt-3 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                  <select value={status} onChange={(event) => { setStatus(event.target.value); setPage(1); }} className="h-10 rounded-lg border border-[#D0D5DD] bg-white px-3 text-sm text-[#344054]"><option value="all">全部状态</option>{Object.entries(statusLabel).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select>
+                  <select value={creationMode} onChange={(event) => { setCreationMode(event.target.value); setPage(1); }} className="h-10 rounded-lg border border-[#D0D5DD] bg-white px-3 text-sm text-[#344054]"><option value="all">全部创建方式</option>{Object.entries(creationModeLabel).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select>
+                  <select value={sortBy} onChange={(event) => { setSortBy(event.target.value as typeof sortBy); setPage(1); }} className="h-10 rounded-lg border border-[#D0D5DD] bg-white px-3 text-sm text-[#344054]"><option value="updated_desc">最近更新</option><option value="updated_asc">最早更新</option><option value="created_desc">最近创建</option><option value="title_asc">名称 A-Z</option><option value="title_desc">名称 Z-A</option></select>
+                  <label className="flex h-10 items-center gap-2 rounded-lg border border-[#D0D5DD] px-3 text-sm text-[#344054]"><input type="checkbox" checked={mineOnly} onChange={(event) => { setMineOnly(event.target.checked); setPage(1); }} className="h-4 w-4 rounded border-[#D0D5DD]" />只看我创建的</label>
                 </div>
                 {canEdit && selected.length > 0 && (
                   <div className="mt-4 flex flex-wrap items-center gap-3 rounded-xl bg-[#F8F7FF] px-4 py-3">
@@ -309,18 +404,19 @@ export default function WorkspacePresentationsPage() {
 
               <div className="mt-4 overflow-hidden rounded-2xl border border-[#E4E7EC] bg-white">
                 <div className="flex items-center border-b border-[#EAECF0] bg-[#F9FAFB] px-4 py-3 text-xs font-medium text-[#667085]">
-                  {canEdit && <input type="checkbox" checked={allVisibleSelected} onChange={() => setSelected(allVisibleSelected ? selected.filter((id) => !visiblePresentations.some((item) => item.id === id)) : Array.from(new Set([...selected, ...visiblePresentations.map((item) => item.id)])))} className="mr-3 h-4 w-4 rounded border-[#D0D5DD]" aria-label="选择全部可见文稿" />}
-                  <span>共 {visiblePresentations.length} 份文稿</span>
+                  {canEdit && movablePresentations.length > 0 && <input type="checkbox" checked={allVisibleSelected} onChange={() => setSelected(allVisibleSelected ? selected.filter((id) => !movablePresentations.some((item) => item.id === id)) : Array.from(new Set([...selected, ...movablePresentations.map((item) => item.id)])))} className="mr-3 h-4 w-4 rounded border-[#D0D5DD]" aria-label="选择全部可见文稿" />}
+                  <span>共 {total} 份文稿</span>
                 </div>
-                {visiblePresentations.map((item) => (
+                {presentations.map((item) => (
                   <article key={item.id} className="flex flex-col gap-4 border-b border-[#EAECF0] px-4 py-4 last:border-b-0 sm:flex-row sm:items-center">
-                    {canEdit && <input type="checkbox" checked={selected.includes(item.id)} onChange={() => setSelected((current) => current.includes(item.id) ? current.filter((id) => id !== item.id) : [...current, item.id])} className="h-4 w-4 shrink-0 rounded border-[#D0D5DD]" aria-label={`选择${item.title || "未命名文稿"}`} />}
-                    <div className="flex min-w-0 flex-1 items-start gap-3"><div className="rounded-lg bg-[#F0EEFF] p-2 text-[#635BFF]"><FileText className="h-5 w-5" /></div><div className="min-w-0"><h2 className="truncate text-sm font-semibold text-[#101828]">{item.title || "未命名文稿"}</h2><div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-[#667085]"><span>{creationModeLabel[item.creation_mode]}</span><span>{folderNames.get(item.folder_id || "") || "未分类"}</span><span>{new Date(item.updated_at).toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" })}</span></div></div></div>
-                    <div className="flex items-center gap-2 pl-11 sm:pl-0"><span className="rounded-full bg-[#F2F4F7] px-2.5 py-1 text-xs text-[#475467]">{statusLabel[item.status]}</span><Link href={`/workspace/presentations/${item.id}?workspace_id=${encodeURIComponent(workspaceId)}`} className="inline-flex h-8 items-center gap-1 rounded-lg border border-[#D0D5DD] px-2.5 text-xs text-[#344054] hover:bg-[#F9FAFB]">治理详情<ChevronRight className="h-3.5 w-3.5" /></Link>{item.can_open && <Link href={`/presentation?id=${encodeURIComponent(item.presentation_id)}&type=standard`} className="inline-flex h-8 items-center gap-1 rounded-lg bg-[#101828] px-2.5 text-xs text-white">打开<ExternalLink className="h-3.5 w-3.5" /></Link>}</div>
+                    {canEdit && item.status !== "archived" && <input type="checkbox" checked={selected.includes(item.id)} onChange={() => setSelected((current) => current.includes(item.id) ? current.filter((id) => id !== item.id) : [...current, item.id])} className="h-4 w-4 shrink-0 rounded border-[#D0D5DD]" aria-label={`选择${item.title || "未命名文稿"}`} />}
+                    <div className="flex min-w-0 flex-1 items-start gap-3"><div className="rounded-lg bg-[#F0EEFF] p-2 text-[#635BFF]"><FileText className="h-5 w-5" /></div><div className="min-w-0"><h2 className="truncate text-sm font-semibold text-[#101828]">{item.title || "未命名文稿"}</h2><div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-[#667085]"><span>{creationModeLabel[item.creation_mode]}</span><span>{folderNames.get(item.folder_id || "") || "未分类"}</span><span>创建人：{item.creator_username || "未知"}</span><span>{new Date(item.updated_at).toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" })}</span></div></div></div>
+                    <div className="flex flex-wrap items-center gap-2 pl-11 sm:justify-end sm:pl-0"><span className="rounded-full bg-[#F2F4F7] px-2.5 py-1 text-xs text-[#475467]">{statusLabel[item.status]}</span>{item.status !== "archived" && <Link href={`/workspace/presentations/${item.id}/review?workspace_id=${encodeURIComponent(workspaceId)}`} className="inline-flex h-8 items-center gap-1 rounded-lg border border-[#D0D5DD] px-2.5 text-xs text-[#344054] hover:bg-[#F9FAFB]">治理详情<ChevronRight className="h-3.5 w-3.5" /></Link>}{item.can_open && item.status !== "archived" && <Link href={`/presentation?id=${encodeURIComponent(item.presentation_id)}&type=standard&workspace_id=${encodeURIComponent(workspaceId)}&entry_id=${encodeURIComponent(item.id)}`} className="inline-flex h-8 items-center gap-1 rounded-lg bg-[#101828] px-2.5 text-xs text-white">打开<ExternalLink className="h-3.5 w-3.5" /></Link>}{canEdit && (item.status === "draft" || item.status === "archived") && <button type="button" onClick={() => setPresentationLifecycleTarget(item)} className={`inline-flex h-8 items-center gap-1 rounded-lg border px-2.5 text-xs ${item.status === "archived" ? "border-[#B9B2FF] text-[#5146E5]" : "border-[#FDA29B] text-[#B42318]"}`}>{item.status === "archived" ? <RotateCcw className="h-3.5 w-3.5" /> : <Archive className="h-3.5 w-3.5" />}{item.status === "archived" ? "恢复" : "归档"}</button>}</div>
                   </article>
                 ))}
-                {!visiblePresentations.length && <div className="py-16 text-center"><FileText className="mx-auto h-8 w-8 text-[#D0D5DD]" /><p className="mt-3 text-sm font-medium text-[#475467]">没有符合条件的文稿</p><p className="mt-1 text-xs text-[#98A2B3]">可调整文件夹或筛选条件后重试</p></div>}
+                {!presentations.length && <div className="py-16 text-center"><FileText className="mx-auto h-8 w-8 text-[#D0D5DD]" /><p className="mt-3 text-sm font-medium text-[#475467]">没有符合条件的文稿</p><p className="mt-1 text-xs text-[#98A2B3]">可调整文件夹或筛选条件后重试</p></div>}
               </div>
+              {pages > 1 && <div className="mt-4 flex items-center justify-between text-sm text-[#667085]"><span>第 {page} / {pages} 页</span><div className="flex gap-2"><button type="button" disabled={page <= 1 || loading} onClick={() => setPage((current) => Math.max(1, current - 1))} className="h-9 rounded-lg border border-[#D0D5DD] bg-white px-3 disabled:opacity-40">上一页</button><button type="button" disabled={page >= pages || loading} onClick={() => setPage((current) => Math.min(pages, current + 1))} className="h-9 rounded-lg border border-[#D0D5DD] bg-white px-3 disabled:opacity-40">下一页</button></div></div>}
             </section>
           </div>
         )}
@@ -338,6 +434,26 @@ export default function WorkspacePresentationsPage() {
       {archiveTarget && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-[#101828]/40 p-4">
           <div role="alertdialog" aria-modal="true" aria-labelledby="archive-title" className="w-full max-w-md rounded-2xl bg-white p-5 shadow-xl"><div className="flex items-start gap-3"><div className="rounded-full bg-[#FEF3F2] p-2 text-[#B42318]"><AlertTriangle className="h-5 w-5" /></div><div><h2 id="archive-title" className="font-semibold text-[#101828]">归档“{archiveTarget.name}”</h2><p className="mt-1 text-sm text-[#667085]">只能归档空文件夹。归档后不会再显示在文稿中心。</p></div></div><div className="mt-5 flex justify-end gap-2"><button type="button" onClick={() => setArchiveTarget(null)} className="h-9 rounded-lg border border-[#D0D5DD] px-3 text-sm">取消</button><button type="button" disabled={pending === "archive"} onClick={archiveFolder} className="inline-flex h-9 items-center rounded-lg bg-[#D92D20] px-4 text-sm font-medium text-white disabled:opacity-50">{pending === "archive" && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}确认归档</button></div></div>
+        </div>
+      )}
+
+      {presentationLifecycleTarget && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-[#101828]/40 p-4">
+          <div role="alertdialog" aria-modal="true" aria-labelledby="presentation-lifecycle-title" className="w-full max-w-md rounded-2xl bg-white p-5 shadow-xl">
+            <div className="flex items-start gap-3">
+              <div className={`rounded-full p-2 ${presentationLifecycleTarget.status === "archived" ? "bg-[#F0EEFF] text-[#635BFF]" : "bg-[#FEF3F2] text-[#B42318]"}`}>
+                {presentationLifecycleTarget.status === "archived" ? <RotateCcw className="h-5 w-5" /> : <Archive className="h-5 w-5" />}
+              </div>
+              <div>
+                <h2 id="presentation-lifecycle-title" className="font-semibold text-[#101828]">{presentationLifecycleTarget.status === "archived" ? "恢复" : "归档"}“{presentationLifecycleTarget.title || "未命名文稿"}”</h2>
+                <p className="mt-1 text-sm text-[#667085]">{presentationLifecycleTarget.status === "archived" ? "恢复后文稿将回到草稿状态，并出现在未分类目录。" : "归档后文稿将从日常列表移入已归档视图，之后仍可恢复。"}</p>
+              </div>
+            </div>
+            <div className="mt-5 flex justify-end gap-2">
+              <button type="button" onClick={() => setPresentationLifecycleTarget(null)} className="h-9 rounded-lg border border-[#D0D5DD] px-3 text-sm">取消</button>
+              <button type="button" disabled={pending === "presentation-lifecycle"} onClick={changePresentationLifecycle} className={`inline-flex h-9 items-center rounded-lg px-4 text-sm font-medium text-white disabled:opacity-50 ${presentationLifecycleTarget.status === "archived" ? "bg-[#635BFF]" : "bg-[#D92D20]"}`}>{pending === "presentation-lifecycle" && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}{presentationLifecycleTarget.status === "archived" ? "确认恢复" : "确认归档"}</button>
+            </div>
+          </div>
         </div>
       )}
     </main>

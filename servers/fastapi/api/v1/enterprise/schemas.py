@@ -995,6 +995,18 @@ class PresentationEntryResponse(BaseModel):
     updated_at: datetime
 
 
+class PresentationCatalogItemResponse(PresentationEntryResponse):
+    creator_username: str | None = None
+
+
+class PresentationCatalogResponse(BaseModel):
+    items: list[PresentationCatalogItemResponse]
+    total: int
+    page: int
+    page_size: int
+    pages: int
+
+
 class PresentationReviewDecisionRequest(BaseModel):
     action: str = Field(pattern="^(approve|reject)$")
     comment: str | None = Field(default=None, max_length=2000)

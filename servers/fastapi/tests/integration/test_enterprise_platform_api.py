@@ -964,6 +964,17 @@ def test_folder_management_and_presentation_bulk_move(tmp_path):
                     title="文件夹管理验证文稿",
                 )
             )
+            session.add(
+                SlideModel(
+                    owner_id=users["owner"].id,
+                    presentation=presentation_id,
+                    layout_group="general",
+                    layout="general-1",
+                    index=0,
+                    content={"title": "复制验证"},
+                    ui={"id": "copy-slide", "elements": []},
+                )
+            )
             await session.commit()
 
     asyncio.run(seed_presentation())
@@ -1046,6 +1057,33 @@ def test_folder_management_and_presentation_bulk_move(tmp_path):
         restored = client.post(
             f"/api/v1/enterprise/workspaces/{workspace['id']}/presentations/{registered.json()['id']}/restore"
         )
+        bulk_archived = client.post(
+            f"/api/v1/enterprise/workspaces/{workspace['id']}/presentations/lifecycle",
+            json={"entry_ids": [registered.json()["id"]], "action": "archive"},
+        )
+        bulk_restored = client.post(
+            f"/api/v1/enterprise/workspaces/{workspace['id']}/presentations/lifecycle",
+            json={"entry_ids": [registered.json()["id"]], "action": "restore"},
+        )
+        target_workspace = client.post(
+            "/api/v1/enterprise/workspaces",
+            json={"name": "复制目标空间", "workspace_type": "team"},
+        ).json()
+        target_folder = client.post(
+            f"/api/v1/enterprise/workspaces/{target_workspace['id']}/folders",
+            json={"name": "复制稿"},
+        ).json()
+        copied = client.post(
+            f"/api/v1/enterprise/workspaces/{workspace['id']}/presentations/{registered.json()['id']}/copy",
+            json={
+                "target_workspace_id": target_workspace["id"],
+                "target_folder_id": target_folder["id"],
+                "title": "跨空间独立副本",
+            },
+        )
+        copied_catalog = client.get(
+            f"/api/v1/enterprise/workspaces/{target_workspace['id']}/presentations/search"
+        )
         child_archived = client.delete(
             f"/api/v1/enterprise/workspaces/{workspace['id']}/folders/{child.json()['id']}"
         )
@@ -1079,6 +1117,34 @@ def test_folder_management_and_presentation_bulk_move(tmp_path):
         assert archived_catalog.json()["items"][0]["id"] == registered.json()["id"]
         assert restored.status_code == 200
         assert restored.json()["status"] == "draft"
+        assert bulk_archived.status_code == 200
+        assert bulk_archived.json()[0]["status"] == "archived"
+        assert bulk_restored.status_code == 200
+        assert bulk_restored.json()[0]["status"] == "draft"
+        assert copied.status_code == 201
+        assert copied.json()["title"] == "跨空间独立副本"
+        assert copied.json()["workspace_id"] == target_workspace["id"]
+        assert copied.json()["folder_id"] == target_folder["id"]
+        assert copied.json()["presentation_id"] != str(presentation_id)
+        assert copied_catalog.json()["items"][0]["id"] == copied.json()["id"]
+
+        async def copied_slide_details():
+            async with session_maker() as session:
+                slide = await session.scalar(
+                    select(SlideModel)
+                    .execution_options(skip_owner_scope=True)
+                    .where(
+                        SlideModel.presentation
+                        == uuid.UUID(copied.json()["presentation_id"])
+                    )
+                )
+                return slide.owner_id, slide.content
+
+        copied_slide_owner, copied_slide_content = asyncio.run(
+            copied_slide_details()
+        )
+        assert copied_slide_owner == users["owner"].id
+        assert copied_slide_content == {"title": "复制验证"}
         assert child_archived.status_code == 204
         assert root_archived.status_code == 204
         assert folders.json() == []

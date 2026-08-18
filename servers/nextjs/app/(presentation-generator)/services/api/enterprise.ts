@@ -1398,6 +1398,56 @@ export class EnterpriseApi {
     );
   }
 
+  static async bulkUpdatePresentationLifecycle(
+    workspaceId: string,
+    entryIds: string[],
+    action: "archive" | "restore"
+  ): Promise<PresentationEntryResponse[]> {
+    const response = await fetch(
+      getApiUrl(
+        `/api/v1/enterprise/workspaces/${encodeURIComponent(workspaceId)}/presentations/lifecycle`
+      ),
+      {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ entry_ids: entryIds, action }),
+      }
+    );
+    return ApiResponseHandler.handleResponse(
+      response,
+      action === "archive"
+        ? "批量归档失败，请确认所选文稿均为草稿"
+        : "批量恢复失败，请确认所选文稿均已归档"
+    );
+  }
+
+  static async copyPresentation(
+    workspaceId: string,
+    entryId: string,
+    input: {
+      target_workspace_id: string;
+      target_folder_id: string | null;
+      title?: string;
+    }
+  ): Promise<PresentationEntryResponse> {
+    const response = await fetch(
+      getApiUrl(
+        `/api/v1/enterprise/workspaces/${encodeURIComponent(workspaceId)}/presentations/${encodeURIComponent(entryId)}/copy`
+      ),
+      {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(input),
+      }
+    );
+    return ApiResponseHandler.handleResponse(
+      response,
+      "文稿复制失败，请检查目标工作空间权限"
+    );
+  }
+
   static async getFolders(workspaceId: string): Promise<FolderResponse[]> {
     const response = await fetch(
       getApiUrl(

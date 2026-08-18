@@ -976,6 +976,25 @@ class PresentationBulkMoveRequest(BaseModel):
     folder_id: uuid.UUID | None = None
 
 
+class PresentationBulkLifecycleRequest(BaseModel):
+    entry_ids: list[uuid.UUID] = Field(min_length=1, max_length=100)
+    action: str = Field(pattern="^(archive|restore)$")
+
+
+class PresentationCopyRequest(BaseModel):
+    target_workspace_id: uuid.UUID
+    target_folder_id: uuid.UUID | None = None
+    title: str | None = Field(default=None, max_length=500)
+
+    @field_validator("title")
+    @classmethod
+    def normalize_optional_title(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        return normalized or None
+
+
 class PresentationEntryResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

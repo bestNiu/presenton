@@ -8,6 +8,7 @@ import {
   Archive,
   CheckCircle2,
   ChevronRight,
+  Copy,
   ExternalLink,
   FileText,
   Folder,
@@ -74,8 +75,11 @@ function flattenFolders(folders: FolderResponse[]): FolderRow[] {
 
 export default function WorkspacePresentationsPage() {
   const router = useRouter();
-  const { activeWorkspace: workspace, activeWorkspaceId: workspaceId } =
-    useEnterpriseWorkspace();
+  const {
+    activeWorkspace: workspace,
+    activeWorkspaceId: workspaceId,
+    workspaces,
+  } = useEnterpriseWorkspace();
   const [folders, setFolders] = useState<FolderResponse[]>([]);
   const [presentations, setPresentations] = useState<PresentationCatalogItemResponse[]>([]);
   const [activeFolder, setActiveFolder] = useState<"all" | "root" | string>("all");
@@ -98,6 +102,12 @@ export default function WorkspacePresentationsPage() {
   const [archiveTarget, setArchiveTarget] = useState<FolderResponse | null>(null);
   const [presentationLifecycleTarget, setPresentationLifecycleTarget] =
     useState<PresentationCatalogItemResponse | null>(null);
+  const [copyTarget, setCopyTarget] =
+    useState<PresentationCatalogItemResponse | null>(null);
+  const [copyWorkspaceId, setCopyWorkspaceId] = useState("");
+  const [copyFolderId, setCopyFolderId] = useState("root");
+  const [copyTitle, setCopyTitle] = useState("");
+  const [copyFolders, setCopyFolders] = useState<FolderResponse[]>([]);
   const [loading, setLoading] = useState(true);
   const [pending, setPending] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -106,6 +116,34 @@ export default function WorkspacePresentationsPage() {
   const canEdit = ["owner", "admin", "editor"].includes(
     workspace?.current_user_role || "viewer"
   );
+  const editableWorkspaces = useMemo(
+    () =>
+      workspaces.filter((item) =>
+        ["owner", "admin", "editor"].includes(item.current_user_role)
+      ),
+    [workspaces]
+  );
+
+  useEffect(() => {
+    if (!copyTarget || !copyWorkspaceId) {
+      setCopyFolders([]);
+      return;
+    }
+    let active = true;
+    EnterpriseApi.getFolders(copyWorkspaceId)
+      .then((rows) => {
+        if (active) setCopyFolders(rows);
+      })
+      .catch((cause) => {
+        if (active) {
+          setCopyFolders([]);
+          setError(cause instanceof Error ? cause.message : "目标文件夹加载失败");
+        }
+      });
+    return () => {
+      active = false;
+    };
+  }, [copyTarget, copyWorkspaceId]);
 
   const load = useCallback(async () => {
     if (!workspaceId) {
@@ -157,6 +195,10 @@ export default function WorkspacePresentationsPage() {
   }, [load]);
 
   const folderRows = useMemo(() => flattenFolders(folders), [folders]);
+  const copyFolderRows = useMemo(
+    () => flattenFolders(copyFolders),
+    [copyFolders]
+  );
   const folderNames = useMemo(
     () => new Map(folders.map((folder) => [folder.id, folder.name])),
     [folders]
@@ -317,9 +359,63 @@ export default function WorkspacePresentationsPage() {
     );
   };
 
+  const bulkArchivePresentations = () => {
+    if (!workspaceId || !selected.length) return;
+    void runAction(
+      "bulk-archive",
+      async () => {
+        await EnterpriseApi.bulkUpdatePresentationLifecycle(
+          workspaceId,
+          selected,
+          "archive"
+        );
+        await load();
+      },
+      `已归档 ${selected.length} 份文稿`
+    );
+  };
+
+  const openCopyDialog = (item: PresentationCatalogItemResponse) => {
+    const preferredWorkspace =
+      editableWorkspaces.find((candidate) => candidate.id !== workspaceId) ||
+      editableWorkspaces[0];
+    if (!preferredWorkspace) return;
+    setCopyTarget(item);
+    setCopyWorkspaceId(preferredWorkspace.id);
+    setCopyFolderId("root");
+    setCopyTitle(`${item.title || "未命名文稿"}（副本）`);
+  };
+
+  const copyPresentation = (event: FormEvent) => {
+    event.preventDefault();
+    if (!workspaceId || !copyTarget || !copyWorkspaceId) return;
+    const targetWorkspace = editableWorkspaces.find(
+      (candidate) => candidate.id === copyWorkspaceId
+    );
+    void runAction(
+      "copy-presentation",
+      async () => {
+        await EnterpriseApi.copyPresentation(workspaceId, copyTarget.id, {
+          target_workspace_id: copyWorkspaceId,
+          target_folder_id: copyFolderId === "root" ? null : copyFolderId,
+          title: copyTitle.trim() || undefined,
+        });
+        setCopyTarget(null);
+        if (copyWorkspaceId === workspaceId) await load();
+      },
+      `文稿已复制到${targetWorkspace ? `“${targetWorkspace.name}”` : "目标工作空间"}`
+    );
+  };
+
   const movablePresentations = presentations.filter(
     (item) => item.status !== "archived"
   );
+  const selectedItems = presentations.filter((item) =>
+    selected.includes(item.id)
+  );
+  const canBulkArchive =
+    selectedItems.length === selected.length &&
+    selectedItems.every((item) => item.status === "draft");
   const allVisibleSelected =
     movablePresentations.length > 0 &&
     movablePresentations.every((item) => selected.includes(item.id));
@@ -397,6 +493,7 @@ export default function WorkspacePresentationsPage() {
                     <span className="text-sm font-medium text-[#4238CA]">已选择 {selected.length} 项</span>
                     <select value={moveTarget} onChange={(event) => setMoveTarget(event.target.value)} className="h-9 min-w-[180px] rounded-lg border border-[#C7C2FF] bg-white px-3 text-sm"><option value="root">未分类（根目录）</option>{folderRows.map((folder) => <option key={folder.id} value={folder.id}>{"　".repeat(folder.depth)}{folder.name}</option>)}</select>
                     <button type="button" disabled={pending === "move"} onClick={movePresentations} className="inline-flex h-9 items-center rounded-lg bg-[#635BFF] px-3 text-sm font-medium text-white disabled:opacity-50">{pending === "move" && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}批量移动</button>
+                    <button type="button" disabled={!canBulkArchive || pending === "bulk-archive"} onClick={bulkArchivePresentations} title={canBulkArchive ? "归档所选草稿" : "批量归档仅支持草稿文稿"} className="inline-flex h-9 items-center rounded-lg border border-[#FDA29B] bg-white px-3 text-sm font-medium text-[#B42318] disabled:opacity-40">{pending === "bulk-archive" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Archive className="mr-2 h-4 w-4" />}批量归档</button>
                     <button type="button" onClick={() => setSelected([])} className="text-sm text-[#667085]">取消选择</button>
                   </div>
                 )}
@@ -411,7 +508,7 @@ export default function WorkspacePresentationsPage() {
                   <article key={item.id} className="flex flex-col gap-4 border-b border-[#EAECF0] px-4 py-4 last:border-b-0 sm:flex-row sm:items-center">
                     {canEdit && item.status !== "archived" && <input type="checkbox" checked={selected.includes(item.id)} onChange={() => setSelected((current) => current.includes(item.id) ? current.filter((id) => id !== item.id) : [...current, item.id])} className="h-4 w-4 shrink-0 rounded border-[#D0D5DD]" aria-label={`选择${item.title || "未命名文稿"}`} />}
                     <div className="flex min-w-0 flex-1 items-start gap-3"><div className="rounded-lg bg-[#F0EEFF] p-2 text-[#635BFF]"><FileText className="h-5 w-5" /></div><div className="min-w-0"><h2 className="truncate text-sm font-semibold text-[#101828]">{item.title || "未命名文稿"}</h2><div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-[#667085]"><span>{creationModeLabel[item.creation_mode]}</span><span>{folderNames.get(item.folder_id || "") || "未分类"}</span><span>创建人：{item.creator_username || "未知"}</span><span>{new Date(item.updated_at).toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" })}</span></div></div></div>
-                    <div className="flex flex-wrap items-center gap-2 pl-11 sm:justify-end sm:pl-0"><span className="rounded-full bg-[#F2F4F7] px-2.5 py-1 text-xs text-[#475467]">{statusLabel[item.status]}</span>{item.status !== "archived" && <Link href={`/workspace/presentations/${item.id}/review?workspace_id=${encodeURIComponent(workspaceId)}`} className="inline-flex h-8 items-center gap-1 rounded-lg border border-[#D0D5DD] px-2.5 text-xs text-[#344054] hover:bg-[#F9FAFB]">治理详情<ChevronRight className="h-3.5 w-3.5" /></Link>}{item.can_open && item.status !== "archived" && <Link href={`/presentation?id=${encodeURIComponent(item.presentation_id)}&type=standard&workspace_id=${encodeURIComponent(workspaceId)}&entry_id=${encodeURIComponent(item.id)}`} className="inline-flex h-8 items-center gap-1 rounded-lg bg-[#101828] px-2.5 text-xs text-white">打开<ExternalLink className="h-3.5 w-3.5" /></Link>}{canEdit && (item.status === "draft" || item.status === "archived") && <button type="button" onClick={() => setPresentationLifecycleTarget(item)} className={`inline-flex h-8 items-center gap-1 rounded-lg border px-2.5 text-xs ${item.status === "archived" ? "border-[#B9B2FF] text-[#5146E5]" : "border-[#FDA29B] text-[#B42318]"}`}>{item.status === "archived" ? <RotateCcw className="h-3.5 w-3.5" /> : <Archive className="h-3.5 w-3.5" />}{item.status === "archived" ? "恢复" : "归档"}</button>}</div>
+                    <div className="flex flex-wrap items-center gap-2 pl-11 sm:justify-end sm:pl-0"><span className="rounded-full bg-[#F2F4F7] px-2.5 py-1 text-xs text-[#475467]">{statusLabel[item.status]}</span>{item.status !== "archived" && <Link href={`/workspace/presentations/${item.id}/review?workspace_id=${encodeURIComponent(workspaceId)}`} className="inline-flex h-8 items-center gap-1 rounded-lg border border-[#D0D5DD] px-2.5 text-xs text-[#344054] hover:bg-[#F9FAFB]">治理详情<ChevronRight className="h-3.5 w-3.5" /></Link>}{item.can_open && item.status !== "archived" && <Link href={`/presentation?id=${encodeURIComponent(item.presentation_id)}&type=standard&workspace_id=${encodeURIComponent(workspaceId)}&entry_id=${encodeURIComponent(item.id)}`} className="inline-flex h-8 items-center gap-1 rounded-lg bg-[#101828] px-2.5 text-xs text-white">打开<ExternalLink className="h-3.5 w-3.5" /></Link>}{item.status !== "archived" && editableWorkspaces.length > 0 && <button type="button" onClick={() => openCopyDialog(item)} className="inline-flex h-8 items-center gap-1 rounded-lg border border-[#B9B2FF] px-2.5 text-xs text-[#5146E5]"><Copy className="h-3.5 w-3.5" />复制</button>}{canEdit && (item.status === "draft" || item.status === "archived") && <button type="button" onClick={() => setPresentationLifecycleTarget(item)} className={`inline-flex h-8 items-center gap-1 rounded-lg border px-2.5 text-xs ${item.status === "archived" ? "border-[#B9B2FF] text-[#5146E5]" : "border-[#FDA29B] text-[#B42318]"}`}>{item.status === "archived" ? <RotateCcw className="h-3.5 w-3.5" /> : <Archive className="h-3.5 w-3.5" />}{item.status === "archived" ? "恢复" : "归档"}</button>}</div>
                   </article>
                 ))}
                 {!presentations.length && <div className="py-16 text-center"><FileText className="mx-auto h-8 w-8 text-[#D0D5DD]" /><p className="mt-3 text-sm font-medium text-[#475467]">没有符合条件的文稿</p><p className="mt-1 text-xs text-[#98A2B3]">可调整文件夹或筛选条件后重试</p></div>}
@@ -434,6 +531,23 @@ export default function WorkspacePresentationsPage() {
       {archiveTarget && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-[#101828]/40 p-4">
           <div role="alertdialog" aria-modal="true" aria-labelledby="archive-title" className="w-full max-w-md rounded-2xl bg-white p-5 shadow-xl"><div className="flex items-start gap-3"><div className="rounded-full bg-[#FEF3F2] p-2 text-[#B42318]"><AlertTriangle className="h-5 w-5" /></div><div><h2 id="archive-title" className="font-semibold text-[#101828]">归档“{archiveTarget.name}”</h2><p className="mt-1 text-sm text-[#667085]">只能归档空文件夹。归档后不会再显示在文稿中心。</p></div></div><div className="mt-5 flex justify-end gap-2"><button type="button" onClick={() => setArchiveTarget(null)} className="h-9 rounded-lg border border-[#D0D5DD] px-3 text-sm">取消</button><button type="button" disabled={pending === "archive"} onClick={archiveFolder} className="inline-flex h-9 items-center rounded-lg bg-[#D92D20] px-4 text-sm font-medium text-white disabled:opacity-50">{pending === "archive" && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}确认归档</button></div></div>
+        </div>
+      )}
+
+      {copyTarget && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-[#101828]/40 p-4">
+          <div role="dialog" aria-modal="true" aria-labelledby="copy-presentation-title" className="w-full max-w-md rounded-2xl bg-white p-5 shadow-xl">
+            <div className="flex items-center justify-between">
+              <div><h2 id="copy-presentation-title" className="font-semibold text-[#101828]">复制到工作空间</h2><p className="mt-1 text-sm text-[#667085]">将创建可独立编辑的文稿和页面副本。</p></div>
+              <button type="button" onClick={() => setCopyTarget(null)} className="rounded-lg p-1 text-[#667085] hover:bg-[#F2F4F7]"><X className="h-5 w-5" /></button>
+            </div>
+            <form onSubmit={copyPresentation} className="mt-5 space-y-4">
+              <label className="block text-sm font-medium text-[#344054]">副本名称<input value={copyTitle} onChange={(event) => setCopyTitle(event.target.value)} maxLength={500} className="mt-1.5 h-10 w-full rounded-lg border border-[#D0D5DD] px-3 text-sm outline-none focus:border-[#8B7DFF]" /></label>
+              <label className="block text-sm font-medium text-[#344054]">目标工作空间<select value={copyWorkspaceId} onChange={(event) => { setCopyWorkspaceId(event.target.value); setCopyFolderId("root"); }} className="mt-1.5 h-10 w-full rounded-lg border border-[#D0D5DD] bg-white px-3 text-sm">{editableWorkspaces.map((item) => <option key={item.id} value={item.id}>{item.name}{item.id === workspaceId ? "（当前）" : ""}</option>)}</select></label>
+              <label className="block text-sm font-medium text-[#344054]">目标文件夹<select value={copyFolderId} onChange={(event) => setCopyFolderId(event.target.value)} className="mt-1.5 h-10 w-full rounded-lg border border-[#D0D5DD] bg-white px-3 text-sm"><option value="root">未分类（根目录）</option>{copyFolderRows.map((folder) => <option key={folder.id} value={folder.id}>{"　".repeat(folder.depth)}{folder.name}</option>)}</select></label>
+              <div className="flex justify-end gap-2 border-t border-[#EAECF0] pt-4"><button type="button" onClick={() => setCopyTarget(null)} className="h-9 rounded-lg border border-[#D0D5DD] px-3 text-sm">取消</button><button type="submit" disabled={!copyWorkspaceId || pending === "copy-presentation"} className="inline-flex h-9 items-center rounded-lg bg-[#635BFF] px-4 text-sm font-medium text-white disabled:opacity-50">{pending === "copy-presentation" && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}创建副本</button></div>
+            </form>
+          </div>
         </div>
       )}
 

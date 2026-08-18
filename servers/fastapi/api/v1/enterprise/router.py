@@ -98,8 +98,10 @@ from api.v1.enterprise.schemas import (
     EnterpriseKnowledgePresentationResponse,
     PresentationEntryResponse,
     PresentationBulkMoveRequest,
+    PresentationBulkLifecycleRequest,
     PresentationCatalogItemResponse,
     PresentationCatalogResponse,
+    PresentationCopyRequest,
     PresentationCommentCreateRequest,
     PresentationCommentReplyCreateRequest,
     PresentationCommentReplyResponse,
@@ -152,6 +154,8 @@ from models.sql.enterprise.audit_event import AuditEventModel
 from models.sql.user import User
 from services.database import get_async_session
 from services.enterprise.presentation_workspace_service import (
+    bulk_set_presentation_archived,
+    copy_presentation_to_workspace,
     list_presentation_entries,
     move_presentation_entries,
     register_presentation,
@@ -1935,6 +1939,48 @@ async def post_presentation_entries_move(
         )
         for entry in entries
     ]
+
+
+@API_V1_ENTERPRISE_ROUTER.post(
+    "/workspaces/{workspace_id}/presentations/lifecycle",
+    response_model=list[PresentationEntryResponse],
+)
+async def post_presentation_entries_lifecycle(
+    workspace_id: uuid.UUID,
+    body: PresentationBulkLifecycleRequest,
+    principal: AuthPrincipal = Depends(principal_from_request),
+    session: AsyncSession = Depends(get_async_session),
+):
+    return await bulk_set_presentation_archived(
+        session,
+        principal=principal,
+        workspace_id=workspace_id,
+        entry_ids=body.entry_ids,
+        archived=body.action == "archive",
+    )
+
+
+@API_V1_ENTERPRISE_ROUTER.post(
+    "/workspaces/{workspace_id}/presentations/{entry_id}/copy",
+    response_model=PresentationEntryResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def post_presentation_entry_copy(
+    workspace_id: uuid.UUID,
+    entry_id: uuid.UUID,
+    body: PresentationCopyRequest,
+    principal: AuthPrincipal = Depends(principal_from_request),
+    session: AsyncSession = Depends(get_async_session),
+):
+    return await copy_presentation_to_workspace(
+        session,
+        principal=principal,
+        source_workspace_id=workspace_id,
+        entry_id=entry_id,
+        target_workspace_id=body.target_workspace_id,
+        target_folder_id=body.target_folder_id,
+        title=body.title,
+    )
 
 
 @API_V1_ENTERPRISE_ROUTER.post(

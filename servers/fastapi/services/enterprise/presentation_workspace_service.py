@@ -14,6 +14,7 @@ from domains.platform.enums import (
 from models.sql.enterprise.presentation_entry import PresentationEntryModel
 from models.sql.enterprise.workspace import WorkspaceFolderModel
 from models.sql.presentation import PresentationModel
+from models.sql.slide import SlideModel
 from models.sql.user import User
 from services.enterprise.audit_service import record_audit_event
 from services.enterprise.scene_service import get_active_scene
@@ -267,6 +268,187 @@ async def set_presentation_archived(
     await session.commit()
     await session.refresh(entry)
     return entry
+
+
+async def bulk_set_presentation_archived(
+    session: AsyncSession,
+    *,
+    principal: AuthPrincipal,
+    workspace_id: uuid.UUID,
+    entry_ids: list[uuid.UUID],
+    archived: bool,
+) -> list[PresentationEntryModel]:
+    await require_workspace_role(
+        session,
+        workspace_id=workspace_id,
+        principal=principal,
+        required_role=WorkspaceRole.EDITOR,
+    )
+    unique_ids = set(entry_ids)
+    entries = list(
+        (
+            await session.scalars(
+                select(PresentationEntryModel).where(
+                    PresentationEntryModel.workspace_id == workspace_id,
+                    PresentationEntryModel.id.in_(unique_ids),
+                )
+            )
+        ).all()
+    )
+    if len(entries) != len(unique_ids):
+        raise HTTPException(status_code=404, detail="部分文稿不存在或不属于当前工作空间")
+    required_status = (
+        PresentationEntryStatus.DRAFT
+        if archived
+        else PresentationEntryStatus.ARCHIVED
+    )
+    if any(PresentationEntryStatus(entry.status) != required_status for entry in entries):
+        detail = (
+            "批量归档仅支持草稿文稿"
+            if archived
+            else "批量恢复仅支持已归档文稿"
+        )
+        raise HTTPException(status_code=409, detail=detail)
+    target_status = (
+        PresentationEntryStatus.ARCHIVED
+        if archived
+        else PresentationEntryStatus.DRAFT
+    )
+    action = "presentation.archived" if archived else "presentation.restored"
+    for entry in entries:
+        previous_folder_id = entry.folder_id
+        entry.status = target_status
+        if archived:
+            entry.folder_id = None
+        entry.row_version += 1
+        session.add(entry)
+        record_audit_event(
+            session,
+            actor_id=principal.user_id,
+            workspace_id=workspace_id,
+            action=action,
+            resource_type="presentation_entry",
+            resource_id=entry.id,
+            metadata={
+                "bulk": True,
+                "previous_status": required_status.value,
+                "status": target_status.value,
+                "previous_folder_id": (
+                    str(previous_folder_id) if previous_folder_id else None
+                ),
+            },
+        )
+    await session.commit()
+    for entry in entries:
+        await session.refresh(entry)
+    return entries
+
+
+async def copy_presentation_to_workspace(
+    session: AsyncSession,
+    *,
+    principal: AuthPrincipal,
+    source_workspace_id: uuid.UUID,
+    entry_id: uuid.UUID,
+    target_workspace_id: uuid.UUID,
+    target_folder_id: uuid.UUID | None,
+    title: str | None,
+) -> PresentationEntryModel:
+    await require_workspace_role(
+        session,
+        workspace_id=source_workspace_id,
+        principal=principal,
+    )
+    await require_workspace_role(
+        session,
+        workspace_id=target_workspace_id,
+        principal=principal,
+        required_role=WorkspaceRole.EDITOR,
+    )
+    source_entry = await session.scalar(
+        select(PresentationEntryModel).where(
+            PresentationEntryModel.id == entry_id,
+            PresentationEntryModel.workspace_id == source_workspace_id,
+        )
+    )
+    if source_entry is None:
+        raise HTTPException(status_code=404, detail="源文稿不存在或不属于当前工作空间")
+    if PresentationEntryStatus(source_entry.status) == PresentationEntryStatus.ARCHIVED:
+        raise HTTPException(status_code=409, detail="请先恢复源文稿，再复制到其他工作空间")
+    if target_folder_id is not None:
+        target_folder = await session.get(WorkspaceFolderModel, target_folder_id)
+        if (
+            target_folder is None
+            or target_folder.workspace_id != target_workspace_id
+            or target_folder.is_archived
+        ):
+            raise HTTPException(status_code=404, detail="目标文件夹不存在")
+    source_presentation = await session.scalar(
+        select(PresentationModel)
+        .execution_options(skip_owner_scope=True)
+        .where(PresentationModel.id == source_entry.presentation_id)
+    )
+    if source_presentation is None:
+        raise HTTPException(status_code=404, detail="源演示文稿不存在")
+    source_slides = list(
+        await session.scalars(
+            select(SlideModel)
+            .execution_options(skip_owner_scope=True)
+            .where(SlideModel.presentation == source_presentation.id)
+            .order_by(SlideModel.index)
+        )
+    )
+    copied_presentation = source_presentation.get_new_presentation()
+    copied_presentation.owner_id = principal.user_id
+    copied_presentation.title = title or f"{source_presentation.title or '未命名文稿'}（副本）"
+    copied_slides = [
+        slide.get_new_slide(copied_presentation.id) for slide in source_slides
+    ]
+    for slide in copied_slides:
+        slide.owner_id = principal.user_id
+    copied_entry = PresentationEntryModel(
+        workspace_id=target_workspace_id,
+        folder_id=target_folder_id,
+        presentation_id=copied_presentation.id,
+        created_by=principal.user_id,
+        title=copied_presentation.title,
+        scene_type=source_entry.scene_type,
+        scene_version=source_entry.scene_version,
+        creation_mode=source_entry.creation_mode,
+        status=PresentationEntryStatus.DRAFT,
+    )
+    session.add(copied_presentation)
+    session.add_all(copied_slides)
+    session.add(copied_entry)
+    record_audit_event(
+        session,
+        actor_id=principal.user_id,
+        workspace_id=target_workspace_id,
+        action="presentation.copied_in",
+        resource_type="presentation_entry",
+        resource_id=copied_entry.id,
+        metadata={
+            "source_workspace_id": str(source_workspace_id),
+            "source_entry_id": str(source_entry.id),
+            "source_presentation_id": str(source_presentation.id),
+            "presentation_id": str(copied_presentation.id),
+        },
+    )
+    record_audit_event(
+        session,
+        actor_id=principal.user_id,
+        workspace_id=source_workspace_id,
+        action="presentation.copied_out",
+        resource_type="presentation_entry",
+        resource_id=source_entry.id,
+        metadata={
+            "target_workspace_id": str(target_workspace_id),
+            "target_entry_id": str(copied_entry.id),
+        },
+    )
+    await session.commit()
+    await session.refresh(copied_entry)
+    return copied_entry
 
 
 async def move_presentation_entries(

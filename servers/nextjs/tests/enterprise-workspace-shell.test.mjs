@@ -47,6 +47,9 @@ test("presentation center supports folder organization and bulk movement", async
   assert.match(page, /最近更新/);
   assert.match(page, /新建文稿/);
   assert.match(page, /确认恢复/);
+  assert.match(page, /批量归档/);
+  assert.match(page, /复制到工作空间/);
+  assert.match(page, /可独立编辑的文稿和页面副本/);
   assert.match(page, /\/review\?workspace_id=/);
   assert.match(page, /role="alertdialog"/);
   assert.doesNotMatch(page, /window\.confirm/);
@@ -57,6 +60,8 @@ test("presentation center supports folder organization and bulk movement", async
   assert.match(enterpriseApi, /getPresentationCatalog/);
   assert.match(enterpriseApi, /archivePresentation/);
   assert.match(enterpriseApi, /restorePresentation/);
+  assert.match(enterpriseApi, /bulkUpdatePresentationLifecycle/);
+  assert.match(enterpriseApi, /copyPresentation/);
 });
 
 test("workspace settings exposes business-friendly governance and member flows", async () => {

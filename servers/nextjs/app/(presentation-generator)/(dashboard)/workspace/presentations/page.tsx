@@ -25,6 +25,7 @@ import {
   EnterpriseApi,
   type FolderResponse,
   type PresentationCatalogItemResponse,
+  type PresentationArchiveLifecycleResponse,
   type PresentationCreationMode,
   type PresentationEntryResponse,
 } from "@/app/(presentation-generator)/services/api/enterprise";
@@ -94,6 +95,7 @@ export default function WorkspacePresentationsPage() {
   const [page, setPage] = useState(1);
   const [total, setTotal] = useState(0);
   const [pages, setPages] = useState(0);
+  const [archiveRetentionDays, setArchiveRetentionDays] = useState(30);
   const [selected, setSelected] = useState<string[]>([]);
   const [moveTarget, setMoveTarget] = useState("root");
   const [folderDialog, setFolderDialog] = useState<FolderResponse | "create" | null>(null);
@@ -108,12 +110,20 @@ export default function WorkspacePresentationsPage() {
   const [copyFolderId, setCopyFolderId] = useState("root");
   const [copyTitle, setCopyTitle] = useState("");
   const [copyFolders, setCopyFolders] = useState<FolderResponse[]>([]);
+  const [purgeTarget, setPurgeTarget] =
+    useState<PresentationCatalogItemResponse | null>(null);
+  const [purgeConfirmTitle, setPurgeConfirmTitle] = useState("");
+  const [lifecycleResult, setLifecycleResult] =
+    useState<PresentationArchiveLifecycleResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [pending, setPending] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
 
   const canEdit = ["owner", "admin", "editor"].includes(
+    workspace?.current_user_role || "viewer"
+  );
+  const canAdmin = ["owner", "admin"].includes(
     workspace?.current_user_role || "viewer"
   );
   const editableWorkspaces = useMemo(
@@ -182,6 +192,7 @@ export default function WorkspacePresentationsPage() {
       setPresentations(catalog.items);
       setTotal(catalog.total);
       setPages(catalog.pages);
+      setArchiveRetentionDays(catalog.archive_retention_days);
       setSelected([]);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "文稿中心加载失败");
@@ -359,19 +370,24 @@ export default function WorkspacePresentationsPage() {
     );
   };
 
-  const bulkArchivePresentations = () => {
+  const bulkUpdatePresentationLifecycle = () => {
     if (!workspaceId || !selected.length) return;
+    const action = selectedItems.every((item) => item.status === "archived")
+      ? "restore"
+      : "archive";
     void runAction(
-      "bulk-archive",
+      "bulk-lifecycle",
       async () => {
         await EnterpriseApi.bulkUpdatePresentationLifecycle(
           workspaceId,
           selected,
-          "archive"
+          action
         );
         await load();
       },
-      `已归档 ${selected.length} 份文稿`
+      action === "archive"
+        ? `已归档 ${selected.length} 份文稿`
+        : `已恢复 ${selected.length} 份文稿`
     );
   };
 
@@ -407,18 +423,56 @@ export default function WorkspacePresentationsPage() {
     );
   };
 
-  const movablePresentations = presentations.filter(
-    (item) => item.status !== "archived"
-  );
+  const purgePresentation = (event: FormEvent) => {
+    event.preventDefault();
+    if (!workspaceId || !purgeTarget) return;
+    void runAction(
+      "purge-presentation",
+      async () => {
+        await EnterpriseApi.purgePresentation(
+          workspaceId,
+          purgeTarget.id,
+          purgeConfirmTitle
+        );
+        setPurgeTarget(null);
+        setPurgeConfirmTitle("");
+        await load();
+      },
+      "归档文稿已彻底删除"
+    );
+  };
+
+  const runArchiveLifecycle = (execute: boolean) => {
+    if (!workspaceId || !canAdmin) return;
+    void runAction(
+      execute ? "lifecycle-execute" : "lifecycle-preview",
+      async () => {
+        const result = await EnterpriseApi.runPresentationArchiveLifecycle(
+          workspaceId,
+          execute
+        );
+        setLifecycleResult(result);
+        if (execute) await load();
+      },
+      execute ? "过期归档清理已完成" : "过期归档预检已完成"
+    );
+  };
+
   const selectedItems = presentations.filter((item) =>
     selected.includes(item.id)
   );
+  const canBulkMove =
+    selectedItems.length === selected.length &&
+    selectedItems.every((item) => item.status !== "archived");
   const canBulkArchive =
     selectedItems.length === selected.length &&
     selectedItems.every((item) => item.status === "draft");
+  const canBulkRestore =
+    selectedItems.length === selected.length &&
+    selectedItems.every((item) => item.status === "archived");
   const allVisibleSelected =
-    movablePresentations.length > 0 &&
-    movablePresentations.every((item) => selected.includes(item.id));
+    presentations.length > 0 &&
+    presentations.every((item) => selected.includes(item.id));
 
   return (
     <main className="min-h-screen bg-[#FBFBFD] px-5 py-8 sm:px-8 lg:px-10">
@@ -488,12 +542,19 @@ export default function WorkspacePresentationsPage() {
                   <select value={sortBy} onChange={(event) => { setSortBy(event.target.value as typeof sortBy); setPage(1); }} className="h-10 rounded-lg border border-[#D0D5DD] bg-white px-3 text-sm text-[#344054]"><option value="updated_desc">最近更新</option><option value="updated_asc">最早更新</option><option value="created_desc">最近创建</option><option value="title_asc">名称 A-Z</option><option value="title_desc">名称 Z-A</option></select>
                   <label className="flex h-10 items-center gap-2 rounded-lg border border-[#D0D5DD] px-3 text-sm text-[#344054]"><input type="checkbox" checked={mineOnly} onChange={(event) => { setMineOnly(event.target.checked); setPage(1); }} className="h-4 w-4 rounded border-[#D0D5DD]" />只看我创建的</label>
                 </div>
+                {canAdmin && status === "archived" && (
+                  <div className="mt-3 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-[#E4E7EC] bg-[#F9FAFB] px-4 py-3">
+                    <div><p className="text-sm font-medium text-[#344054]">归档保留 {archiveRetentionDays} 天</p><p className="mt-0.5 text-xs text-[#667085]">先预检过期文稿，确认候选范围后再执行清理。</p></div>
+                    <div className="flex gap-2"><button type="button" disabled={pending === "lifecycle-preview"} onClick={() => runArchiveLifecycle(false)} className="h-9 rounded-lg border border-[#D0D5DD] bg-white px-3 text-sm disabled:opacity-50">预检过期文稿</button>{lifecycleResult && lifecycleResult.candidate_count > 0 && <button type="button" disabled={pending === "lifecycle-execute"} onClick={() => runArchiveLifecycle(true)} className="h-9 rounded-lg bg-[#B42318] px-3 text-sm font-medium text-white disabled:opacity-50">清理 {lifecycleResult.candidate_count} 份过期文稿</button>}</div>
+                    {lifecycleResult && <p className="w-full text-xs text-[#667085]">最近预检：候选 {lifecycleResult.candidate_count} 份，已清理 {lifecycleResult.purged_count} 份。</p>}
+                  </div>
+                )}
                 {canEdit && selected.length > 0 && (
                   <div className="mt-4 flex flex-wrap items-center gap-3 rounded-xl bg-[#F8F7FF] px-4 py-3">
                     <span className="text-sm font-medium text-[#4238CA]">已选择 {selected.length} 项</span>
                     <select value={moveTarget} onChange={(event) => setMoveTarget(event.target.value)} className="h-9 min-w-[180px] rounded-lg border border-[#C7C2FF] bg-white px-3 text-sm"><option value="root">未分类（根目录）</option>{folderRows.map((folder) => <option key={folder.id} value={folder.id}>{"　".repeat(folder.depth)}{folder.name}</option>)}</select>
-                    <button type="button" disabled={pending === "move"} onClick={movePresentations} className="inline-flex h-9 items-center rounded-lg bg-[#635BFF] px-3 text-sm font-medium text-white disabled:opacity-50">{pending === "move" && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}批量移动</button>
-                    <button type="button" disabled={!canBulkArchive || pending === "bulk-archive"} onClick={bulkArchivePresentations} title={canBulkArchive ? "归档所选草稿" : "批量归档仅支持草稿文稿"} className="inline-flex h-9 items-center rounded-lg border border-[#FDA29B] bg-white px-3 text-sm font-medium text-[#B42318] disabled:opacity-40">{pending === "bulk-archive" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Archive className="mr-2 h-4 w-4" />}批量归档</button>
+                    <button type="button" disabled={!canBulkMove || pending === "move"} onClick={movePresentations} title={canBulkMove ? "移动所选文稿" : "已归档文稿不能移动"} className="inline-flex h-9 items-center rounded-lg bg-[#635BFF] px-3 text-sm font-medium text-white disabled:opacity-40">{pending === "move" && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}批量移动</button>
+                    <button type="button" disabled={(!canBulkArchive && !canBulkRestore) || pending === "bulk-lifecycle"} onClick={bulkUpdatePresentationLifecycle} title={canBulkArchive ? "归档所选草稿" : canBulkRestore ? "恢复所选归档文稿" : "请选择状态一致的草稿或归档文稿"} className="inline-flex h-9 items-center rounded-lg border border-[#FDA29B] bg-white px-3 text-sm font-medium text-[#B42318] disabled:opacity-40">{pending === "bulk-lifecycle" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : canBulkRestore ? <RotateCcw className="mr-2 h-4 w-4" /> : <Archive className="mr-2 h-4 w-4" />}{canBulkRestore ? "批量恢复" : "批量归档"}</button>
                     <button type="button" onClick={() => setSelected([])} className="text-sm text-[#667085]">取消选择</button>
                   </div>
                 )}
@@ -501,14 +562,14 @@ export default function WorkspacePresentationsPage() {
 
               <div className="mt-4 overflow-hidden rounded-2xl border border-[#E4E7EC] bg-white">
                 <div className="flex items-center border-b border-[#EAECF0] bg-[#F9FAFB] px-4 py-3 text-xs font-medium text-[#667085]">
-                  {canEdit && movablePresentations.length > 0 && <input type="checkbox" checked={allVisibleSelected} onChange={() => setSelected(allVisibleSelected ? selected.filter((id) => !movablePresentations.some((item) => item.id === id)) : Array.from(new Set([...selected, ...movablePresentations.map((item) => item.id)])))} className="mr-3 h-4 w-4 rounded border-[#D0D5DD]" aria-label="选择全部可见文稿" />}
+                  {canEdit && presentations.length > 0 && <input type="checkbox" checked={allVisibleSelected} onChange={() => setSelected(allVisibleSelected ? selected.filter((id) => !presentations.some((item) => item.id === id)) : Array.from(new Set([...selected, ...presentations.map((item) => item.id)])))} className="mr-3 h-4 w-4 rounded border-[#D0D5DD]" aria-label="选择全部可见文稿" />}
                   <span>共 {total} 份文稿</span>
                 </div>
                 {presentations.map((item) => (
                   <article key={item.id} className="flex flex-col gap-4 border-b border-[#EAECF0] px-4 py-4 last:border-b-0 sm:flex-row sm:items-center">
-                    {canEdit && item.status !== "archived" && <input type="checkbox" checked={selected.includes(item.id)} onChange={() => setSelected((current) => current.includes(item.id) ? current.filter((id) => id !== item.id) : [...current, item.id])} className="h-4 w-4 shrink-0 rounded border-[#D0D5DD]" aria-label={`选择${item.title || "未命名文稿"}`} />}
-                    <div className="flex min-w-0 flex-1 items-start gap-3"><div className="rounded-lg bg-[#F0EEFF] p-2 text-[#635BFF]"><FileText className="h-5 w-5" /></div><div className="min-w-0"><h2 className="truncate text-sm font-semibold text-[#101828]">{item.title || "未命名文稿"}</h2><div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-[#667085]"><span>{creationModeLabel[item.creation_mode]}</span><span>{folderNames.get(item.folder_id || "") || "未分类"}</span><span>创建人：{item.creator_username || "未知"}</span><span>{new Date(item.updated_at).toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" })}</span></div></div></div>
-                    <div className="flex flex-wrap items-center gap-2 pl-11 sm:justify-end sm:pl-0"><span className="rounded-full bg-[#F2F4F7] px-2.5 py-1 text-xs text-[#475467]">{statusLabel[item.status]}</span>{item.status !== "archived" && <Link href={`/workspace/presentations/${item.id}/review?workspace_id=${encodeURIComponent(workspaceId)}`} className="inline-flex h-8 items-center gap-1 rounded-lg border border-[#D0D5DD] px-2.5 text-xs text-[#344054] hover:bg-[#F9FAFB]">治理详情<ChevronRight className="h-3.5 w-3.5" /></Link>}{item.can_open && item.status !== "archived" && <Link href={`/presentation?id=${encodeURIComponent(item.presentation_id)}&type=standard&workspace_id=${encodeURIComponent(workspaceId)}&entry_id=${encodeURIComponent(item.id)}`} className="inline-flex h-8 items-center gap-1 rounded-lg bg-[#101828] px-2.5 text-xs text-white">打开<ExternalLink className="h-3.5 w-3.5" /></Link>}{item.status !== "archived" && editableWorkspaces.length > 0 && <button type="button" onClick={() => openCopyDialog(item)} className="inline-flex h-8 items-center gap-1 rounded-lg border border-[#B9B2FF] px-2.5 text-xs text-[#5146E5]"><Copy className="h-3.5 w-3.5" />复制</button>}{canEdit && (item.status === "draft" || item.status === "archived") && <button type="button" onClick={() => setPresentationLifecycleTarget(item)} className={`inline-flex h-8 items-center gap-1 rounded-lg border px-2.5 text-xs ${item.status === "archived" ? "border-[#B9B2FF] text-[#5146E5]" : "border-[#FDA29B] text-[#B42318]"}`}>{item.status === "archived" ? <RotateCcw className="h-3.5 w-3.5" /> : <Archive className="h-3.5 w-3.5" />}{item.status === "archived" ? "恢复" : "归档"}</button>}</div>
+                    {canEdit && <input type="checkbox" checked={selected.includes(item.id)} onChange={() => setSelected((current) => current.includes(item.id) ? current.filter((id) => id !== item.id) : [...current, item.id])} className="h-4 w-4 shrink-0 rounded border-[#D0D5DD]" aria-label={`选择${item.title || "未命名文稿"}`} />}
+                    <div className="flex min-w-0 flex-1 items-start gap-3"><div className="rounded-lg bg-[#F0EEFF] p-2 text-[#635BFF]"><FileText className="h-5 w-5" /></div><div className="min-w-0"><h2 className="truncate text-sm font-semibold text-[#101828]">{item.title || "未命名文稿"}</h2><div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-[#667085]"><span>{creationModeLabel[item.creation_mode]}</span><span>{folderNames.get(item.folder_id || "") || "未分类"}</span><span>创建人：{item.creator_username || "未知"}</span><span>{new Date(item.updated_at).toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" })}</span>{item.archive_expires_at && <span className="text-[#B54708]">保留至 {new Date(item.archive_expires_at).toLocaleDateString("zh-CN")}</span>}</div></div></div>
+                    <div className="flex flex-wrap items-center gap-2 pl-11 sm:justify-end sm:pl-0"><span className="rounded-full bg-[#F2F4F7] px-2.5 py-1 text-xs text-[#475467]">{statusLabel[item.status]}</span>{item.status !== "archived" && <Link href={`/workspace/presentations/${item.id}/review?workspace_id=${encodeURIComponent(workspaceId)}`} className="inline-flex h-8 items-center gap-1 rounded-lg border border-[#D0D5DD] px-2.5 text-xs text-[#344054] hover:bg-[#F9FAFB]">治理详情<ChevronRight className="h-3.5 w-3.5" /></Link>}{item.can_open && item.status !== "archived" && <Link href={`/presentation?id=${encodeURIComponent(item.presentation_id)}&type=standard&workspace_id=${encodeURIComponent(workspaceId)}&entry_id=${encodeURIComponent(item.id)}`} className="inline-flex h-8 items-center gap-1 rounded-lg bg-[#101828] px-2.5 text-xs text-white">打开<ExternalLink className="h-3.5 w-3.5" /></Link>}{item.status !== "archived" && editableWorkspaces.length > 0 && <button type="button" onClick={() => openCopyDialog(item)} className="inline-flex h-8 items-center gap-1 rounded-lg border border-[#B9B2FF] px-2.5 text-xs text-[#5146E5]"><Copy className="h-3.5 w-3.5" />复制</button>}{canEdit && (item.status === "draft" || item.status === "archived") && <button type="button" onClick={() => setPresentationLifecycleTarget(item)} className={`inline-flex h-8 items-center gap-1 rounded-lg border px-2.5 text-xs ${item.status === "archived" ? "border-[#B9B2FF] text-[#5146E5]" : "border-[#FDA29B] text-[#B42318]"}`}>{item.status === "archived" ? <RotateCcw className="h-3.5 w-3.5" /> : <Archive className="h-3.5 w-3.5" />}{item.status === "archived" ? "恢复" : "归档"}</button>}{canAdmin && item.status === "archived" && <button type="button" onClick={() => { setPurgeTarget(item); setPurgeConfirmTitle(""); }} className="inline-flex h-8 items-center rounded-lg border border-[#FDA29B] px-2.5 text-xs text-[#B42318]">彻底删除</button>}</div>
                   </article>
                 ))}
                 {!presentations.length && <div className="py-16 text-center"><FileText className="mx-auto h-8 w-8 text-[#D0D5DD]" /><p className="mt-3 text-sm font-medium text-[#475467]">没有符合条件的文稿</p><p className="mt-1 text-xs text-[#98A2B3]">可调整文件夹或筛选条件后重试</p></div>}
@@ -531,6 +592,15 @@ export default function WorkspacePresentationsPage() {
       {archiveTarget && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-[#101828]/40 p-4">
           <div role="alertdialog" aria-modal="true" aria-labelledby="archive-title" className="w-full max-w-md rounded-2xl bg-white p-5 shadow-xl"><div className="flex items-start gap-3"><div className="rounded-full bg-[#FEF3F2] p-2 text-[#B42318]"><AlertTriangle className="h-5 w-5" /></div><div><h2 id="archive-title" className="font-semibold text-[#101828]">归档“{archiveTarget.name}”</h2><p className="mt-1 text-sm text-[#667085]">只能归档空文件夹。归档后不会再显示在文稿中心。</p></div></div><div className="mt-5 flex justify-end gap-2"><button type="button" onClick={() => setArchiveTarget(null)} className="h-9 rounded-lg border border-[#D0D5DD] px-3 text-sm">取消</button><button type="button" disabled={pending === "archive"} onClick={archiveFolder} className="inline-flex h-9 items-center rounded-lg bg-[#D92D20] px-4 text-sm font-medium text-white disabled:opacity-50">{pending === "archive" && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}确认归档</button></div></div>
+        </div>
+      )}
+
+      {purgeTarget && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-[#101828]/40 p-4">
+          <div role="alertdialog" aria-modal="true" aria-labelledby="purge-presentation-title" className="w-full max-w-md rounded-2xl bg-white p-5 shadow-xl">
+            <div className="flex items-start gap-3"><div className="rounded-full bg-[#FEF3F2] p-2 text-[#B42318]"><AlertTriangle className="h-5 w-5" /></div><div><h2 id="purge-presentation-title" className="font-semibold text-[#101828]">彻底删除归档文稿</h2><p className="mt-1 text-sm text-[#667085]">此操作会删除独立底稿和全部页面且无法恢复。请输入完整文稿名称确认。</p></div></div>
+            <form onSubmit={purgePresentation} className="mt-5 space-y-4"><div className="rounded-lg bg-[#F9FAFB] px-3 py-2 text-sm font-medium text-[#344054]">{purgeTarget.title || "未命名文稿"}</div><label className="block text-sm font-medium text-[#344054]">确认文稿名称<input autoFocus value={purgeConfirmTitle} onChange={(event) => setPurgeConfirmTitle(event.target.value)} className="mt-1.5 h-10 w-full rounded-lg border border-[#D0D5DD] px-3 text-sm outline-none focus:border-[#F04438]" /></label><div className="flex justify-end gap-2"><button type="button" onClick={() => setPurgeTarget(null)} className="h-9 rounded-lg border border-[#D0D5DD] px-3 text-sm">取消</button><button type="submit" disabled={purgeConfirmTitle !== (purgeTarget.title || "未命名文稿") || pending === "purge-presentation"} className="inline-flex h-9 items-center rounded-lg bg-[#D92D20] px-4 text-sm font-medium text-white disabled:opacity-40">{pending === "purge-presentation" && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}永久删除</button></div></form>
+          </div>
         </div>
       )}
 

@@ -812,6 +812,7 @@ class WorkspaceGovernancePolicyRequest(BaseModel):
     quality_gate_enabled: bool = True
     require_numeric_citations: bool = False
     revoked_delivery_retention_days: int = Field(default=90, ge=1, le=3650)
+    presentation_archive_retention_days: int = Field(default=30, ge=1, le=3650)
 
 
 class StorageLifecycleRunRequest(BaseModel):
@@ -1016,6 +1017,7 @@ class PresentationEntryResponse(BaseModel):
 
 class PresentationCatalogItemResponse(PresentationEntryResponse):
     creator_username: str | None = None
+    archive_expires_at: datetime | None = None
 
 
 class PresentationCatalogResponse(BaseModel):
@@ -1024,6 +1026,32 @@ class PresentationCatalogResponse(BaseModel):
     page: int
     page_size: int
     pages: int
+    archive_retention_days: int
+
+
+class PresentationPurgeRequest(BaseModel):
+    confirm_title: str = Field(min_length=1, max_length=500)
+
+
+class PresentationArchiveLifecycleRequest(BaseModel):
+    execute: bool = False
+    max_delete: int = Field(default=100, ge=1, le=1000)
+
+
+class PresentationArchiveCandidateResponse(BaseModel):
+    id: uuid.UUID
+    presentation_id: uuid.UUID
+    title: str | None
+    archived_at: datetime
+    expires_at: datetime
+
+
+class PresentationArchiveLifecycleResponse(BaseModel):
+    mode: str
+    retention_days: int
+    candidate_count: int
+    purged_count: int
+    candidates: list[PresentationArchiveCandidateResponse]
 
 
 class PresentationReviewDecisionRequest(BaseModel):

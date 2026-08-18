@@ -1084,6 +1084,74 @@ def test_folder_management_and_presentation_bulk_move(tmp_path):
         copied_catalog = client.get(
             f"/api/v1/enterprise/workspaces/{target_workspace['id']}/presentations/search"
         )
+
+        async def copied_slide_details():
+            async with session_maker() as session:
+                slide = await session.scalar(
+                    select(SlideModel)
+                    .execution_options(skip_owner_scope=True)
+                    .where(
+                        SlideModel.presentation
+                        == uuid.UUID(copied.json()["presentation_id"])
+                    )
+                )
+                return slide.owner_id, slide.content
+
+        copied_slide_owner, copied_slide_content = asyncio.run(
+            copied_slide_details()
+        )
+        client.post(
+            f"/api/v1/enterprise/workspaces/{target_workspace['id']}/presentations/{copied.json()['id']}/archive"
+        )
+        purge_wrong_confirmation = client.request(
+            "DELETE",
+            f"/api/v1/enterprise/workspaces/{target_workspace['id']}/presentations/{copied.json()['id']}/purge",
+            json={"confirm_title": "错误名称"},
+        )
+        purged = client.request(
+            "DELETE",
+            f"/api/v1/enterprise/workspaces/{target_workspace['id']}/presentations/{copied.json()['id']}/purge",
+            json={"confirm_title": "跨空间独立副本"},
+        )
+        lifecycle_copy = client.post(
+            f"/api/v1/enterprise/workspaces/{workspace['id']}/presentations/{registered.json()['id']}/copy",
+            json={
+                "target_workspace_id": target_workspace["id"],
+                "title": "等待生命周期清理的副本",
+            },
+        ).json()
+        client.post(
+            f"/api/v1/enterprise/workspaces/{target_workspace['id']}/presentations/{lifecycle_copy['id']}/archive"
+        )
+        policy = client.put(
+            f"/api/v1/enterprise/workspaces/{target_workspace['id']}/governance-policy",
+            json={
+                "review_mode": "single",
+                "quality_gate_enabled": True,
+                "require_numeric_citations": False,
+                "revoked_delivery_retention_days": 90,
+                "presentation_archive_retention_days": 1,
+            },
+        )
+
+        async def age_lifecycle_entry():
+            async with session_maker() as session:
+                entry = await session.get(
+                    PresentationEntryModel, uuid.UUID(lifecycle_copy["id"])
+                )
+                entry.updated_at = datetime.now(timezone.utc) - timedelta(days=2)
+                session.add(entry)
+                await session.commit()
+
+        asyncio.run(age_lifecycle_entry())
+        lifecycle_preview = client.post(
+            f"/api/v1/enterprise/workspaces/{target_workspace['id']}/presentation-archive-lifecycle-runs",
+            json={"execute": False, "max_delete": 10},
+        )
+        lifecycle_execute = client.post(
+            f"/api/v1/enterprise/workspaces/{target_workspace['id']}/presentation-archive-lifecycle-runs",
+            json={"execute": True, "max_delete": 10},
+        )
         child_archived = client.delete(
             f"/api/v1/enterprise/workspaces/{workspace['id']}/folders/{child.json()['id']}"
         )
@@ -1115,6 +1183,7 @@ def test_folder_management_and_presentation_bulk_move(tmp_path):
         assert archived.status_code == 200
         assert archived.json()["status"] == "archived"
         assert archived_catalog.json()["items"][0]["id"] == registered.json()["id"]
+        assert archived_catalog.json()["items"][0]["archive_expires_at"] is not None
         assert restored.status_code == 200
         assert restored.json()["status"] == "draft"
         assert bulk_archived.status_code == 200
@@ -1127,22 +1196,17 @@ def test_folder_management_and_presentation_bulk_move(tmp_path):
         assert copied.json()["folder_id"] == target_folder["id"]
         assert copied.json()["presentation_id"] != str(presentation_id)
         assert copied_catalog.json()["items"][0]["id"] == copied.json()["id"]
+        assert copied_catalog.json()["archive_retention_days"] == 30
+        assert purge_wrong_confirmation.status_code == 422
+        assert purged.status_code == 204
+        assert policy.status_code == 200
+        assert policy.json()["governance_policy"]["presentation_archive_retention_days"] == 1
+        assert lifecycle_preview.status_code == 200
+        assert lifecycle_preview.json()["candidate_count"] == 1
+        assert lifecycle_preview.json()["purged_count"] == 0
+        assert lifecycle_execute.status_code == 200
+        assert lifecycle_execute.json()["purged_count"] == 1
 
-        async def copied_slide_details():
-            async with session_maker() as session:
-                slide = await session.scalar(
-                    select(SlideModel)
-                    .execution_options(skip_owner_scope=True)
-                    .where(
-                        SlideModel.presentation
-                        == uuid.UUID(copied.json()["presentation_id"])
-                    )
-                )
-                return slide.owner_id, slide.content
-
-        copied_slide_owner, copied_slide_content = asyncio.run(
-            copied_slide_details()
-        )
         assert copied_slide_owner == users["owner"].id
         assert copied_slide_content == {"title": "复制验证"}
         assert child_archived.status_code == 204

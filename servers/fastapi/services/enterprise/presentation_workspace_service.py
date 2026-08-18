@@ -1,7 +1,8 @@
+from datetime import datetime, timedelta, timezone
 import uuid
 
 from fastapi import HTTPException
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -22,6 +23,17 @@ from services.enterprise.scene_registry_service import (
     require_direct_presentation_creation,
 )
 from services.enterprise.workspace_service import require_workspace_role
+
+
+def presentation_archive_retention_days(workspace) -> int:
+    configured = (workspace.governance_policy or {}).get(
+        "presentation_archive_retention_days", 30
+    )
+    return max(1, min(int(configured), 3650))
+
+
+def _aware(value: datetime) -> datetime:
+    return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
 
 
 async def register_presentation(
@@ -449,6 +461,145 @@ async def copy_presentation_to_workspace(
     await session.commit()
     await session.refresh(copied_entry)
     return copied_entry
+
+
+async def purge_archived_presentation(
+    session: AsyncSession,
+    *,
+    principal: AuthPrincipal,
+    workspace_id: uuid.UUID,
+    entry_id: uuid.UUID,
+    confirm_title: str,
+) -> None:
+    await require_workspace_role(
+        session,
+        workspace_id=workspace_id,
+        principal=principal,
+        required_role=WorkspaceRole.ADMIN,
+    )
+    entry = await session.scalar(
+        select(PresentationEntryModel).where(
+            PresentationEntryModel.id == entry_id,
+            PresentationEntryModel.workspace_id == workspace_id,
+        )
+    )
+    if entry is None:
+        raise HTTPException(status_code=404, detail="归档文稿不存在")
+    if PresentationEntryStatus(entry.status) != PresentationEntryStatus.ARCHIVED:
+        raise HTTPException(status_code=409, detail="只有已归档文稿可以彻底删除")
+    expected_title = entry.title or "未命名文稿"
+    if confirm_title.strip() != expected_title:
+        raise HTTPException(status_code=422, detail="确认名称与文稿名称不一致")
+    presentation = await session.scalar(
+        select(PresentationModel)
+        .execution_options(skip_owner_scope=True)
+        .where(PresentationModel.id == entry.presentation_id)
+    )
+    record_audit_event(
+        session,
+        actor_id=principal.user_id,
+        workspace_id=workspace_id,
+        action="presentation.purged",
+        resource_type="presentation_entry",
+        resource_id=entry.id,
+        metadata={
+            "title": expected_title,
+            "presentation_id": str(entry.presentation_id),
+            "reason": "manual",
+        },
+    )
+    await session.delete(entry)
+    if presentation is not None:
+        await session.execute(
+            delete(SlideModel)
+            .where(SlideModel.presentation == presentation.id)
+            .execution_options(skip_owner_scope=True)
+        )
+        await session.delete(presentation)
+    await session.commit()
+
+
+async def run_presentation_archive_lifecycle(
+    session: AsyncSession,
+    *,
+    principal: AuthPrincipal,
+    workspace_id: uuid.UUID,
+    execute: bool,
+    max_delete: int,
+) -> dict:
+    workspace, _ = await require_workspace_role(
+        session,
+        workspace_id=workspace_id,
+        principal=principal,
+        required_role=WorkspaceRole.ADMIN,
+    )
+    retention_days = presentation_archive_retention_days(workspace)
+    now = datetime.now(timezone.utc)
+    cutoff = now - timedelta(days=retention_days)
+    candidates = list(
+        (
+            await session.scalars(
+                select(PresentationEntryModel)
+                .where(
+                    PresentationEntryModel.workspace_id == workspace_id,
+                    PresentationEntryModel.status
+                    == PresentationEntryStatus.ARCHIVED,
+                    PresentationEntryModel.updated_at <= cutoff,
+                )
+                .order_by(PresentationEntryModel.updated_at.asc())
+                .limit(max_delete)
+            )
+        ).all()
+    )
+    response_candidates = [
+        {
+            "id": entry.id,
+            "presentation_id": entry.presentation_id,
+            "title": entry.title,
+            "archived_at": _aware(entry.updated_at),
+            "expires_at": _aware(entry.updated_at) + timedelta(days=retention_days),
+        }
+        for entry in candidates
+    ]
+    purged_count = 0
+    if execute:
+        for entry in candidates:
+            presentation = await session.scalar(
+                select(PresentationModel)
+                .execution_options(skip_owner_scope=True)
+                .where(PresentationModel.id == entry.presentation_id)
+            )
+            record_audit_event(
+                session,
+                actor_id=principal.user_id,
+                workspace_id=workspace_id,
+                action="presentation.purged",
+                resource_type="presentation_entry",
+                resource_id=entry.id,
+                metadata={
+                    "title": entry.title or "未命名文稿",
+                    "presentation_id": str(entry.presentation_id),
+                    "reason": "retention_expired",
+                    "retention_days": retention_days,
+                },
+            )
+            await session.delete(entry)
+            if presentation is not None:
+                await session.execute(
+                    delete(SlideModel)
+                    .where(SlideModel.presentation == presentation.id)
+                    .execution_options(skip_owner_scope=True)
+                )
+                await session.delete(presentation)
+            purged_count += 1
+        await session.commit()
+    return {
+        "mode": "execute" if execute else "dry_run",
+        "retention_days": retention_days,
+        "candidate_count": len(candidates),
+        "purged_count": purged_count,
+        "candidates": response_candidates,
+    }
 
 
 async def move_presentation_entries(

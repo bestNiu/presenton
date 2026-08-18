@@ -1,3 +1,4 @@
+from datetime import timedelta
 import uuid
 
 from fastapi import (
@@ -101,7 +102,10 @@ from api.v1.enterprise.schemas import (
     PresentationBulkLifecycleRequest,
     PresentationCatalogItemResponse,
     PresentationCatalogResponse,
+    PresentationArchiveLifecycleRequest,
+    PresentationArchiveLifecycleResponse,
     PresentationCopyRequest,
+    PresentationPurgeRequest,
     PresentationCommentCreateRequest,
     PresentationCommentReplyCreateRequest,
     PresentationCommentReplyResponse,
@@ -158,7 +162,10 @@ from services.enterprise.presentation_workspace_service import (
     copy_presentation_to_workspace,
     list_presentation_entries,
     move_presentation_entries,
+    presentation_archive_retention_days,
+    purge_archived_presentation,
     register_presentation,
+    run_presentation_archive_lifecycle,
     search_presentation_entries,
     set_presentation_archived,
 )
@@ -1550,6 +1557,14 @@ async def post_template_publication_action(
 
 
 def _workspace_response(workspace, role: WorkspaceRole) -> WorkspaceResponse:
+    governance_policy = {
+        "review_mode": "single",
+        "quality_gate_enabled": True,
+        "require_numeric_citations": False,
+        "revoked_delivery_retention_days": 90,
+        "presentation_archive_retention_days": 30,
+        **(workspace.governance_policy or {}),
+    }
     return WorkspaceResponse(
         id=workspace.id,
         owner_id=workspace.owner_id,
@@ -1557,7 +1572,7 @@ def _workspace_response(workspace, role: WorkspaceRole) -> WorkspaceResponse:
         workspace_type=workspace.workspace_type,
         confidentiality=workspace.confidentiality,
         is_archived=workspace.is_archived,
-        governance_policy=workspace.governance_policy,
+        governance_policy=governance_policy,
         current_user_role=WorkspaceRole(role),
         created_at=workspace.created_at,
         updated_at=workspace.updated_at,
@@ -1888,6 +1903,10 @@ async def get_presentation_catalog(
     principal: AuthPrincipal = Depends(principal_from_request),
     session: AsyncSession = Depends(get_async_session),
 ):
+    workspace, _ = await require_workspace_role(
+        session, workspace_id=workspace_id, principal=principal
+    )
+    retention_days = presentation_archive_retention_days(workspace)
     rows, total = await search_presentation_entries(
         session,
         principal=principal,
@@ -1905,7 +1924,16 @@ async def get_presentation_catalog(
     return PresentationCatalogResponse(
         items=[
             PresentationCatalogItemResponse.model_validate(entry).model_copy(
-                update={"can_open": True, "creator_username": username}
+                update={
+                    "can_open": True,
+                    "creator_username": username,
+                    "archive_expires_at": (
+                        entry.updated_at + timedelta(days=retention_days)
+                        if PresentationEntryStatus(entry.status)
+                        == PresentationEntryStatus.ARCHIVED
+                        else None
+                    ),
+                }
             )
             for entry, username in rows
         ],
@@ -1913,6 +1941,7 @@ async def get_presentation_catalog(
         page=page,
         page_size=page_size,
         pages=(total + page_size - 1) // page_size,
+        archive_retention_days=retention_days,
     )
 
 
@@ -1980,6 +2009,46 @@ async def post_presentation_entry_copy(
         target_workspace_id=body.target_workspace_id,
         target_folder_id=body.target_folder_id,
         title=body.title,
+    )
+
+
+@API_V1_ENTERPRISE_ROUTER.delete(
+    "/workspaces/{workspace_id}/presentations/{entry_id}/purge",
+    status_code=204,
+)
+async def delete_archived_presentation(
+    workspace_id: uuid.UUID,
+    entry_id: uuid.UUID,
+    body: PresentationPurgeRequest,
+    principal: AuthPrincipal = Depends(principal_from_request),
+    session: AsyncSession = Depends(get_async_session),
+):
+    await purge_archived_presentation(
+        session,
+        principal=principal,
+        workspace_id=workspace_id,
+        entry_id=entry_id,
+        confirm_title=body.confirm_title,
+    )
+    return Response(status_code=204)
+
+
+@API_V1_ENTERPRISE_ROUTER.post(
+    "/workspaces/{workspace_id}/presentation-archive-lifecycle-runs",
+    response_model=PresentationArchiveLifecycleResponse,
+)
+async def post_presentation_archive_lifecycle_run(
+    workspace_id: uuid.UUID,
+    body: PresentationArchiveLifecycleRequest,
+    principal: AuthPrincipal = Depends(principal_from_request),
+    session: AsyncSession = Depends(get_async_session),
+):
+    return await run_presentation_archive_lifecycle(
+        session,
+        principal=principal,
+        workspace_id=workspace_id,
+        execute=body.execute,
+        max_delete=body.max_delete,
     )
 
 

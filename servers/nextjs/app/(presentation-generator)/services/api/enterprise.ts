@@ -17,6 +17,7 @@ export interface WorkspaceResponse {
     quality_gate_enabled: boolean;
     require_numeric_citations: boolean;
     revoked_delivery_retention_days: number;
+    presentation_archive_retention_days: number;
   };
   current_user_role: WorkspaceRole;
   created_at: string;
@@ -258,6 +259,7 @@ export interface PresentationEntryResponse {
 export interface PresentationCatalogItemResponse
   extends PresentationEntryResponse {
   creator_username: string | null;
+  archive_expires_at: string | null;
 }
 
 export interface PresentationCatalogResponse {
@@ -266,6 +268,21 @@ export interface PresentationCatalogResponse {
   page: number;
   page_size: number;
   pages: number;
+  archive_retention_days: number;
+}
+
+export interface PresentationArchiveLifecycleResponse {
+  mode: "dry_run" | "execute";
+  retention_days: number;
+  candidate_count: number;
+  purged_count: number;
+  candidates: Array<{
+    id: string;
+    presentation_id: string;
+    title: string | null;
+    archived_at: string;
+    expires_at: string;
+  }>;
 }
 
 export interface EnterpriseDocumentResponse {
@@ -1445,6 +1462,50 @@ export class EnterpriseApi {
     return ApiResponseHandler.handleResponse(
       response,
       "文稿复制失败，请检查目标工作空间权限"
+    );
+  }
+
+  static async purgePresentation(
+    workspaceId: string,
+    entryId: string,
+    confirmTitle: string
+  ): Promise<void> {
+    const response = await fetch(
+      getApiUrl(
+        `/api/v1/enterprise/workspaces/${encodeURIComponent(workspaceId)}/presentations/${encodeURIComponent(entryId)}/purge`
+      ),
+      {
+        method: "DELETE",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ confirm_title: confirmTitle }),
+      }
+    );
+    return ApiResponseHandler.handleResponse(
+      response,
+      "文稿彻底删除失败，请确认名称和管理员权限"
+    );
+  }
+
+  static async runPresentationArchiveLifecycle(
+    workspaceId: string,
+    execute: boolean,
+    maxDelete = 100
+  ): Promise<PresentationArchiveLifecycleResponse> {
+    const response = await fetch(
+      getApiUrl(
+        `/api/v1/enterprise/workspaces/${encodeURIComponent(workspaceId)}/presentation-archive-lifecycle-runs`
+      ),
+      {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ execute, max_delete: maxDelete }),
+      }
+    );
+    return ApiResponseHandler.handleResponse(
+      response,
+      "归档清理任务执行失败，请稍后重试"
     );
   }
 

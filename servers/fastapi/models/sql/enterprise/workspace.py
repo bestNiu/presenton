@@ -43,6 +43,7 @@ class WorkspaceModel(SQLModel, table=True):
             "quality_gate_enabled": True,
             "require_numeric_citations": False,
             "revoked_delivery_retention_days": 90,
+            "presentation_archive_retention_days": 30,
         },
         sa_column=Column(JSON, nullable=False),
     )

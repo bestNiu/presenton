@@ -48,6 +48,7 @@ const auditActionLabel: Record<string, string> = {
   "workspace.member_added": "添加成员",
   "workspace.member_role_changed": "调整成员角色",
   "workspace.member_removed": "移除成员",
+  "presentation.purged": "彻底删除归档文稿",
 };
 
 export default function WorkspaceSettingsPage() {
@@ -64,6 +65,7 @@ export default function WorkspaceSettingsPage() {
     quality_gate_enabled: true,
     require_numeric_citations: false,
     revoked_delivery_retention_days: 90,
+    presentation_archive_retention_days: 30,
   });
   const [members, setMembers] = useState<WorkspaceMemberResponse[]>([]);
   const [auditEvents, setAuditEvents] = useState<AuditEventResponse[]>([]);
@@ -265,10 +267,11 @@ export default function WorkspaceSettingsPage() {
             </section>
 
             <section className="rounded-2xl border border-[#E4E7EC] bg-white p-5">
-              <div className="flex items-start justify-between gap-4"><div><h2 className="flex items-center gap-2 text-base font-semibold text-[#101828]"><ShieldCheck className="h-4 w-4 text-[#12B76A]" />治理策略</h2><p className="mt-1 text-sm text-[#667085]">控制评审、质量门禁、引用和撤销件保留。</p></div>{!canAdmin && <span className="rounded-full bg-[#F2F4F7] px-2.5 py-1 text-xs text-[#475467]">只读</span>}</div>
+              <div className="flex items-start justify-between gap-4"><div><h2 className="flex items-center gap-2 text-base font-semibold text-[#101828]"><ShieldCheck className="h-4 w-4 text-[#12B76A]" />治理策略</h2><p className="mt-1 text-sm text-[#667085]">控制评审、质量门禁、引用和内容保留期限。</p></div>{!canAdmin && <span className="rounded-full bg-[#F2F4F7] px-2.5 py-1 text-xs text-[#475467]">只读</span>}</div>
               <form onSubmit={savePolicy} className="mt-5 grid gap-4 md:grid-cols-2">
                 <label className="grid gap-1.5 text-xs font-medium text-[#475467]">评审模式<select value={policy.review_mode} onChange={(event) => setPolicy((current) => ({ ...current, review_mode: event.target.value as "none" | "single" }))} disabled={!canAdmin} className="h-10 rounded-lg border border-[#D0D5DD] bg-white px-3 text-sm disabled:bg-[#F9FAFB]"><option value="single">单级审批</option><option value="none">无需审批</option></select></label>
                 <label className="grid gap-1.5 text-xs font-medium text-[#475467]">撤销交付件保留天数<input type="number" min={1} max={3650} value={policy.revoked_delivery_retention_days} onChange={(event) => setPolicy((current) => ({ ...current, revoked_delivery_retention_days: Number(event.target.value) }))} disabled={!canAdmin} className="h-10 rounded-lg border border-[#D0D5DD] px-3 text-sm disabled:bg-[#F9FAFB]" /></label>
+                <label className="grid gap-1.5 text-xs font-medium text-[#475467]">归档文稿保留天数<input type="number" min={1} max={3650} value={policy.presentation_archive_retention_days} onChange={(event) => setPolicy((current) => ({ ...current, presentation_archive_retention_days: Number(event.target.value) }))} disabled={!canAdmin} className="h-10 rounded-lg border border-[#D0D5DD] px-3 text-sm disabled:bg-[#F9FAFB]" /></label>
                 <label className="flex items-start gap-3 rounded-xl bg-[#F9FAFB] p-3 text-sm text-[#344054]"><input type="checkbox" checked={policy.quality_gate_enabled} onChange={(event) => setPolicy((current) => ({ ...current, quality_gate_enabled: event.target.checked }))} disabled={!canAdmin} className="mt-1" /><span><span className="block font-medium">启用质量门禁</span><span className="mt-1 block text-xs text-[#667085]">存在阻断问题时禁止冻结和交付。</span></span></label>
                 <label className="flex items-start gap-3 rounded-xl bg-[#F9FAFB] p-3 text-sm text-[#344054]"><input type="checkbox" checked={policy.require_numeric_citations} onChange={(event) => setPolicy((current) => ({ ...current, require_numeric_citations: event.target.checked }))} disabled={!canAdmin} className="mt-1" /><span><span className="block font-medium">数字必须提供引用</span><span className="mt-1 block text-xs text-[#667085]">数据型陈述需要绑定可信来源。</span></span></label>
                 {canAdmin && <button type="submit" disabled={pending === "policy"} className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-[#17171B] px-4 text-sm font-medium text-white disabled:opacity-50 md:col-span-2 md:justify-self-start">{pending === "policy" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}保存治理策略</button>}

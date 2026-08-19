@@ -214,6 +214,9 @@ const UploadPage = () => {
     const params = new URLSearchParams(window.location.search);
     const requestedPrompt = params.get("prompt")?.trim();
     const requestedTemplate = params.get("template")?.trim();
+    const requestedSlides = params.get("slides")?.trim();
+    const requestedLanguage = params.get("language")?.trim();
+    const requestedTone = params.get("tone")?.trim();
     const requestedCommunityId = Number(params.get("communityId"));
     let active = true;
 
@@ -223,6 +226,12 @@ const UploadPage = () => {
     if (requestedPrompt) {
       setConfig((current) => ({ ...current, prompt: requestedPrompt }));
     }
+    setConfig((current) => ({
+      ...current,
+      ...(requestedSlides ? { slides: clampSlideCountValue(requestedSlides) } : {}),
+      ...(requestedLanguage && Object.values(LanguageType).includes(requestedLanguage as LanguageType) ? { language: requestedLanguage as LanguageType } : {}),
+      ...(requestedTone && Object.values(ToneType).includes(requestedTone as ToneType) ? { tone: requestedTone as ToneType } : {}),
+    }));
     if (requestedTemplate) {
       setSuggestedTemplate(requestedTemplate);
     }
@@ -230,7 +239,7 @@ const UploadPage = () => {
       workspaceId: params.get("workspace_id")?.trim() || undefined,
       folderId: params.get("folder_id")?.trim() || undefined,
       creationMode:
-        params.get("entry") === "template" ? "template" : "topic",
+        params.get("entry") === "template" ? "template" : params.get("entry") === "document" ? "document" : "topic",
     });
     if (Number.isSafeInteger(requestedCommunityId) && requestedCommunityId > 0) {
       CommunityPresentationApi.getById(requestedCommunityId)

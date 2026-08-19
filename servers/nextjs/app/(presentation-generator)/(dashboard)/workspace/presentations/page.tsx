@@ -15,7 +15,6 @@ import {
   FolderPlus,
   Loader2,
   Pencil,
-  Plus,
   RotateCcw,
   Search,
   X,
@@ -31,6 +30,7 @@ import {
 } from "@/app/(presentation-generator)/services/api/enterprise";
 import { PresentationGenerationApi } from "@/app/(presentation-generator)/services/api/presentation-generation";
 import { useEnterpriseWorkspace } from "../components/EnterpriseWorkspaceShell";
+import PresentationCreationWizard from "../components/PresentationCreationWizard";
 
 const creationModeLabel: Record<PresentationCreationMode, string> = {
   topic: "主题生成",
@@ -119,6 +119,7 @@ export default function WorkspacePresentationsPage() {
   const [pending, setPending] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
+  const [creationWizardOpen, setCreationWizardOpen] = useState(false);
 
   const canEdit = ["owner", "admin", "editor"].includes(
     workspace?.current_user_role || "viewer"
@@ -327,28 +328,14 @@ export default function WorkspacePresentationsPage() {
     setSearch(searchDraft.trim());
   };
 
-  const createHref = (entry: "topic" | "document" | "template") => {
-    const params = new URLSearchParams({ entry, workspace_id: workspaceId });
-    if (entry === "template") params.set("template", "executive");
-    return `/upload?${params.toString()}`;
-  };
-
-  const createBlankPresentation = () => {
-    if (!workspaceId || !canEdit) return;
-    void runAction(
-      "create-blank",
-      async () => {
-        const presentation =
-          await PresentationGenerationApi.createBlankPresentation({
-            workspace_id: workspaceId,
-            scene_type: "general",
-          });
-        router.push(
-          `/presentation?id=${encodeURIComponent(presentation.id)}&type=standard`
-        );
-      },
-      "空白文稿已创建"
-    );
+  const createBlankPresentation = async (folderId?: string) => {
+    if (!workspaceId || !canEdit) throw new Error("当前工作空间没有创建权限");
+    const presentation = await PresentationGenerationApi.createBlankPresentation({
+      workspace_id: workspaceId,
+      folder_id: folderId,
+      scene_type: "general",
+    });
+    router.push(`/presentation?id=${encodeURIComponent(presentation.id)}&type=standard&workspace_id=${encodeURIComponent(workspaceId)}`);
   };
 
   const changePresentationLifecycle = () => {
@@ -490,19 +477,7 @@ export default function WorkspacePresentationsPage() {
               <button type="button" onClick={openCreateFolder} className="inline-flex h-10 items-center justify-center gap-2 rounded-lg border border-[#D0D5DD] bg-white px-4 text-sm font-medium text-[#344054] hover:bg-[#F9FAFB]">
                 <FolderPlus className="h-4 w-4" />新建文件夹
               </button>
-              <details className="group relative">
-                <summary className="flex h-10 cursor-pointer list-none items-center gap-2 rounded-lg bg-[#635BFF] px-4 text-sm font-medium text-white hover:bg-[#5147E5]">
-                  <Plus className="h-4 w-4" />新建文稿
-                </summary>
-                <div className="absolute right-0 z-20 mt-2 w-44 rounded-xl border border-[#E4E7EC] bg-white p-1.5 shadow-lg">
-                  <Link href={createHref("topic")} className="block rounded-lg px-3 py-2 text-sm text-[#344054] hover:bg-[#F5F3FF]">从主题生成</Link>
-                  <Link href={createHref("document")} className="block rounded-lg px-3 py-2 text-sm text-[#344054] hover:bg-[#F5F3FF]">从文档生成</Link>
-                  <Link href={createHref("template")} className="block rounded-lg px-3 py-2 text-sm text-[#344054] hover:bg-[#F5F3FF]">从模板创建</Link>
-                  <button type="button" onClick={createBlankPresentation} disabled={pending === "create-blank"} className="flex w-full items-center rounded-lg px-3 py-2 text-left text-sm text-[#344054] hover:bg-[#F5F3FF] disabled:opacity-50">
-                    {pending === "create-blank" && <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />}空白文稿
-                  </button>
-                </div>
-              </details>
+              <button type="button" onClick={() => setCreationWizardOpen(true)} className="flex h-10 items-center gap-2 rounded-lg bg-[#635BFF] px-4 text-sm font-medium text-white hover:bg-[#5147E5]">新建文稿</button>
             </div>
           )}
         </header>
@@ -579,6 +554,7 @@ export default function WorkspacePresentationsPage() {
           </div>
         )}
       </div>
+      <PresentationCreationWizard open={creationWizardOpen} workspaceId={workspaceId} folders={folderRows} defaultFolderId={activeFolder !== "all" && activeFolder !== "root" ? activeFolder : undefined} onClose={() => setCreationWizardOpen(false)} onCreateBlank={createBlankPresentation} />
 
       {folderDialog && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-[#101828]/40 p-4">

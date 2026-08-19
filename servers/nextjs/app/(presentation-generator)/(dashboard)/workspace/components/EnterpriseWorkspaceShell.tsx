@@ -5,6 +5,7 @@ import { usePathname, useRouter } from "next/navigation";
 import {
   Bell,
   Boxes,
+  ClipboardCheck,
   FileCheck2,
   FileText,
   LayoutDashboard,
@@ -72,6 +73,7 @@ const navigation: Array<{
 }> = [
   { label: "工作台总览", href: "/workspace", icon: LayoutDashboard },
   { label: "文稿中心", href: "/workspace/presentations", icon: MonitorPlay },
+  { label: "评审任务", href: "/workspace/reviews", icon: ClipboardCheck },
   { label: "文档与知识", href: "/workspace/documents", icon: FileText },
   { label: "模板中心", href: "/workspace/templates", icon: LayoutTemplate },
   { label: "资产中心", href: "/workspace/assets", icon: Library },

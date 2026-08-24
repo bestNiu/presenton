@@ -12,6 +12,11 @@ import {
   type EnterpriseDocumentResponse,
   type TemplatePublicationResponse,
 } from "@/app/(presentation-generator)/services/api/enterprise";
+import {
+  classifyEnterpriseError,
+  EnterpriseAnalyticsEvent,
+  trackEnterpriseEvent,
+} from "@/utils/enterprise-analytics";
 
 type CreationMode = "topic" | "document" | "template" | "blank" | "import";
 interface FolderOption { id: string; name: string; depth: number }
@@ -99,13 +104,20 @@ export default function PresentationCreationWizard({
       if (preferred) setTemplate(preferred.template_id);
     }
     if (documentResult.status === "rejected" || templateResult.status === "rejected") {
+      trackEnterpriseEvent(EnterpriseAnalyticsEvent.CreationResourceLoadFailed, {
+        document_failed: documentResult.status === "rejected",
+        template_failed: templateResult.status === "rejected",
+      });
       setResourceWarning("部分企业资源暂时加载失败，可重试或继续使用基础创建能力。");
     }
     setResourcesLoading(false);
   };
 
   useEffect(() => {
-    if (open) void loadResources();
+    if (open) {
+      trackEnterpriseEvent(EnterpriseAnalyticsEvent.CreationWizardOpened);
+      void loadResources();
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, workspaceId]);
 
@@ -143,10 +155,26 @@ export default function PresentationCreationWizard({
   const start = async () => {
     setBusy(true);
     setError(null);
+    const analyticsProps = {
+      mode,
+      slide_count: Number(slides),
+      document_count: selectedDocumentIds.length,
+      has_audience: Boolean(audience.trim()),
+      has_brand_rules: Boolean(brandRules.trim()),
+      template_scope: selectedTemplate?.enterprise ? "enterprise" : "builtin",
+    };
+    trackEnterpriseEvent(
+      EnterpriseAnalyticsEvent.CreationRequested,
+      analyticsProps
+    );
     try {
       const targetFolder = folderId === "root" ? undefined : folderId;
       if (mode === "blank") {
         await onCreateBlank(targetFolder);
+        trackEnterpriseEvent(
+          EnterpriseAnalyticsEvent.CreationAccepted,
+          analyticsProps
+        );
         return;
       }
       if (mode === "document") {
@@ -175,6 +203,10 @@ export default function PresentationCreationWizard({
           createdAt: new Date().toISOString(),
           url,
         });
+        trackEnterpriseEvent(
+          EnterpriseAnalyticsEvent.CreationAccepted,
+          analyticsProps
+        );
         router.push(url);
         return;
       }
@@ -190,8 +222,16 @@ export default function PresentationCreationWizard({
       if (topic.trim()) uploadParams.set("prompt", `${topic.trim()}${audience.trim() ? `\n目标受众：${audience.trim()}` : ""}`);
       if (brandRules.trim()) uploadParams.set("instructions", brandRules.trim());
       if (mode === "import") uploadParams.set("import", "true");
+      trackEnterpriseEvent(
+        EnterpriseAnalyticsEvent.CreationAccepted,
+        analyticsProps
+      );
       router.push(`/upload?${uploadParams.toString()}`);
     } catch (cause) {
+      trackEnterpriseEvent(EnterpriseAnalyticsEvent.CreationFailed, {
+        ...analyticsProps,
+        error_type: classifyEnterpriseError(cause),
+      });
       setError(cause instanceof Error ? cause.message : "创建文稿失败，请稍后重试");
       setBusy(false);
     }

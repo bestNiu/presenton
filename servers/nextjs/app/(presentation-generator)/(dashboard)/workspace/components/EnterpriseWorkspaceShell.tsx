@@ -31,6 +31,11 @@ import {
   EnterpriseApi,
   type WorkspaceResponse,
 } from "@/app/(presentation-generator)/services/api/enterprise";
+import {
+  classifyEnterpriseError,
+  EnterpriseAnalyticsEvent,
+  trackEnterpriseEvent,
+} from "@/utils/enterprise-analytics";
 
 const ACTIVE_WORKSPACE_KEY = "enterprise.activeWorkspaceId";
 
@@ -105,6 +110,12 @@ export default function EnterpriseWorkspaceShell({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  const activeWorkspace = useMemo(
+    () =>
+      workspaces.find((workspace) => workspace.id === activeWorkspaceId) || null,
+    [activeWorkspaceId, workspaces]
+  );
+
   const refreshWorkspaces = useCallback(async () => {
     setLoading(true);
     setError(null);
@@ -124,13 +135,17 @@ export default function EnterpriseWorkspaceShell({
       setActiveWorkspaceIdState(nextId);
       if (nextId) window.localStorage.setItem(ACTIVE_WORKSPACE_KEY, nextId);
     } catch (cause) {
+      trackEnterpriseEvent(EnterpriseAnalyticsEvent.WorkspaceLoadFailed, {
+        route: pathname,
+        error_type: classifyEnterpriseError(cause),
+      });
       setError(
         cause instanceof Error ? cause.message : "工作空间上下文加载失败"
       );
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [pathname]);
 
   useEffect(() => {
     void refreshWorkspaces();
@@ -139,8 +154,47 @@ export default function EnterpriseWorkspaceShell({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  useEffect(() => {
+    if (!activeWorkspace) return;
+    trackEnterpriseEvent(EnterpriseAnalyticsEvent.WorkspacePageViewed, {
+      route: pathname,
+      workspace_type: activeWorkspace.workspace_type,
+      role: activeWorkspace.current_user_role,
+    });
+  }, [activeWorkspace, pathname]);
+
+  useEffect(() => {
+    const onError = (event: ErrorEvent) => {
+      trackEnterpriseEvent(EnterpriseAnalyticsEvent.RuntimeError, {
+        route: pathname,
+        channel: "window_error",
+        error_type: classifyEnterpriseError(event.error),
+      });
+    };
+    const onUnhandledRejection = (event: PromiseRejectionEvent) => {
+      trackEnterpriseEvent(EnterpriseAnalyticsEvent.RuntimeError, {
+        route: pathname,
+        channel: "unhandled_rejection",
+        error_type: classifyEnterpriseError(event.reason),
+      });
+    };
+    window.addEventListener("error", onError);
+    window.addEventListener("unhandledrejection", onUnhandledRejection);
+    return () => {
+      window.removeEventListener("error", onError);
+      window.removeEventListener("unhandledrejection", onUnhandledRejection);
+    };
+  }, [pathname]);
+
   const selectWorkspace = useCallback(
     (workspaceId: string) => {
+      const target = workspaces.find((workspace) => workspace.id === workspaceId);
+      trackEnterpriseEvent(EnterpriseAnalyticsEvent.WorkspaceSwitched, {
+        route: pathname,
+        from_type: activeWorkspace?.workspace_type,
+        to_type: target?.workspace_type,
+        to_role: target?.current_user_role,
+      });
       setActiveWorkspaceIdState(workspaceId);
       window.localStorage.setItem(ACTIVE_WORKSPACE_KEY, workspaceId);
       const resourceRoute =
@@ -148,13 +202,7 @@ export default function EnterpriseWorkspaceShell({
       const targetPath = resourceRoute ? "/workspace" : pathname;
       router.push(withWorkspace(targetPath, workspaceId));
     },
-    [pathname, router]
-  );
-
-  const activeWorkspace = useMemo(
-    () =>
-      workspaces.find((workspace) => workspace.id === activeWorkspaceId) || null,
-    [activeWorkspaceId, workspaces]
+    [activeWorkspace, pathname, router, workspaces]
   );
 
   const contextValue = useMemo<EnterpriseWorkspaceContextValue>(

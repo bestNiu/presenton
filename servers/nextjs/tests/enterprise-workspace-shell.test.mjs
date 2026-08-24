@@ -11,9 +11,10 @@ const readWorkspaceFile = (path) =>
   readFile(new URL(path, workspaceRoot), "utf8");
 
 test("workspace routes are wrapped by the shared enterprise shell", async () => {
-  const [layout, shell] = await Promise.all([
+  const [layout, shell, analytics] = await Promise.all([
     readWorkspaceFile("layout.tsx"),
     readWorkspaceFile("components/EnterpriseWorkspaceShell.tsx"),
+    readFile(new URL("../utils/enterprise-analytics.ts", import.meta.url), "utf8"),
   ]);
 
   assert.match(layout, /<EnterpriseWorkspaceShell>/);
@@ -27,6 +28,11 @@ test("workspace routes are wrapped by the shared enterprise shell", async () => 
   assert.match(shell, /交付中心/);
   assert.match(shell, /工作区设置/);
   assert.match(shell, /current_user_role/);
+  assert.match(shell, /WorkspacePageViewed/);
+  assert.match(shell, /WorkspaceSwitched/);
+  assert.match(shell, /RuntimeError/);
+  assert.match(analytics, /not pass workspace names, document text, prompts/);
+  assert.match(analytics, /enterprise:telemetry/);
 });
 
 test("presentation center supports folder organization and bulk movement", async () => {
@@ -232,6 +238,9 @@ test("general presentation creation is a four-step enterprise wizard", async () 
   assert.match(wizard, /品牌与生成约束/);
   assert.match(wizard, /enterprise\.generationTasks/);
   assert.match(wizard, /createKnowledgePresentation/);
+  assert.match(wizard, /CreationRequested/);
+  assert.match(wizard, /CreationAccepted/);
+  assert.match(wizard, /CreationFailed/);
   assert.match(generation, /getKnowledgeOutline/);
   assert.match(generation, /自动刷新/);
   assert.match(generation, /进入大纲确认/);
@@ -278,8 +287,11 @@ test("playwright release gate covers workspace creation and review flows", async
   assert.match(spec, /surfaces API failure and recovers/);
   assert.match(spec, /basic accessibility gate/);
   assert.match(spec, /Page emitted unhandled runtime errors/);
+  assert.match(spec, /toHaveScreenshot/);
+  assert.match(spec, /ensureViewerAccount/);
   assert.match(fixtures, /ensureBidProject/);
   assert.match(fixtures, /expectBasicAccessibility/);
+  assert.match(fixtures, /expectPerformanceBudget/);
   assert.match(packageJson, /test:e2e:enterprise/);
   assert.match(packageJson, /test:release-gate/);
 });

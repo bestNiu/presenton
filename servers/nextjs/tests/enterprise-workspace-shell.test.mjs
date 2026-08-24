@@ -177,10 +177,12 @@ test("delivery incidents use an auditable decision form", async () => {
 });
 
 test("general presentation creation is a four-step enterprise wizard", async () => {
-  const [catalog, wizard, upload] = await Promise.all([
+  const [catalog, wizard, generation, upload, enterpriseApi] = await Promise.all([
     readWorkspaceFile("presentations/page.tsx"),
     readWorkspaceFile("components/PresentationCreationWizard.tsx"),
+    readWorkspaceFile("presentations/[entryId]/generation/page.tsx"),
     readFile(new URL("../app/(presentation-generator)/upload/components/UploadPage.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/(presentation-generator)/services/api/enterprise.ts", import.meta.url), "utf8"),
   ]);
 
   assert.match(catalog, /PresentationCreationWizard/);
@@ -193,9 +195,20 @@ test("general presentation creation is a four-step enterprise wizard", async () 
   assert.match(wizard, /企业模板/);
   assert.match(wizard, /空白文稿/);
   assert.match(wizard, /导入文件/);
+  assert.match(wizard, /getDocuments/);
+  assert.match(wizard, /getPublishedTemplates/);
+  assert.match(wizard, /品牌与生成约束/);
+  assert.match(wizard, /enterprise\.generationTasks/);
+  assert.match(wizard, /createKnowledgePresentation/);
+  assert.match(generation, /getKnowledgeOutline/);
+  assert.match(generation, /自动刷新/);
+  assert.match(generation, /进入大纲确认/);
+  assert.match(enterpriseApi, /folder_id: input\.folderId/);
+  assert.match(enterpriseApi, /instructions: input\.instructions/);
   assert.match(upload, /requestedSlides/);
   assert.match(upload, /requestedLanguage/);
   assert.match(upload, /requestedTone/);
+  assert.match(upload, /requestedInstructions/);
 });
 
 test("bid project exposes six-stage progress and a derived task panel", async () => {

@@ -2490,6 +2490,7 @@ def test_bid_understanding_flow_enforces_project_access_and_strategy_gate(tmp_pa
                 "indication": "肺癌",
             },
         )
+        assert created.status_code == 201, created.text
         project_id = created.json()["id"]
         member = client.put(
             f"/api/v1/enterprise/bid/projects/{project_id}/members/{users['member'].id}",

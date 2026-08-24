@@ -120,6 +120,11 @@ async def create_bid_project(
         due_date=due_date,
         confidentiality=confidentiality,
     )
+    session.add(project)
+    # The child models below only carry explicit foreign-key identifiers and do
+    # not expose ORM relationships. Flush the project first so SQLite cannot
+    # schedule a child insert before its parent during a production commit.
+    await session.flush()
     member = BidProjectMemberModel(
         project_id=project.id,
         user_id=principal.user_id,
@@ -127,7 +132,7 @@ async def create_bid_project(
     )
     profile = BidProjectProfileModel(project_id=project.id, updated_by=principal.user_id)
     strategy = BidStrategyModel(project_id=project.id, created_by=principal.user_id)
-    session.add_all([project, member, profile, strategy])
+    session.add_all([member, profile, strategy])
     record_audit_event(
         session,
         actor_id=principal.user_id,

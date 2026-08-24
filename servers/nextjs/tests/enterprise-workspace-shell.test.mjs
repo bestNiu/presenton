@@ -264,9 +264,10 @@ test("bid project exposes six-stage progress and a derived task panel", async ()
 });
 
 test("playwright release gate covers workspace creation and review flows", async () => {
-  const [config, spec, packageJson] = await Promise.all([
+  const [config, spec, fixtures, packageJson] = await Promise.all([
     readFile(new URL("../playwright.config.ts", import.meta.url), "utf8"),
     readFile(new URL("../e2e/enterprise-workspace.spec.ts", import.meta.url), "utf8"),
+    readFile(new URL("../e2e/support/enterprise-fixtures.ts", import.meta.url), "utf8"),
     readFile(new URL("../package.json", import.meta.url), "utf8"),
   ]);
 
@@ -274,5 +275,11 @@ test("playwright release gate covers workspace creation and review flows", async
   assert.match(spec, /enterprise PPT workspace release gate/);
   assert.match(spec, /评审任务中心/);
   assert.match(spec, /竞标项目六阶段导航/);
+  assert.match(spec, /surfaces API failure and recovers/);
+  assert.match(spec, /basic accessibility gate/);
+  assert.match(spec, /Page emitted unhandled runtime errors/);
+  assert.match(fixtures, /ensureBidProject/);
+  assert.match(fixtures, /expectBasicAccessibility/);
+  assert.match(packageJson, /test:e2e:enterprise/);
   assert.match(packageJson, /test:release-gate/);
 });

@@ -257,13 +257,13 @@ export default function AssetCenterPage() {
     <div className="mx-auto max-w-6xl">
       <header className="flex flex-wrap items-center justify-between gap-4">
         <div className="flex items-center gap-3"><Link href={`/workspace${workspaceId ? `?workspace_id=${encodeURIComponent(workspaceId)}` : ""}`} className="rounded-lg border border-[#D9DCE3] bg-white p-2"><ArrowLeft className="h-4 w-4" /></Link><div><h1 className="flex items-center gap-2 text-xl font-semibold"><Library className="h-5 w-5 text-[#635BFF]" />企业资产中心</h1><p className="mt-1 text-sm text-[#667085]">统一管理可跨场景复用的 PPT 页面、图表、图片、文案与组件</p></div></div>
-        <select value={workspaceId} onChange={(event) => setWorkspaceId(event.target.value)} className="h-10 rounded-lg border border-[#D9DCE3] bg-white px-3 text-sm">{workspaces.map((workspace) => <option key={workspace.id} value={workspace.id}>{workspace.name}</option>)}</select>
+        <select aria-label="选择工作空间" value={workspaceId} onChange={(event) => setWorkspaceId(event.target.value)} className="h-10 rounded-lg border border-[#D9DCE3] bg-white px-3 text-sm">{workspaces.map((workspace) => <option key={workspace.id} value={workspace.id}>{workspace.name}</option>)}</select>
       </header>
 
       <section className="mt-6 grid gap-3 rounded-2xl border border-[#EAECF0] bg-white p-4 md:grid-cols-[1fr_180px_180px_auto]">
         <label className="relative"><Search className="absolute left-3 top-3 h-4 w-4 text-[#98A2B3]" /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索名称或标签" className="h-10 w-full rounded-lg border border-[#D9DCE3] pl-9 pr-3 text-sm" /></label>
-        <select value={typeFilter} onChange={(event) => setTypeFilter(event.target.value)} className="h-10 rounded-lg border border-[#D9DCE3] px-3 text-sm"><option value="">全部类型</option>{Object.entries(typeLabel).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select>
-        <select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value as "" | AssetStatus)} className="h-10 rounded-lg border border-[#D9DCE3] px-3 text-sm"><option value="">全部状态</option>{Object.entries(statusLabel).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select>
+        <select aria-label="按资产类型筛选" value={typeFilter} onChange={(event) => setTypeFilter(event.target.value)} className="h-10 rounded-lg border border-[#D9DCE3] px-3 text-sm"><option value="">全部类型</option>{Object.entries(typeLabel).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select>
+        <select aria-label="按资产状态筛选" value={statusFilter} onChange={(event) => setStatusFilter(event.target.value as "" | AssetStatus)} className="h-10 rounded-lg border border-[#D9DCE3] px-3 text-sm"><option value="">全部状态</option>{Object.entries(statusLabel).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select>
         <button onClick={() => setFavoritesOnly((value) => !value)} className={`inline-flex h-10 items-center justify-center gap-2 rounded-lg border px-3 text-sm ${favoritesOnly ? "border-[#F5B700] bg-[#FFF9E6] text-[#8A6100]" : "border-[#D9DCE3] text-[#475467]"}`}><Star className={`h-4 w-4 ${favoritesOnly ? "fill-[#F5B700] text-[#F5B700]" : ""}`} />收藏</button>
       </section>
 

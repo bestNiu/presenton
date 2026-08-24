@@ -2,13 +2,14 @@
 
 import Link from "next/link";
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
-import { ArrowLeft, CheckCircle2, Loader2, Plus, ShieldCheck } from "lucide-react";
+import { ArrowLeft, CheckCircle2, Eye, Loader2, Plus, ShieldCheck } from "lucide-react";
 
 import {
   EnterpriseApi,
   type TemplatePublicationResponse,
 } from "@/app/(presentation-generator)/services/api/enterprise";
 import { useEnterpriseWorkspace } from "../components/EnterpriseWorkspaceShell";
+import ResourceDetailDrawer from "../components/ResourceDetailDrawer";
 
 const statusLabel: Record<TemplatePublicationResponse["status"], string> = {
   draft: "草稿",
@@ -44,6 +45,7 @@ function TemplateGovernancePage() {
   const [publicationKey, setPublicationKey] = useState("");
   const [displayName, setDisplayName] = useState("");
   const [version, setVersion] = useState(1);
+  const [selectedPublication, setSelectedPublication] = useState<TemplatePublicationResponse | null>(null);
 
   const loadPublications = useCallback(async () => {
     if (!workspaceId) {
@@ -118,6 +120,7 @@ function TemplateGovernancePage() {
       setPublications((current) =>
         current.map((item) => (item.id === updated.id ? updated : item))
       );
+      setSelectedPublication((current) => current?.id === updated.id ? updated : current);
       if (action === "set-default") await loadPublications();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "状态更新失败");
@@ -218,7 +221,8 @@ function TemplateGovernancePage() {
                     </div>
                     <p className="mt-1 truncate text-xs text-[#667085]">{publication.publication_key} · v{publication.version} · {publication.template_id}</p>
                   </div>
-                  <div className="flex flex-wrap gap-2">
+                    <div className="flex flex-wrap gap-2">
+                    <button type="button" onClick={() => setSelectedPublication(publication)} className="inline-flex h-9 items-center gap-1 rounded-lg border border-[#D9DCE3] px-3 text-xs font-medium text-[#344054]"><Eye className="h-3.5 w-3.5" />详情</button>
                     {actionsFor(publication).map((action) => (
                       <button key={action} type="button" disabled={actingId === publication.id} onClick={() => void runAction(publication, action)} className="inline-flex h-9 items-center gap-1 rounded-lg border border-[#D9DCE3] px-3 text-xs font-medium text-[#344054] hover:bg-[#F7F7FA] disabled:opacity-50">
                         {actingId === publication.id && <Loader2 className="h-3 w-3 animate-spin" />}{actionLabel[action]}
@@ -236,6 +240,27 @@ function TemplateGovernancePage() {
           已发布过的模板版本永久只读；需要调整品牌或布局时，请复制为新的模板 ID 并递增版本号。
         </div>
       </div>
+      <ResourceDetailDrawer
+        open={Boolean(selectedPublication)}
+        eyebrow="企业模板详情"
+        title={selectedPublication?.display_name || ""}
+        description={selectedPublication?.description}
+        status={selectedPublication ? statusLabel[selectedPublication.status] : ""}
+        onClose={() => setSelectedPublication(null)}
+        fields={selectedPublication ? [
+          { label: "发布标识", value: selectedPublication.publication_key },
+          { label: "模板 ID", value: <span className="font-mono text-xs">{selectedPublication.template_id}</span> },
+          { label: "适用范围", value: selectedPublication.scope_type === "scene" ? `场景：${selectedPublication.scene_type || "未指定"}` : selectedPublication.scope_type === "workspace" ? "当前工作空间" : "企业全局" },
+          { label: "PPTX 兼容", value: selectedPublication.compatibility.pptx ? "已通过" : "不支持" },
+          { label: "默认模板", value: selectedPublication.is_default ? "是" : "否" },
+          { label: "推荐顺序", value: selectedPublication.recommended_order },
+        ] : []}
+        versions={selectedPublication ? publications.filter((item) => item.publication_key === selectedPublication.publication_key).sort((a, b) => b.version - a.version).map((item) => ({ id: item.id, label: `v${item.version} · ${statusLabel[item.status]}`, detail: item.template_id, current: item.id === selectedPublication.id })) : []}
+        governanceNote="已发布版本保持只读。品牌、版式或兼容规则发生变化时，应登记新版本并重新经过审核发布。"
+        actions={selectedPublication && actionsFor(selectedPublication).map((action) => <button key={action} type="button" disabled={actingId === selectedPublication.id} onClick={() => void runAction(selectedPublication, action)} className="h-9 rounded-lg border border-[#D0D5DD] px-3 text-xs font-medium text-[#344054]">{actionLabel[action]}</button>)}
+      >
+        {selectedPublication?.preview_url && <section><h3 className="text-sm font-semibold text-[#101828]">模板预览</h3><div className="mt-2 aspect-video rounded-xl border border-[#EAECF0] bg-cover bg-center" role="img" aria-label={`${selectedPublication.display_name}模板预览`} style={{ backgroundImage: `url(${selectedPublication.preview_url})` }} /></section>}
+      </ResourceDetailDrawer>
     </main>
   );
 }

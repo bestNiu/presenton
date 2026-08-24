@@ -301,8 +301,10 @@ export interface EnterpriseDocumentResponse {
   version_no: number;
   is_latest: boolean;
   supersedes_document_id: string | null;
+  duplicate_of_document_id: string | null;
   workspace_id: string | null;
   project_id: string | null;
+  created_by: string | null;
   scope_type: "enterprise" | "workspace" | "project";
   logical_name: string;
   category: string;
@@ -317,8 +319,13 @@ export interface EnterpriseDocumentResponse {
   parse_task_id: string | null;
   parse_error: string | null;
   extracted_metadata: Record<string, unknown>;
+  expires_at: string | null;
   created_at: string;
   updated_at: string;
+}
+
+export interface EnterpriseDocumentDetailResponse extends EnterpriseDocumentResponse {
+  extracted_text: string | null;
 }
 
 export interface EnterpriseKnowledgeSearchItemResponse {
@@ -834,6 +841,15 @@ export class EnterpriseApi {
     if (includeVersions) params.set("include_versions", "true");
     const response = await fetch(getApiUrl(`/api/v1/enterprise/documents?${params.toString()}`), { credentials: "include", cache: "no-store" });
     return ApiResponseHandler.handleResponse(response, "Failed to load enterprise documents");
+  }
+
+  static async getDocumentDetail(documentId: string): Promise<EnterpriseDocumentDetailResponse> {
+    const response = await fetch(getApiUrl(`/api/v1/enterprise/documents/${encodeURIComponent(documentId)}`), { credentials: "include", cache: "no-store" });
+    return ApiResponseHandler.handleResponse(response, "Failed to load document detail");
+  }
+
+  static getDocumentDownloadUrl(documentId: string): string {
+    return getApiUrl(`/api/v1/enterprise/documents/${encodeURIComponent(documentId)}/download`);
   }
 
   static async uploadDocument(workspaceId: string, file: File, input: { logicalName: string; category: string; confidentiality: ConfidentialityLevel }): Promise<EnterpriseDocumentResponse> {

@@ -113,6 +113,28 @@ test("enterprise resource pages consume the shared workspace context", async () 
   }
 });
 
+test("enterprise resource centers expose governed detail views", async () => {
+  const [documents, templates, assets, drawer, enterpriseApi] = await Promise.all([
+    readWorkspaceFile("documents/page.tsx"),
+    readWorkspaceFile("templates/page.tsx"),
+    readWorkspaceFile("assets/page.tsx"),
+    readWorkspaceFile("components/ResourceDetailDrawer.tsx"),
+    readFile(new URL("../app/(presentation-generator)/services/api/enterprise.ts", import.meta.url), "utf8"),
+  ]);
+
+  assert.match(drawer, /当前治理状态/);
+  assert.match(drawer, /版本时间线/);
+  assert.match(documents, /解析内容预览/);
+  assert.match(documents, /下载原文件/);
+  assert.match(documents, /getDocumentDetail/);
+  assert.match(templates, /企业模板详情/);
+  assert.match(templates, /模板预览/);
+  assert.match(assets, /企业资产详情/);
+  assert.match(assets, /累计复用/);
+  assert.match(assets, /授权有效期/);
+  assert.match(enterpriseApi, /documents\/\$\{encodeURIComponent\(documentId\)\}/);
+});
+
 test("workspace home prioritizes work overview and removes management clutter", async () => {
   const [page, overview] = await Promise.all([
     readWorkspaceFile("page.tsx"),

@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Archive, ArrowLeft, History, Library, Loader2, Search, Send, ShieldCheck, Star, X } from "lucide-react";
+import { Archive, ArrowLeft, Eye, History, Library, Loader2, Search, Send, ShieldCheck, Star, X } from "lucide-react";
 
 import {
   EnterpriseApi,
@@ -13,6 +13,7 @@ import {
   type AssetStatus,
 } from "@/app/(presentation-generator)/services/api/enterprise";
 import { useEnterpriseWorkspace } from "../components/EnterpriseWorkspaceShell";
+import ResourceDetailDrawer from "../components/ResourceDetailDrawer";
 
 const statusLabel: Record<AssetStatus, string> = {
   draft: "草稿",
@@ -57,6 +58,7 @@ export default function AssetCenterPage() {
   const [assetVersions, setAssetVersions] = useState<Record<string, AssetItemResponse[]>>({});
   const [searchResults, setSearchResults] = useState<AssetDiscoveryItemResponse[] | null>(null);
   const [similarResults, setSimilarResults] = useState<Record<string, AssetDiscoveryItemResponse[]>>({});
+  const [selectedAsset, setSelectedAsset] = useState<AssetItemResponse | null>(null);
 
   const load = useCallback(async (silent = false) => {
     if (!workspaceId) return;
@@ -119,7 +121,8 @@ export default function AssetCenterPage() {
     setPending(asset.id);
     setError(null);
     try {
-      await EnterpriseApi.transitionAsset(asset.id, action);
+      const updated = await EnterpriseApi.transitionAsset(asset.id, action);
+      setSelectedAsset((current) => current?.id === updated.id ? updated : current);
       await load();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "资产状态更新失败");
@@ -178,6 +181,20 @@ export default function AssetCenterPage() {
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "版本历史加载失败");
     } finally { setPending(""); }
+  };
+
+  const inspectAsset = async (asset: AssetItemResponse) => {
+    setSelectedAsset(asset);
+    if (assetVersions[asset.id]) return;
+    setPending(`versions:${asset.id}`);
+    try {
+      const rows = await EnterpriseApi.getAssetVersions(asset.id);
+      setAssetVersions((current) => ({ ...current, [asset.id]: rows }));
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "资产详情加载失败");
+    } finally {
+      setPending("");
+    }
   };
 
   const inspectSimilar = async (asset: AssetItemResponse) => {
@@ -273,7 +290,7 @@ export default function AssetCenterPage() {
           {asset.duplicate_status === "suspected" && <div className="mt-2 rounded-lg bg-[#FFF4E5] p-2 text-[10px] text-[#B54708]">检测到完全重复内容{canManageAsset(asset) && <span className="ml-2 inline-flex gap-2"><button onClick={() => void decideDuplicate(asset, "confirm")} className="underline">确认重复</button><button onClick={() => void decideDuplicate(asset, "distinct")} className="underline">保留为不同资产</button></span>}</div>}
           <p className="mt-3 line-clamp-2 text-xs leading-5 text-[#667085]">{asset.description || "暂无说明"}</p>
           <div className="mt-3 flex flex-wrap gap-1">{asset.tags.map((tag) => <span key={tag} className="rounded bg-[#F2F1FF] px-2 py-1 text-[10px] text-[#4238CA]">{tag}</span>)}</div>
-          <button type="button" onClick={() => void toggleVersions(asset)} className="mt-3 inline-flex items-center gap-1 self-start text-[11px] text-[#667085] hover:text-[#4238CA]"><History className="h-3.5 w-3.5" />{pending === `versions:${asset.id}` ? "加载版本…" : assetVersions[asset.id] ? "收起版本" : "版本历史"}</button>
+          <div className="mt-3 flex items-center gap-3"><button type="button" onClick={() => void inspectAsset(asset)} className="inline-flex items-center gap-1 text-[11px] font-medium text-[#4238CA]"><Eye className="h-3.5 w-3.5" />查看详情</button><button type="button" onClick={() => void toggleVersions(asset)} className="inline-flex items-center gap-1 text-[11px] text-[#667085] hover:text-[#4238CA]"><History className="h-3.5 w-3.5" />{pending === `versions:${asset.id}` ? "加载版本…" : assetVersions[asset.id] ? "收起版本" : "版本历史"}</button></div>
           <button type="button" onClick={() => void inspectSimilar(asset)} className="ml-3 mt-3 text-[11px] text-[#667085] hover:text-[#4238CA]">{pending === `similar:${asset.id}` ? "查找中…" : similarResults[asset.id] ? "收起相似项" : "查找相似资产"}</button>
           {assetVersions[asset.id] && <div className="mt-2 space-y-1 rounded-lg bg-[#F8F9FC] p-2">{assetVersions[asset.id].map((version) => <div key={version.id} className="flex items-center justify-between text-[10px] text-[#667085]"><span>v{version.version_no} · {statusLabel[version.status]}</span><span>{version.is_latest ? "当前发布版" : new Date(version.created_at).toLocaleDateString()}</span></div>)}</div>}
           {similarResults[asset.id] && <div className="mt-2 space-y-1 rounded-lg bg-[#F8F9FC] p-2">{similarResults[asset.id].length === 0 ? <p className="text-[10px] text-[#667085]">未发现相似资产</p> : similarResults[asset.id].map((item) => <div key={item.asset.id} className="flex justify-between text-[10px] text-[#667085]"><span className="truncate">{item.asset.name}</span><span>{item.exact_duplicate ? "完全重复" : `${Math.round(item.score)}%`}</span></div>)}</div>}
@@ -281,6 +298,27 @@ export default function AssetCenterPage() {
         </article>)}
       </section>}
     </div>
+    <ResourceDetailDrawer
+      open={Boolean(selectedAsset)}
+      eyebrow="企业资产详情"
+      title={selectedAsset?.name || ""}
+      description={selectedAsset?.description}
+      status={selectedAsset ? `${statusLabel[selectedAsset.status]} · ${selectedAsset.authorization_status}` : ""}
+      onClose={() => setSelectedAsset(null)}
+      fields={selectedAsset ? [
+        { label: "资产类型", value: typeLabel[selectedAsset.asset_type] || selectedAsset.asset_type },
+        { label: "可见范围", value: selectedAsset.scope_type === "personal" ? "个人" : selectedAsset.scope_type === "workspace" ? "当前工作空间" : "企业全局" },
+        { label: "累计复用", value: `${selectedAsset.usage_count} 次` },
+        { label: "授权有效期", value: selectedAsset.expires_at ? new Date(selectedAsset.expires_at).toLocaleString("zh-CN") : "长期有效" },
+        { label: "来源文稿", value: selectedAsset.source_presentation_entry_id ? <span className="font-mono text-xs">{selectedAsset.source_presentation_entry_id}</span> : "独立登记" },
+        { label: "内容指纹", value: <span className="font-mono text-xs">{selectedAsset.payload_hash}</span> },
+      ] : []}
+      versions={selectedAsset ? [...(assetVersions[selectedAsset.id] || [])].sort((a, b) => b.version_no - a.version_no).map((item) => ({ id: item.id, label: `v${item.version_no} · ${statusLabel[item.status]}`, detail: new Date(item.created_at).toLocaleString("zh-CN"), current: item.is_latest })) : []}
+      governanceNote="已发布资产可被通用 PPT 与竞标场景复用；授权撤销或过期后将阻止新的插入，并在既有引用中触发治理提示。"
+      actions={selectedAsset && canManageAsset(selectedAsset) && <>{selectedAsset.status === "draft" && <button type="button" onClick={() => void transition(selectedAsset, "publish")} className="h-9 rounded-lg bg-[#635BFF] px-4 text-xs text-white">发布资产</button>}{selectedAsset.status === "published" && <button type="button" onClick={() => void transition(selectedAsset, "offline")} className="h-9 rounded-lg border border-[#D0D5DD] px-4 text-xs">下线资产</button>}</>}
+    >
+      {selectedAsset && <section><h3 className="text-sm font-semibold text-[#101828]">标签与适用场景</h3><div className="mt-2 flex flex-wrap gap-2">{selectedAsset.tags.length ? selectedAsset.tags.map((tag) => <span key={tag} className="rounded-full bg-[#F2F1FF] px-2.5 py-1 text-xs text-[#4238CA]">{tag}</span>) : <span className="text-xs text-[#98A2B3]">暂无标签</span>}</div><p className="mt-3 text-xs text-[#667085]">场景：{selectedAsset.scene_type || "通用"}</p></section>}
+    </ResourceDetailDrawer>
     {promotionTarget && <div className="fixed inset-0 z-[90] flex items-center justify-center bg-black/35 p-4"><div className="w-full max-w-lg rounded-2xl bg-white p-5 shadow-2xl"><div className="flex items-start justify-between"><div><h2 className="text-base font-semibold">申请提升资产</h2><p className="mt-1 text-xs text-[#667085]">{promotionTarget.name} → {promotionTarget.scope_type === "personal" ? "当前工作空间" : "企业资产库"}</p></div><button onClick={() => setPromotionTarget(null)} className="rounded-full p-2 hover:bg-[#F2F4F7]"><X className="h-4 w-4" /></button></div><label className="mt-4 block text-xs font-medium text-[#344054]">复用目的<textarea value={justification} onChange={(event) => setJustification(event.target.value)} rows={3} className="mt-1 w-full rounded-lg border border-[#D9DCE3] p-3 text-xs" placeholder="说明适用场景和公共价值" /></label><label className="mt-3 block text-xs font-medium text-[#344054]">脱敏处理说明<textarea value={desensitizationNotes} onChange={(event) => setDesensitizationNotes(event.target.value)} rows={3} className="mt-1 w-full rounded-lg border border-[#D9DCE3] p-3 text-xs" placeholder="说明已移除的客户、项目、价格或个人信息" /></label><label className="mt-3 flex items-start gap-2 text-xs leading-5 text-[#475467]"><input type="checkbox" checked={authorizationConfirmed} onChange={(event) => setAuthorizationConfirmed(event.target.checked)} className="mt-1" />我确认该内容具备目标范围内的使用授权，且已完成必要脱敏。</label><button onClick={() => void submitPromotion()} disabled={!justification.trim() || !desensitizationNotes.trim() || !authorizationConfirmed || Boolean(pending)} className="mt-4 flex h-10 w-full items-center justify-center gap-2 rounded-lg bg-[#635BFF] text-sm text-white disabled:opacity-40">{pending.startsWith("promote:") && <Loader2 className="h-4 w-4 animate-spin" />}提交审批</button></div></div>}
   </main>;
 }

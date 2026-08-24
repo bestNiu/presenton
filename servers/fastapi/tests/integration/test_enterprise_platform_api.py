@@ -1298,6 +1298,21 @@ def test_presentation_registration_preserves_owner_and_allows_member_listing(tmp
             f"/api/v1/enterprise/workspaces/{workspace['id']}/presentations/{entry_id}/comment-threads",
             json={"slide_index": 0, "title": "补充数据口径", "body": "明确架构收益的统计口径", "is_blocking": True, "assigned_to": str(users["member"].id), "due_at": "2020-01-01T00:00:00Z"},
         )
+        bulk_scheduled = client.post(
+            f"/api/v1/enterprise/workspaces/{workspace['id']}/review-inbox/bulk-update",
+            json={
+                "thread_ids": [blocking_comment.json()["id"]],
+                "assigned_to": str(users["member"].id),
+                "due_at": "2020-01-02T23:59:59Z",
+                "update_assignee": True,
+                "update_due_at": True,
+            },
+        )
+        outsider_bulk_denied = client.post(
+            f"/api/v1/enterprise/workspaces/{workspace['id']}/review-inbox/bulk-update",
+            json={"thread_ids": [blocking_comment.json()["id"]], "update_due_at": True},
+            headers={"x-test-user": "outsider"},
+        )
         member_notifications = client.get(
             "/api/v1/enterprise/notifications",
             params={"workspace_id": workspace["id"], "unread_only": True},
@@ -1548,6 +1563,9 @@ def test_presentation_registration_preserves_owner_and_allows_member_listing(tmp
         assert approval_quality_blocked.status_code == 409
         assert quality.json()["status"] == "passed"
         assert blocking_comment.status_code == 201
+        assert bulk_scheduled.status_code == 200
+        assert bulk_scheduled.json()["updated_count"] == 1
+        assert outsider_bulk_denied.status_code == 404
         assert blocking_comment.json()["slide_index"] == 0
         assert member_notifications.json()["unread_count"] >= 1
         assert {item["notification_type"] for item in member_notifications.json()["notifications"]} >= {"presentation.comment_assigned", "presentation.comment_overdue", "presentation.review_submitted"}

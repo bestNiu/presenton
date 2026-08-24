@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import { AlertTriangle, CheckCircle2, MessageSquare, X } from "lucide-react";
 
@@ -17,7 +18,9 @@ interface EnterpriseReviewPanelProps {
 }
 
 export default function EnterpriseReviewPanel({ workspaceId, entryId, currentSlideIndex, currentSlideId }: EnterpriseReviewPanelProps) {
-  const [open, setOpen] = useState(false);
+  const searchParams = useSearchParams();
+  const focusedThreadId = searchParams.get("thread_id") || "";
+  const [open, setOpen] = useState(Boolean(focusedThreadId));
   const [threads, setThreads] = useState<PresentationCommentThreadResponse[]>([]);
   const [title, setTitle] = useState("");
   const [body, setBody] = useState("");
@@ -40,6 +43,13 @@ export default function EnterpriseReviewPanel({ workspaceId, entryId, currentSli
   }, [entryId, workspaceId]);
 
   useEffect(() => { void load(); }, [load]);
+  useEffect(() => {
+    if (!focusedThreadId) return;
+    setOpen(true);
+    window.requestAnimationFrame(() => {
+      document.getElementById(`canvas-review-thread-${focusedThreadId}`)?.scrollIntoView({ behavior: "smooth", block: "center" });
+    });
+  }, [focusedThreadId, threads]);
 
   const currentThreads = useMemo(
     () => threads.filter((thread) => thread.slide_id === null || thread.slide_id === currentSlideId || thread.slide_index === currentSlideIndex),
@@ -93,7 +103,7 @@ export default function EnterpriseReviewPanel({ workspaceId, entryId, currentSli
       <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-4">
         {error && <p className="rounded-lg bg-[#FEF2F2] p-2 text-xs text-[#B42318]">{error}</p>}
         {currentThreads.length === 0 && <p className="rounded-xl bg-[#F8F9FC] p-4 text-center text-xs text-[#667085]">当前页暂无批注</p>}
-        {currentThreads.map((thread) => <article key={thread.id} className="rounded-xl border border-[#EAECF0] p-3"><div className="flex items-start justify-between gap-2"><div className="flex gap-2">{thread.is_blocking ? <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-[#D92D20]" /> : <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-[#667085]" />}<div><p className="text-sm font-medium text-[#101828]">{thread.title}</p><p className="mt-1 text-xs leading-5 text-[#475467]">{thread.body}</p></div></div><span className={`shrink-0 rounded-full px-2 py-1 text-[10px] ${thread.status === "open" ? "bg-[#FFF4E5] text-[#B54708]" : "bg-[#ECFDF3] text-[#027A48]"}`}>{thread.status === "open" ? "待整改" : "已解决"}</span></div>{thread.replies.map((item) => <p key={item.id} className="mt-2 rounded-lg bg-[#F8F9FC] p-2 text-xs text-[#475467]">{item.body}</p>)}<div className="mt-3 flex gap-2"><input value={replyDrafts[thread.id] || ""} onChange={(event) => setReplyDrafts((current) => ({ ...current, [thread.id]: event.target.value }))} placeholder="回复说明" className="h-8 min-w-0 flex-1 rounded-lg border border-[#D9DCE3] px-2 text-xs" /><button disabled={pending || !replyDrafts[thread.id]?.trim()} onClick={() => void reply(thread.id)} className="rounded-lg bg-[#F2F1FF] px-2 text-xs text-[#4238CA] disabled:opacity-40">回复</button><button disabled={pending} onClick={() => void transition(thread)} className="rounded-lg border border-[#D9DCE3] px-2 text-xs disabled:opacity-40">{thread.status === "open" ? "解决" : "重开"}</button></div></article>)}
+        {currentThreads.map((thread) => <article id={`canvas-review-thread-${thread.id}`} key={thread.id} className={`rounded-xl border p-3 transition ${thread.id === focusedThreadId ? "border-[#8B7DFF] bg-[#F5F3FF] ring-2 ring-[#E4E1FF]" : "border-[#EAECF0]"}`}><div className="flex items-start justify-between gap-2"><div className="flex gap-2">{thread.is_blocking ? <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-[#D92D20]" /> : <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-[#667085]" />}<div><p className="text-sm font-medium text-[#101828]">{thread.title}</p><p className="mt-1 text-xs leading-5 text-[#475467]">{thread.body}</p></div></div><span className={`shrink-0 rounded-full px-2 py-1 text-[10px] ${thread.status === "open" ? "bg-[#FFF4E5] text-[#B54708]" : "bg-[#ECFDF3] text-[#027A48]"}`}>{thread.status === "open" ? "待整改" : "已解决"}</span></div>{thread.replies.map((item) => <p key={item.id} className="mt-2 rounded-lg bg-[#F8F9FC] p-2 text-xs text-[#475467]">{item.body}</p>)}<div className="mt-3 flex gap-2"><input value={replyDrafts[thread.id] || ""} onChange={(event) => setReplyDrafts((current) => ({ ...current, [thread.id]: event.target.value }))} placeholder="回复说明" className="h-8 min-w-0 flex-1 rounded-lg border border-[#D9DCE3] px-2 text-xs" /><button disabled={pending || !replyDrafts[thread.id]?.trim()} onClick={() => void reply(thread.id)} className="rounded-lg bg-[#F2F1FF] px-2 text-xs text-[#4238CA] disabled:opacity-40">回复</button><button disabled={pending} onClick={() => void transition(thread)} className="rounded-lg border border-[#D9DCE3] px-2 text-xs disabled:opacity-40">{thread.status === "open" ? "解决" : "重开"}</button></div></article>)}
       </div>
       <form onSubmit={createThread} className="border-t border-[#EAECF0] p-4">{canComment ? <><input value={title} onChange={(event) => setTitle(event.target.value)} placeholder="批注标题" className="h-9 w-full rounded-lg border border-[#D9DCE3] px-3 text-xs" /><textarea value={body} onChange={(event) => setBody(event.target.value)} placeholder="问题说明与整改要求" rows={3} className="mt-2 w-full rounded-lg border border-[#D9DCE3] p-3 text-xs" /><div className="mt-2 flex items-center justify-between"><label className="flex items-center gap-2 text-xs text-[#475467]"><input type="checkbox" checked={blocking} onChange={(event) => setBlocking(event.target.checked)} />阻断审批</label><button disabled={pending || !title.trim() || !body.trim()} className="rounded-lg bg-[#635BFF] px-3 py-2 text-xs text-white disabled:opacity-40">添加到本页</button></div></> : <p className="text-center text-xs text-[#667085]">当前为只读权限，可查看评审批注。</p>}<Link href={`/workspace/presentations/${encodeURIComponent(entryId)}/review?workspace_id=${encodeURIComponent(workspaceId)}`} className="mt-3 block text-center text-xs text-[#635BFF]">打开完整评审中心</Link></form>
     </aside>}

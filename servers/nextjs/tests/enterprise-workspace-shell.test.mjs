@@ -132,8 +132,10 @@ test("workspace home prioritizes work overview and removes management clutter", 
 });
 
 test("review task center supports cross-presentation triage and bulk actions", async () => {
-  const [page, enterpriseApi] = await Promise.all([
+  const [page, reviewPage, editor, enterpriseApi] = await Promise.all([
     readWorkspaceFile("reviews/page.tsx"),
+    readWorkspaceFile("presentations/[entryId]/review/page.tsx"),
+    readFile(new URL("../app/(presentation-generator)/presentation/components/PresentationPage.tsx", import.meta.url), "utf8"),
     readFile(
       new URL(
         "../app/(presentation-generator)/services/api/enterprise.ts",
@@ -150,10 +152,18 @@ test("review task center supports cross-presentation triage and bulk actions", a
   assert.match(page, /仅看逾期/);
   assert.match(page, /批量解决/);
   assert.match(page, /批量重开/);
+  assert.match(page, /批量调度/);
+  assert.match(page, /应用负责人\/截止时间/);
+  assert.match(page, /bulkUpdatePresentationReviewTasks/);
+  assert.match(page, /thread_id=/);
+  assert.match(reviewPage, /focusedThreadId/);
+  assert.match(reviewPage, /进入画布整改/);
+  assert.match(editor, /initialSlideApplied/);
   assert.match(page, /role="dialog"/);
   assert.match(page, /presentation_entry_id/);
   assert.match(enterpriseApi, /getPresentationReviewInbox/);
   assert.match(enterpriseApi, /transitionPresentationComment/);
+  assert.match(enterpriseApi, /review-inbox\/bulk-update/);
 });
 
 test("presentation review exposes a selectable frozen version timeline", async () => {

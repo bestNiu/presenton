@@ -141,6 +141,7 @@ const PresentationPage: React.FC<PresentationPageProps> = ({
   const [loadingState, setLoadingState] =
     useState<LoadingState>(DEFAULT_LOADING_STATE);
   const [selectedSlide, setSelectedSlide] = useState(0);
+  const initialSlideApplied = useRef(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [isChatSending, setIsChatSending] = useState(false);
   const [isChatMutating, setIsChatMutating] = useState(false);
@@ -261,6 +262,15 @@ const PresentationPage: React.FC<PresentationPageProps> = ({
     setSelectedSlide,
     setIsFullscreen
   );
+
+  useEffect(() => {
+    if (initialSlideApplied.current || !presentationData?.slides?.length) return;
+    const requestedSlide = Number(searchParams.get("slide"));
+    if (!Number.isInteger(requestedSlide) || requestedSlide < 0 || requestedSlide >= presentationData.slides.length) return;
+    initialSlideApplied.current = true;
+    setSelectedSlide(requestedSlide);
+    window.requestAnimationFrame(() => scrollToSlide(requestedSlide, 4, "smooth"));
+  }, [presentationData?.slides?.length, scrollToSlide, searchParams]);
 
   // Initialize streaming
   usePresentationStreaming(

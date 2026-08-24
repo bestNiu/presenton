@@ -107,6 +107,8 @@ from api.v1.enterprise.schemas import (
     PresentationCopyRequest,
     PresentationPurgeRequest,
     PresentationCommentCreateRequest,
+    PresentationCommentBulkUpdateRequest,
+    PresentationCommentBulkUpdateResponse,
     PresentationCommentReplyCreateRequest,
     PresentationCommentReplyResponse,
     PresentationCommentThreadResponse,
@@ -181,6 +183,7 @@ from services.enterprise.presentation_governance_service import (
 )
 from services.enterprise.presentation_comment_service import (
     add_comment_reply,
+    bulk_update_comment_threads,
     create_comment_thread,
     list_comment_threads,
     get_workspace_review_inbox,
@@ -2124,6 +2127,20 @@ async def get_workspace_presentation_review_inbox(workspace_id: uuid.UUID, scope
         "summary": result["summary"],
         "tasks": [{**PresentationCommentThreadResponse.model_validate(row["thread"]).model_dump(), **{key: value for key, value in row.items() if key != "thread"}} for row in result["tasks"]],
     }
+
+
+@API_V1_ENTERPRISE_ROUTER.post(
+    "/workspaces/{workspace_id}/review-inbox/bulk-update",
+    response_model=PresentationCommentBulkUpdateResponse,
+)
+async def post_workspace_review_inbox_bulk_update(workspace_id: uuid.UUID, body: PresentationCommentBulkUpdateRequest, principal: AuthPrincipal = Depends(principal_from_request), session: AsyncSession = Depends(get_async_session)):
+    updated_count = await bulk_update_comment_threads(
+        session,
+        workspace_id=workspace_id,
+        principal=principal,
+        **body.model_dump(),
+    )
+    return {"updated_count": updated_count}
 
 
 @API_V1_ENTERPRISE_ROUTER.post(

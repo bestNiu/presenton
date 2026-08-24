@@ -1687,6 +1687,25 @@ export class EnterpriseApi {
     return ApiResponseHandler.handleResponse(response, "Failed to load presentation review inbox");
   }
 
+  static async bulkUpdatePresentationReviewTasks(
+    workspaceId: string,
+    input: {
+      thread_ids: string[];
+      assigned_to?: string | null;
+      due_at?: string | null;
+      update_assignee: boolean;
+      update_due_at: boolean;
+    }
+  ): Promise<{ updated_count: number }> {
+    const response = await fetch(getApiUrl(`/api/v1/enterprise/workspaces/${encodeURIComponent(workspaceId)}/review-inbox/bulk-update`), {
+      method: "POST",
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(input),
+    });
+    return ApiResponseHandler.handleResponse(response, "Failed to update review task assignments");
+  }
+
   static async createPresentationComment(workspaceId: string, entryId: string, input: { slide_id?: string; slide_index?: number; title: string; body: string; is_blocking: boolean; assigned_to?: string; due_at?: string }): Promise<PresentationCommentThreadResponse> {
     const response = await fetch(getApiUrl(`/api/v1/enterprise/workspaces/${encodeURIComponent(workspaceId)}/presentations/${encodeURIComponent(entryId)}/comment-threads`), { method: "POST", credentials: "include", headers: { "Content-Type": "application/json" }, body: JSON.stringify(input) });
     return ApiResponseHandler.handleResponse(response, "Failed to create presentation comment");

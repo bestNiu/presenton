@@ -3,6 +3,7 @@
 import Link from "next/link";
 import {
   AlertTriangle,
+  CalendarClock,
   CheckCircle2,
   ChevronRight,
   ClipboardCheck,
@@ -19,6 +20,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   EnterpriseApi,
   type PresentationReviewInboxResponse,
+  type WorkspaceMemberResponse,
 } from "@/app/(presentation-generator)/services/api/enterprise";
 import { useEnterpriseWorkspace } from "../components/EnterpriseWorkspaceShell";
 
@@ -98,7 +100,7 @@ function TaskCard({
         </div>
       </div>
       <Link
-        href={`/workspace/presentations/${encodeURIComponent(task.presentation_entry_id)}/review?workspace_id=${encodeURIComponent(workspaceId)}`}
+        href={`/workspace/presentations/${encodeURIComponent(task.presentation_entry_id)}/review?workspace_id=${encodeURIComponent(workspaceId)}&thread_id=${encodeURIComponent(task.id)}${task.slide_index === null ? "" : `&slide_index=${task.slide_index}`}`}
         className="mt-4 flex items-center justify-between border-t border-[#F0F1F3] pt-3 text-xs font-medium text-[#5146E5]"
       >
         进入文稿处理 <ChevronRight className="h-4 w-4" />
@@ -122,6 +124,9 @@ export default function WorkspaceReviewTasksPage() {
   const [scene, setScene] = useState("all");
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [confirmAction, setConfirmAction] = useState<ConfirmAction | null>(null);
+  const [members, setMembers] = useState<WorkspaceMemberResponse[]>([]);
+  const [bulkAssignee, setBulkAssignee] = useState("");
+  const [bulkDueAt, setBulkDueAt] = useState("");
 
   const canManage = Boolean(activeWorkspace && ["owner", "admin", "reviewer"].includes(activeWorkspace.current_user_role));
 
@@ -133,11 +138,16 @@ export default function WorkspaceReviewTasksPage() {
     setLoading(true);
     setError(null);
     try {
-      setInbox(await EnterpriseApi.getPresentationReviewInbox(activeWorkspaceId, {
-        scope,
-        taskStatus: status,
-        overdueOnly,
-      }));
+      const [nextInbox, nextMembers] = await Promise.all([
+        EnterpriseApi.getPresentationReviewInbox(activeWorkspaceId, {
+          scope,
+          taskStatus: status,
+          overdueOnly,
+        }),
+        EnterpriseApi.getWorkspaceMembers(activeWorkspaceId),
+      ]);
+      setInbox(nextInbox);
+      setMembers(nextMembers);
       setSelectedIds(new Set());
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "评审任务加载失败，请稍后重试");
@@ -198,6 +208,30 @@ export default function WorkspaceReviewTasksPage() {
     setPending(false);
   };
 
+  const applyBulkAssignment = async () => {
+    if (!activeWorkspaceId || !selectedVisibleCount || (!bulkAssignee && !bulkDueAt)) return;
+    setPending(true);
+    setError(null);
+    setNotice(null);
+    try {
+      const result = await EnterpriseApi.bulkUpdatePresentationReviewTasks(activeWorkspaceId, {
+        thread_ids: filteredTasks.filter((task) => selectedIds.has(task.id)).map((task) => task.id),
+        assigned_to: bulkAssignee || undefined,
+        due_at: bulkDueAt ? new Date(`${bulkDueAt}T23:59:59`).toISOString() : undefined,
+        update_assignee: Boolean(bulkAssignee),
+        update_due_at: Boolean(bulkDueAt),
+      });
+      setNotice(`已更新 ${result.updated_count} 项任务的负责人或截止时间`);
+      setBulkAssignee("");
+      setBulkDueAt("");
+      await load();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "批量指派失败，请稍后重试");
+    } finally {
+      setPending(false);
+    }
+  };
+
   const boardColumns = [
     { key: "overdue", label: "已逾期", tone: "text-[#B42318]", empty: "没有逾期任务" },
     { key: "blocking", label: "阻断整改", tone: "text-[#B54708]", empty: "没有阻断任务" },
@@ -240,7 +274,22 @@ export default function WorkspaceReviewTasksPage() {
             <select value={scene} onChange={(event) => setScene(event.target.value)} className="h-9 rounded-lg border border-[#D0D5DD] bg-white px-3 text-xs"><option value="all">全部场景</option>{sceneOptions.map((item) => <option key={item} value={item}>{sceneLabels[item] || item}</option>)}</select>
             <label className="inline-flex h-9 items-center gap-2 rounded-lg border border-[#D0D5DD] px-3 text-xs text-[#475467]"><input type="checkbox" checked={overdueOnly} onChange={(event) => setOverdueOnly(event.target.checked)} className="accent-[#635BFF]" />仅看逾期</label>
           </div>
-          {canManage && filteredTasks.length > 0 && <div className="mt-4 flex flex-wrap items-center gap-2 border-t border-[#F0F1F3] pt-3 text-xs"><label className="mr-2 inline-flex items-center gap-2 text-[#475467]"><input type="checkbox" checked={allVisibleSelected} onChange={toggleVisible} className="accent-[#635BFF]" />全选当前结果</label><span className="text-[#667085]">已选择 {selectedVisibleCount} 项</span><button type="button" disabled={!selectedVisibleCount} onClick={() => setConfirmAction("resolve")} className="ml-auto inline-flex h-8 items-center gap-1.5 rounded-lg bg-[#027A48] px-3 text-white disabled:opacity-40"><CheckCircle2 className="h-3.5 w-3.5" />批量解决</button><button type="button" disabled={!selectedVisibleCount} onClick={() => setConfirmAction("reopen")} className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-[#D0D5DD] px-3 text-[#344054] disabled:opacity-40"><RotateCcw className="h-3.5 w-3.5" />批量重开</button></div>}
+          {canManage && filteredTasks.length > 0 && (
+            <div className="mt-4 space-y-3 border-t border-[#F0F1F3] pt-3 text-xs">
+              <div className="flex flex-wrap items-center gap-2">
+                <label className="mr-2 inline-flex items-center gap-2 text-[#475467]"><input type="checkbox" checked={allVisibleSelected} onChange={toggleVisible} className="accent-[#635BFF]" />全选当前结果</label>
+                <span className="text-[#667085]">已选择 {selectedVisibleCount} 项</span>
+                <button type="button" disabled={!selectedVisibleCount} onClick={() => setConfirmAction("resolve")} className="ml-auto inline-flex h-8 items-center gap-1.5 rounded-lg bg-[#027A48] px-3 text-white disabled:opacity-40"><CheckCircle2 className="h-3.5 w-3.5" />批量解决</button>
+                <button type="button" disabled={!selectedVisibleCount} onClick={() => setConfirmAction("reopen")} className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-[#D0D5DD] px-3 text-[#344054] disabled:opacity-40"><RotateCcw className="h-3.5 w-3.5" />批量重开</button>
+              </div>
+              <div className="flex flex-wrap items-center gap-2 rounded-xl bg-[#F8F9FC] p-3">
+                <span className="inline-flex items-center gap-1 font-medium text-[#344054]"><CalendarClock className="h-3.5 w-3.5" />批量调度</span>
+                <select aria-label="批量指派负责人" value={bulkAssignee} onChange={(event) => setBulkAssignee(event.target.value)} className="h-8 min-w-[180px] rounded-lg border border-[#D0D5DD] bg-white px-2"><option value="">负责人不修改</option>{members.map((member) => <option key={member.user_id} value={member.user_id}>{member.username} · {member.role}</option>)}</select>
+                <input aria-label="批量设置截止时间" type="date" value={bulkDueAt} onChange={(event) => setBulkDueAt(event.target.value)} className="h-8 rounded-lg border border-[#D0D5DD] bg-white px-2" />
+                <button type="button" disabled={pending || !selectedVisibleCount || (!bulkAssignee && !bulkDueAt)} onClick={() => void applyBulkAssignment()} className="h-8 rounded-lg bg-[#635BFF] px-3 font-medium text-white disabled:opacity-40">应用负责人/截止时间</button>
+              </div>
+            </div>
+          )}
         </section>
 
         {error && <div role="alert" className="mt-4 flex items-start justify-between gap-3 rounded-xl border border-[#FDA29B] bg-[#FEF2F2] p-3 text-sm text-[#B42318]"><span>{error}</span><button type="button" onClick={() => setError(null)} aria-label="关闭错误"><X className="h-4 w-4" /></button></div>}

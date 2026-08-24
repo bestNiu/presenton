@@ -221,6 +221,71 @@ async def transition_comment_thread(
     return thread
 
 
+async def bulk_update_comment_threads(
+    session: AsyncSession,
+    *,
+    workspace_id: uuid.UUID,
+    principal: AuthPrincipal,
+    thread_ids: list[uuid.UUID],
+    assigned_to: uuid.UUID | None,
+    due_at: datetime | None,
+    update_assignee: bool,
+    update_due_at: bool,
+) -> int:
+    await require_workspace_role(
+        session, workspace_id=workspace_id, principal=principal, required_role=WorkspaceRole.REVIEWER
+    )
+    if not update_assignee and not update_due_at:
+        raise HTTPException(status_code=422, detail="No task field selected for update")
+    if update_assignee:
+        await _validate_assignee(session, workspace_id=workspace_id, assigned_to=assigned_to)
+    rows = list((await session.execute(
+        select(PresentationCommentThreadModel, PresentationEntryModel)
+        .join(PresentationEntryModel, PresentationEntryModel.id == PresentationCommentThreadModel.presentation_entry_id)
+        .where(
+            PresentationEntryModel.workspace_id == workspace_id,
+            PresentationCommentThreadModel.id.in_(thread_ids),
+        )
+    )).all())
+    if len(rows) != len(thread_ids):
+        raise HTTPException(status_code=404, detail="One or more review tasks were not found")
+    for thread, entry in rows:
+        if update_assignee:
+            thread.assigned_to = assigned_to
+        if update_due_at:
+            thread.due_at = due_at
+        session.add(thread)
+        if update_assignee and assigned_to:
+            queue_notifications(
+                session,
+                recipient_ids={assigned_to},
+                actor_id=principal.user_id,
+                workspace_id=workspace_id,
+                notification_type="presentation.comment_assigned",
+                title="演示整改任务责任人已更新",
+                body=f"{entry.title or '演示文稿'}：{thread.title}",
+                resource_type="presentation_comment_thread",
+                resource_id=thread.id,
+                action_url=f"/workspace/presentations/{entry.id}/review?workspace_id={workspace_id}&thread_id={thread.id}",
+                metadata={"entry_id": str(entry.id), "due_at": thread.due_at.isoformat() if thread.due_at else None},
+            )
+        record_audit_event(
+            session,
+            actor_id=principal.user_id,
+            workspace_id=workspace_id,
+            action="presentation.comment_assignment_updated",
+            resource_type="presentation_comment_thread",
+            resource_id=thread.id,
+            metadata={
+                "entry_id": str(entry.id),
+                "assigned_to": str(thread.assigned_to) if thread.assigned_to else None,
+                "due_at": thread.due_at.isoformat() if thread.due_at else None,
+            },
+        )
+    await session.commit()
+    return len(rows)
+
+
 async def count_open_blocking_comments(session: AsyncSession, *, entry_id: uuid.UUID) -> int:
     return int(await session.scalar(
         select(func.count(PresentationCommentThreadModel.id)).where(

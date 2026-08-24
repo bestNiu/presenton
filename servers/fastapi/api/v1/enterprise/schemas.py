@@ -1129,6 +1129,23 @@ class PresentationCommentCreateRequest(BaseModel):
     due_at: datetime | None = None
 
 
+class PresentationCommentBulkUpdateRequest(BaseModel):
+    thread_ids: list[uuid.UUID] = Field(min_length=1, max_length=100)
+    assigned_to: uuid.UUID | None = None
+    due_at: datetime | None = None
+    update_assignee: bool = False
+    update_due_at: bool = False
+
+    @field_validator("thread_ids")
+    @classmethod
+    def unique_thread_ids(cls, value: list[uuid.UUID]) -> list[uuid.UUID]:
+        return list(dict.fromkeys(value))
+
+
+class PresentationCommentBulkUpdateResponse(BaseModel):
+    updated_count: int
+
+
 class PresentationCommentReplyCreateRequest(BaseModel):
     body: str = Field(min_length=1, max_length=10000)
 

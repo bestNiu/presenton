@@ -853,8 +853,36 @@ export class EnterpriseApi {
     return ApiResponseHandler.handleResponse(response, "Failed to create knowledge outline");
   }
 
-  static async createKnowledgePresentation(workspaceId: string, input: { topic: string; query?: string; audience?: string; nSlides: number; documentIds: string[] }, idempotencyKey: string): Promise<EnterpriseKnowledgePresentationResponse> {
-    const response = await fetch(getApiUrl("/api/v1/enterprise/knowledge/presentations"), { method: "POST", credentials: "include", headers: { "Content-Type": "application/json", "Idempotency-Key": idempotencyKey }, body: JSON.stringify({ topic: input.topic, query: input.query || input.topic, audience: input.audience || undefined, n_slides: input.nSlides, document_ids: input.documentIds, workspace_id: workspaceId, language: "Chinese" }) });
+  static async createKnowledgePresentation(
+    workspaceId: string,
+    input: {
+      topic: string;
+      query?: string;
+      audience?: string;
+      nSlides: number;
+      documentIds: string[];
+      instructions?: string;
+      folderId?: string;
+      language?: string;
+    },
+    idempotencyKey: string
+  ): Promise<EnterpriseKnowledgePresentationResponse> {
+    const response = await fetch(getApiUrl("/api/v1/enterprise/knowledge/presentations"), {
+      method: "POST",
+      credentials: "include",
+      headers: { "Content-Type": "application/json", "Idempotency-Key": idempotencyKey },
+      body: JSON.stringify({
+        topic: input.topic,
+        query: input.query || input.topic,
+        audience: input.audience || undefined,
+        n_slides: input.nSlides,
+        document_ids: input.documentIds,
+        workspace_id: workspaceId,
+        language: input.language || "Chinese",
+        instructions: input.instructions || undefined,
+        folder_id: input.folderId || undefined,
+      }),
+    });
     return ApiResponseHandler.handleResponse(response, "Failed to create knowledge presentation");
   }
 

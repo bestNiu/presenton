@@ -217,6 +217,7 @@ const UploadPage = () => {
     const requestedSlides = params.get("slides")?.trim();
     const requestedLanguage = params.get("language")?.trim();
     const requestedTone = params.get("tone")?.trim();
+    const requestedInstructions = params.get("instructions")?.trim();
     const requestedCommunityId = Number(params.get("communityId"));
     let active = true;
 
@@ -231,6 +232,7 @@ const UploadPage = () => {
       ...(requestedSlides ? { slides: clampSlideCountValue(requestedSlides) } : {}),
       ...(requestedLanguage && Object.values(LanguageType).includes(requestedLanguage as LanguageType) ? { language: requestedLanguage as LanguageType } : {}),
       ...(requestedTone && Object.values(ToneType).includes(requestedTone as ToneType) ? { tone: requestedTone as ToneType } : {}),
+      ...(requestedInstructions ? { instructions: requestedInstructions } : {}),
     }));
     if (requestedTemplate) {
       setSuggestedTemplate(requestedTemplate);

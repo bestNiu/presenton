@@ -188,7 +188,17 @@ export interface BidGateResponse {
   id: string;
   gate_type: "gate_1" | "gate_2" | "gate_3";
   status: "locked" | "open" | "blocked" | "passed";
-  issues: Array<{ id: string; title: string; status: "open" | "resolved" }>;
+  issues: Array<{
+    id: string;
+    title: string;
+    description: string | null;
+    severity: "blocking" | "warning";
+    status: "open" | "resolved";
+    owner_id: string | null;
+    resolution: string | null;
+    created_at: string;
+    updated_at: string;
+  }>;
 }
 
 export interface BidCollaborationResponse {
@@ -2053,6 +2063,34 @@ export class EnterpriseApi {
   static async actOnBidGate(projectId: string, gateType: "gate_1" | "gate_2" | "gate_3", action: "open" | "pass"): Promise<BidGateResponse> {
     const response = await fetch(getApiUrl(`/api/v1/enterprise/bid/projects/${encodeURIComponent(projectId)}/gates/${gateType}/action`), { method: "POST", credentials: "include", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action }) });
     return ApiResponseHandler.handleResponse(response, "Failed to update review gate");
+  }
+
+  static async createBidGateIssue(
+    projectId: string,
+    gateType: "gate_1" | "gate_2" | "gate_3",
+    input: { title: string; description?: string; severity: "blocking" | "warning"; owner_id?: string }
+  ): Promise<BidGateResponse["issues"][number]> {
+    const response = await fetch(getApiUrl(`/api/v1/enterprise/bid/projects/${encodeURIComponent(projectId)}/gates/${gateType}/issues`), {
+      method: "POST",
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(input),
+    });
+    return ApiResponseHandler.handleResponse(response, "Failed to create gate issue");
+  }
+
+  static async resolveBidGateIssue(
+    projectId: string,
+    issueId: string,
+    resolution: string
+  ): Promise<BidGateResponse["issues"][number]> {
+    const response = await fetch(getApiUrl(`/api/v1/enterprise/bid/projects/${encodeURIComponent(projectId)}/gate-issues/${encodeURIComponent(issueId)}/resolve`), {
+      method: "POST",
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ resolution }),
+    });
+    return ApiResponseHandler.handleResponse(response, "Failed to resolve gate issue");
   }
 
   static async getBidReleases(projectId: string): Promise<BidReleaseResponse[]> {

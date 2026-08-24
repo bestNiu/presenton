@@ -5,6 +5,7 @@ import { useParams } from "next/navigation";
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import {
   AlertTriangle,
+  Activity,
   ArrowLeft,
   Ban,
   CheckCircle2,
@@ -12,6 +13,7 @@ import {
   FilePlus2,
   FileText,
   Loader2,
+  Clock3,
   Plus,
   Save,
   Target,
@@ -25,6 +27,7 @@ import {
   type BidDeliveryArtifactResponse,
   type TemplatePublicationResponse,
   type BidRequirementResponse,
+  type AuditEventResponse,
 } from "@/app/(presentation-generator)/services/api/enterprise";
 
 const statusLabel = {
@@ -58,6 +61,13 @@ const strategyFields = [
 type FactDraft = Record<string, { value: string; source: string }>;
 type StrategyDraft = Record<string, string>;
 
+function milestoneDate(dueDate: string | null, daysBefore: number) {
+  if (!dueDate) return "待设置";
+  const date = new Date(`${dueDate}T12:00:00`);
+  date.setDate(date.getDate() - daysBefore);
+  return date.toLocaleDateString("zh-CN", { month: "numeric", day: "numeric" });
+}
+
 function factDraftFromDashboard(dashboard: BidProjectDashboardResponse): FactDraft {
   return Object.fromEntries(
     profileFields.map(([key]) => {
@@ -89,6 +99,7 @@ function BidProjectDashboardPage() {
   const [releases, setReleases] = useState<BidReleaseResponse[]>([]);
   const [deliveries, setDeliveries] = useState<Record<string, BidDeliveryArtifactResponse[]>>({});
   const [templates, setTemplates] = useState<TemplatePublicationResponse[]>([]);
+  const [activity, setActivity] = useState<AuditEventResponse[]>([]);
   const [templatePublicationId, setTemplatePublicationId] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState("");
@@ -110,6 +121,8 @@ function BidProjectDashboardPage() {
   const [responses, setResponses] = useState<Record<string, string>>({});
   const [moduleDrafts, setModuleDrafts] = useState<Record<string, string>>({});
   const [commitmentDraft, setCommitmentDraft] = useState({ content: "", commitment_type: "timeline", evidence_ref: "", risk_level: "medium" });
+  const [issueDrafts, setIssueDrafts] = useState<Record<string, { title: string; description: string; severity: "blocking" | "warning" }>>({});
+  const [resolutionDrafts, setResolutionDrafts] = useState<Record<string, string>>({});
 
   const load = useCallback(async () => {
     const [next, collaborationRows] = await Promise.all([EnterpriseApi.getBidProject(params.projectId), EnterpriseApi.getBidCollaboration(params.projectId)]);
@@ -122,11 +135,25 @@ function BidProjectDashboardPage() {
     );
     setCollaboration(collaborationRows);
     setModuleDrafts(Object.fromEntries(collaborationRows.modules.map((module) => [module.id, String(module.content.summary || "")])));
-    const [releaseRows, templateRows] = await Promise.all([EnterpriseApi.getBidReleases(params.projectId), EnterpriseApi.getPublishedTemplates(next.project.workspace_id)]);
+    const [releaseRows, templateRows, auditRows] = await Promise.all([
+      EnterpriseApi.getBidReleases(params.projectId),
+      EnterpriseApi.getPublishedTemplates(next.project.workspace_id),
+      EnterpriseApi.getWorkspaceAuditEvents(next.project.workspace_id, 100).catch(() => []),
+    ]);
     setReleases(releaseRows);
     const deliveryRows = await Promise.all(releaseRows.map((release) => EnterpriseApi.getBidDeliveries(params.projectId, release.id)));
     setDeliveries(Object.fromEntries(releaseRows.map((release, index) => [release.id, deliveryRows[index]])));
     setTemplates(templateRows);
+    const relatedIds = new Set([
+      next.project.id,
+      ...collaborationRows.modules.map((item) => item.id),
+      ...collaborationRows.commitments.map((item) => item.id),
+      ...collaborationRows.gates.flatMap((item) => [item.id, ...item.issues.map((issue) => issue.id)]),
+      ...releaseRows.map((item) => item.id),
+    ]);
+    setActivity(auditRows.filter((item) =>
+      item.event_metadata.project_id === next.project.id || relatedIds.has(item.resource_id)
+    ).slice(0, 20));
     setTemplatePublicationId((current) => current || templateRows.find((item) => item.scene_type === "bid")?.id || templateRows[0]?.id || "");
   }, [params.projectId]);
 
@@ -175,12 +202,12 @@ function BidProjectDashboardPage() {
   const frozenRelease = releases.some((item) => item.status === "frozen" || item.status === "archived");
   const readyDelivery = Object.values(deliveries).flat().some((item) => item.status === "ready");
   const stageItems = [
-    { id: "understanding", label: "资料与理解", complete: activeDocuments.length > 0 && profile.status === "confirmed", detail: `${activeDocuments.length} 份资料 · 画像${profile.status === "confirmed" ? "已确认" : "待确认"}` },
-    { id: "strategy", label: "策略确认", complete: strategy.status === "confirmed", detail: `${mandatoryOpen.length} 个必答项待处理` },
-    { id: "collaboration", label: "专业协作", complete: modulesApproved, detail: `${collaboration.modules.filter((item) => item.status === "approved").length}/${collaboration.modules.length || 3} 模块批准` },
-    { id: "gates", label: "Gate 门禁", complete: gatesPassed, detail: `${collaboration.gates.filter((item) => item.status === "passed").length}/3 已通过` },
-    { id: "assembly", label: "组装版本", complete: frozenRelease, detail: `${releases.length} 个组装版本` },
-    { id: "delivery", label: "交付归档", complete: readyDelivery, detail: readyDelivery ? "已有可交付文件" : "等待冻结版本" },
+    { id: "understanding", label: "资料与理解", owner: "竞标经理", deadline: milestoneDate(project.due_date, 14), complete: activeDocuments.length > 0 && profile.status === "confirmed", detail: `${activeDocuments.length} 份资料 · 画像${profile.status === "confirmed" ? "已确认" : "待确认"}` },
+    { id: "strategy", label: "策略确认", owner: "竞标经理", deadline: milestoneDate(project.due_date, 10), complete: strategy.status === "confirmed", detail: `${mandatoryOpen.length} 个必答项待处理` },
+    { id: "collaboration", label: "专业协作", owner: "医学 / 运营 / 数统", deadline: milestoneDate(project.due_date, 7), complete: modulesApproved, detail: `${collaboration.modules.filter((item) => item.status === "approved").length}/${collaboration.modules.length || 3} 模块批准` },
+    { id: "gates", label: "Gate 门禁", owner: "评审人", deadline: milestoneDate(project.due_date, 4), complete: gatesPassed, detail: `${collaboration.gates.filter((item) => item.status === "passed").length}/3 已通过` },
+    { id: "assembly", label: "组装版本", owner: "竞标经理", deadline: milestoneDate(project.due_date, 2), complete: frozenRelease, detail: `${releases.length} 个组装版本` },
+    { id: "delivery", label: "交付归档", owner: "竞标经理", deadline: milestoneDate(project.due_date, 0), complete: readyDelivery, detail: readyDelivery ? "已有可交付文件" : "等待冻结版本" },
   ];
   const stageCompletion = Math.round(stageItems.filter((item) => item.complete).length / stageItems.length * 100);
   const projectTasks = [
@@ -283,6 +310,32 @@ function BidProjectDashboardPage() {
     }
   };
 
+  const createGateIssue = async (gate: BidCollaborationResponse["gates"][number]) => {
+    const draft = issueDrafts[gate.id];
+    if (!draft?.title.trim()) return;
+    const succeeded = await execute(`issue-create-${gate.id}`, () =>
+      EnterpriseApi.createBidGateIssue(project.id, gate.gate_type, {
+        title: draft.title.trim(),
+        description: draft.description.trim() || undefined,
+        severity: draft.severity,
+      })
+    );
+    if (succeeded) {
+      setIssueDrafts((current) => ({ ...current, [gate.id]: { title: "", description: "", severity: "blocking" } }));
+    }
+  };
+
+  const resolveGateIssue = async (issueId: string) => {
+    const resolution = resolutionDrafts[issueId]?.trim();
+    if (!resolution) return;
+    const succeeded = await execute(`issue-resolve-${issueId}`, () =>
+      EnterpriseApi.resolveBidGateIssue(project.id, issueId, resolution)
+    );
+    if (succeeded) {
+      setResolutionDrafts((current) => ({ ...current, [issueId]: "" }));
+    }
+  };
+
   return (
     <main className="min-h-screen bg-[#F7F8FC] px-5 py-8 sm:px-8 lg:px-10">
       <div className="mx-auto max-w-[1240px]">
@@ -290,14 +343,14 @@ function BidProjectDashboardPage() {
           <Link href={`/workspace/scenes/bid?workspace_id=${project.workspace_id}`} className="inline-flex items-center gap-1 text-sm text-[#635BFF]"><ArrowLeft className="h-4 w-4" /> 竞标工作台</Link>
           <div className="mt-4 flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
             <div><p className="text-xs font-semibold text-[#635BFF]">{project.bid_code}</p><h1 className="mt-1 font-syne text-3xl font-semibold tracking-[-0.04em] text-[#17171B]">{project.name}</h1><p className="mt-2 text-sm text-[#667085]">{project.sponsor_name || "未填写申办方"} · {project.drug_name || "药物待确认"} · {project.indication || "适应症待确认"}</p></div>
-            <div className="text-right"><span className="rounded-full bg-[#F2F1FF] px-3 py-1.5 text-xs font-medium text-[#4238CA]">{statusLabel[project.status]}</span><p className="mt-2 text-xs text-[#98A2B3]">项目角色：{role}</p></div>
+            <div className="text-right"><span className="rounded-full bg-[#F2F1FF] px-3 py-1.5 text-xs font-medium text-[#4238CA]">{statusLabel[project.status]}</span><p className="mt-2 text-xs text-[#98A2B3]">项目角色：{role}</p><p className="mt-1 inline-flex items-center gap-1 text-xs text-[#667085]"><Clock3 className="h-3.5 w-3.5" />最终截止：{project.due_date || "待设置"}</p></div>
           </div>
         </header>
 
         {error && <div className="mt-4 rounded-xl border border-[#FECACA] bg-[#FEF2F2] px-4 py-3 text-sm text-[#B42318]">{error}</div>}
 
         <nav className="sticky top-[72px] z-30 mt-5 overflow-x-auto rounded-2xl border border-[#E3E4EA] bg-white/95 p-3 shadow-sm backdrop-blur" aria-label="竞标项目六阶段导航">
-          <div className="flex min-w-[920px] items-stretch gap-2">{stageItems.map((stage, index) => <a key={stage.id} href={`#${stage.id}`} className={`min-w-0 flex-1 rounded-xl border p-3 transition hover:border-[#B9B2FF] ${stage.complete ? "border-[#ABEFC6] bg-[#ECFDF3]" : "border-[#EAECF0] bg-[#F8F9FC]"}`}><div className="flex items-center gap-2"><span className={`flex h-6 w-6 items-center justify-center rounded-full text-xs font-semibold ${stage.complete ? "bg-[#027A48] text-white" : "bg-white text-[#667085]"}`}>{stage.complete ? <CheckCircle2 className="h-3.5 w-3.5" /> : index + 1}</span><span className="text-xs font-semibold text-[#344054]">{stage.label}</span></div><p className="mt-2 truncate text-[10px] text-[#667085]">{stage.detail}</p></a>)}</div>
+          <div className="flex min-w-[1020px] items-stretch gap-2">{stageItems.map((stage, index) => <a key={stage.id} href={`#${stage.id}`} className={`min-w-0 flex-1 rounded-xl border p-3 transition hover:border-[#B9B2FF] ${stage.complete ? "border-[#ABEFC6] bg-[#ECFDF3]" : "border-[#EAECF0] bg-[#F8F9FC]"}`}><div className="flex items-center gap-2"><span className={`flex h-6 w-6 items-center justify-center rounded-full text-xs font-semibold ${stage.complete ? "bg-[#027A48] text-white" : "bg-white text-[#667085]"}`}>{stage.complete ? <CheckCircle2 className="h-3.5 w-3.5" /> : index + 1}</span><span className="text-xs font-semibold text-[#344054]">{stage.label}</span></div><p className="mt-2 truncate text-[10px] text-[#667085]">{stage.detail}</p><p className="mt-1 truncate text-[10px] text-[#98A2B3]">负责：{stage.owner} · 节点：{stage.deadline}</p></a>)}</div>
         </nav>
 
         <section className="mt-5 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
@@ -351,8 +404,75 @@ function BidProjectDashboardPage() {
 
         <div id="gates" className="mt-5 scroll-mt-40 grid gap-5 lg:grid-cols-[1.2fr_1fr]">
           <section className="rounded-2xl border border-[#E3E4EA] bg-white p-6"><h2 className="font-semibold text-[#101828]">服务承诺审批</h2>{canContribute && <form onSubmit={createCommitment} className="mt-4 grid gap-2"><input value={commitmentDraft.content} onChange={(event) => setCommitmentDraft({ ...commitmentDraft, content: event.target.value })} placeholder="承诺内容" className="h-10 rounded-lg border border-[#D9DCE3] px-3 text-sm" /><div className="grid gap-2 sm:grid-cols-[140px_1fr_auto]"><select value={commitmentDraft.commitment_type} onChange={(event) => setCommitmentDraft({ ...commitmentDraft, commitment_type: event.target.value })} className="h-9 rounded-lg border border-[#D9DCE3] bg-white px-2 text-sm"><option value="timeline">周期</option><option value="quality">质量</option><option value="resource">资源</option></select><input value={commitmentDraft.evidence_ref} onChange={(event) => setCommitmentDraft({ ...commitmentDraft, evidence_ref: event.target.value })} placeholder="历史依据/证据引用" className="h-9 rounded-lg border border-[#D9DCE3] px-3 text-sm" /><button disabled={!commitmentDraft.content.trim()} className="h-9 rounded-lg bg-[#17171B] px-3 text-xs text-white disabled:opacity-40">添加候选</button></div></form>}<div className="mt-4 grid gap-2">{collaboration.commitments.map((item) => <article key={item.id} className="rounded-lg bg-[#F8F9FC] p-3"><div className="flex items-start justify-between gap-3"><p className="text-sm text-[#101828]">{item.content}</p><span className="text-xs text-[#667085]">{item.status}</span></div><p className="mt-1 text-xs text-[#98A2B3]">依据：{item.evidence_ref || "未填写"}</p><div className="mt-2 flex justify-end gap-2">{canContribute && item.status === "candidate" && <button onClick={() => void execute(`commitment-${item.id}`, () => EnterpriseApi.actOnBidCommitment(project.id, item.id, "submit"))} className="text-xs text-[#635BFF]">提交审批</button>}{canConfirmStrategy && item.status === "pending" && <button onClick={() => void execute(`commitment-${item.id}`, () => EnterpriseApi.actOnBidCommitment(project.id, item.id, "approve"))} className="text-xs text-[#027A48]">批准</button>}</div></article>)}</div></section>
-          <section className="rounded-2xl border border-[#E3E4EA] bg-white p-6"><h2 className="font-semibold text-[#101828]">Gate 1 / Gate 2 / Gate 3</h2><div className="mt-4 grid gap-3">{collaboration.gates.map((gate) => <article key={gate.id} className="rounded-xl border border-[#EAECF0] p-4"><div className="flex items-center justify-between"><div><p className="text-sm font-semibold text-[#101828]">{{ gate_1: "Gate 1 专业正确性", gate_2: "Gate 2 客户决策逻辑", gate_3: "Gate 3 演练与冻结" }[gate.gate_type]}</p><p className="mt-1 text-xs text-[#667085]">{gate.status}</p></div>{canReview && gate.status !== "passed" && <div className="flex gap-2"><button onClick={() => void execute(`${gate.id}-open`, () => EnterpriseApi.actOnBidGate(project.id, gate.gate_type, "open"))} className="h-8 rounded-lg border border-[#D9DCE3] px-2 text-xs">检查</button><button onClick={() => void execute(`${gate.id}-pass`, () => EnterpriseApi.actOnBidGate(project.id, gate.gate_type, "pass"))} className="h-8 rounded-lg bg-[#027A48] px-2 text-xs text-white">通过</button></div>}</div></article>)}</div></section>
+          <section className="rounded-2xl border border-[#E3E4EA] bg-white p-6">
+            <h2 className="font-semibold text-[#101828]">Gate 1 / Gate 2 / Gate 3</h2>
+            <p className="mt-1 text-xs text-[#667085]">登记阻断与风险、记录处置依据，通过动作由实际检查结果驱动。</p>
+            <div className="mt-4 grid gap-3">
+              {collaboration.gates.map((gate) => {
+                const draft = issueDrafts[gate.id] || { title: "", description: "", severity: "blocking" as const };
+                return (
+                  <article key={gate.id} className="rounded-xl border border-[#EAECF0] p-4">
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <p className="text-sm font-semibold text-[#101828]">{{ gate_1: "Gate 1 专业正确性", gate_2: "Gate 2 客户决策逻辑", gate_3: "Gate 3 演练与冻结" }[gate.gate_type]}</p>
+                        <p className="mt-1 text-xs text-[#667085]">{gate.status} · {gate.issues.filter((item) => item.status === "open").length} 个未关闭问题</p>
+                      </div>
+                      {canReview && gate.status !== "passed" && (
+                        <div className="flex gap-2">
+                          <button type="button" onClick={() => void execute(`${gate.id}-open`, () => EnterpriseApi.actOnBidGate(project.id, gate.gate_type, "open"))} className="h-8 rounded-lg border border-[#D9DCE3] px-2 text-xs">执行检查</button>
+                          <button type="button" disabled={gate.issues.some((item) => item.status === "open" && item.severity === "blocking")} onClick={() => void execute(`${gate.id}-pass`, () => EnterpriseApi.actOnBidGate(project.id, gate.gate_type, "pass"))} className="h-8 rounded-lg bg-[#027A48] px-2 text-xs text-white disabled:opacity-40">确认通过</button>
+                        </div>
+                      )}
+                    </div>
+                    {gate.issues.length > 0 && (
+                      <div className="mt-3 grid gap-2">
+                        {gate.issues.map((issue) => (
+                          <div key={issue.id} className={`rounded-lg p-3 ${issue.status === "resolved" ? "bg-[#F8F9FC]" : issue.severity === "blocking" ? "bg-[#FEF3F2]" : "bg-[#FFFAEB]"}`}>
+                            <div className="flex items-start justify-between gap-2"><p className="text-xs font-medium text-[#344054]">{issue.title}</p><span className="text-[10px] text-[#667085]">{issue.severity === "blocking" ? "阻断" : "提示"} · {issue.status === "resolved" ? "已关闭" : "待处置"}</span></div>
+                            {issue.description && <p className="mt-1 text-xs text-[#667085]">{issue.description}</p>}
+                            {issue.resolution && <p className="mt-2 text-xs text-[#027A48]">处置记录：{issue.resolution}</p>}
+                            {canReview && issue.status === "open" && (
+                              <div className="mt-2 flex gap-2">
+                                <input value={resolutionDrafts[issue.id] || ""} onChange={(event) => setResolutionDrafts({ ...resolutionDrafts, [issue.id]: event.target.value })} placeholder="填写处置依据后关闭" className="h-8 min-w-0 flex-1 rounded-lg border border-[#D9DCE3] bg-white px-2 text-xs" />
+                                <button type="button" disabled={!resolutionDrafts[issue.id]?.trim()} onClick={() => void resolveGateIssue(issue.id)} className="h-8 rounded-lg border border-[#039855] bg-white px-2 text-xs text-[#027A48] disabled:opacity-40">关闭问题</button>
+                              </div>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    {canReview && gate.status !== "passed" && (
+                      <div className="mt-3 grid gap-2 border-t border-[#EAECF0] pt-3">
+                        <div className="grid gap-2 sm:grid-cols-[110px_1fr]">
+                          <select value={draft.severity} onChange={(event) => setIssueDrafts({ ...issueDrafts, [gate.id]: { ...draft, severity: event.target.value as "blocking" | "warning" } })} className="h-8 rounded-lg border border-[#D9DCE3] bg-white px-2 text-xs"><option value="blocking">阻断问题</option><option value="warning">风险提示</option></select>
+                          <input value={draft.title} onChange={(event) => setIssueDrafts({ ...issueDrafts, [gate.id]: { ...draft, title: event.target.value } })} placeholder="问题标题" className="h-8 rounded-lg border border-[#D9DCE3] px-2 text-xs" />
+                        </div>
+                        <div className="flex gap-2">
+                          <input value={draft.description} onChange={(event) => setIssueDrafts({ ...issueDrafts, [gate.id]: { ...draft, description: event.target.value } })} placeholder="问题描述、影响和建议动作" className="h-8 min-w-0 flex-1 rounded-lg border border-[#D9DCE3] px-2 text-xs" />
+                          <button type="button" disabled={!draft.title.trim()} onClick={() => void createGateIssue(gate)} className="h-8 rounded-lg bg-[#17171B] px-3 text-xs text-white disabled:opacity-40">登记问题</button>
+                        </div>
+                      </div>
+                    )}
+                  </article>
+                );
+              })}
+            </div>
+          </section>
         </div>
+
+        <section className="mt-5 rounded-2xl border border-[#E3E4EA] bg-white p-6">
+          <div className="flex items-center gap-2"><Activity className="h-4 w-4 text-[#635BFF]" /><h2 className="font-semibold text-[#101828]">项目动态</h2></div>
+          <p className="mt-1 text-xs text-[#667085]">展示成员、专业模块、承诺、Gate 和版本操作形成的审计轨迹。</p>
+          <div className="mt-4 grid gap-1">
+            {activity.map((event) => (
+              <div key={event.id} className="grid gap-1 border-l-2 border-[#E4E1FF] py-2 pl-4 sm:grid-cols-[1fr_auto]">
+                <div><p className="text-sm text-[#344054]">{event.action.replaceAll("_", " · ").replace("bid.", "")}</p><p className="mt-0.5 text-[11px] text-[#98A2B3]">{event.resource_type}</p></div>
+                <time className="text-xs text-[#667085]">{new Date(event.created_at).toLocaleString("zh-CN")}</time>
+              </div>
+            ))}
+            {activity.length === 0 && <p className="py-5 text-center text-sm text-[#98A2B3]">当前项目暂无可展示的动态记录</p>}
+          </div>
+        </section>
 
         <section id="assembly" className="mt-5 scroll-mt-40 rounded-2xl border border-[#E3E4EA] bg-white p-6">
           <span id="delivery" className="block scroll-mt-40" />

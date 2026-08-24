@@ -223,6 +223,12 @@ test("bid project exposes six-stage progress and a derived task panel", async ()
   assert.match(page, /交付归档/);
   assert.match(page, /项目任务面板/);
   assert.match(page, /项目阶段完成度/);
+  assert.match(page, /最终截止/);
+  assert.match(page, /登记问题/);
+  assert.match(page, /处置记录/);
+  assert.match(page, /项目动态/);
+  assert.match(page, /createBidGateIssue/);
+  assert.match(page, /resolveBidGateIssue/);
 });
 
 test("playwright release gate covers workspace creation and review flows", async () => {
